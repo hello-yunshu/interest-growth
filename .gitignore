@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local environment / credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Build / release artifacts
+*.whl
+*.zip
+
+# Local-only instructions / audit scratch
+LOCAL_ONLY_DO_NOT_COMMIT/
+*_DO_NOT_COMMIT/

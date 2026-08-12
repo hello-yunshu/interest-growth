@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interest-growth-native-execution-core"
+version = "0.6.0rc2"
+description = "Interest Growth native execution core with v0.3 invariant restoration"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+api = ["fastapi>=0.110", "pydantic>=2"]
+pdf = ["PyMuPDF>=1.24"]
+dev = ["pytest>=8", "httpx2>=2,<3"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["interest_growth_native*"]
+exclude = ["tests*", "scripts*", "docs*", "migrations*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"
+
+[tool.setuptools.package-data]
+interest_growth_native = ["resources/*.sql"]
