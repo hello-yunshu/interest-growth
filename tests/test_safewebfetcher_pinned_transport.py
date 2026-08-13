@@ -14,6 +14,22 @@ def _addrinfo(ip):
     return (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))
 
 
+class _FakeContext:
+    """Minimal SSL context double that is valid on CPython 3.11 and 3.12.
+
+    Python 3.11's ``http.client.HTTPSConnection.__init__`` reads
+    ``context.verify_mode`` and ``context.check_hostname``; Python 3.12 only
+    stores the context. CERT_NONE + check_hostname=False keep the double away
+    from the "check_hostname needs CERT_OPTIONAL/CERT_REQUIRED" guard, while
+    ``wrap_socket`` records the SNI hostname instead of doing a real TLS
+    handshake. Production SafeWebFetcher still exercises a real TLS context in
+    the end-to-end tests below.
+    """
+
+    verify_mode = ssl.CERT_NONE
+    check_hostname = False
+
+
 def test_resolution_blocks_private_and_special_networks(monkeypatch):
     import interest_growth_native.web_tools as wt
 
@@ -90,7 +106,7 @@ def test_fetch_pins_connection_to_validated_ip_with_sni_preserved(monkeypatch):
 
     monkeypatch.setattr(wt.socket, "create_connection", fake_create_connection)
 
-    class FakeContext:
+    class FakeContext(_FakeContext):
         def wrap_socket(self, sock, server_hostname=None):
             connected["server_hostname"] = server_hostname
             return sock
@@ -102,6 +118,34 @@ def test_fetch_pins_connection_to_validated_ip_with_sni_preserved(monkeypatch):
     assert connected.get("target") == ("93.184.216.34", 443)
     assert connected.get("server_hostname") == "example.com"
     assert getaddrinfo_calls == ["example.com"]
+
+
+def test_pinned_https_connection_connect_pins_ip_and_preserves_sni(monkeypatch):
+    # Directly exercise _PinnedHTTPSConnection.connect() so the pin + SNI
+    # security semantics are asserted without depending on urllib.request's
+    # internal connection construction, which differs across CPython versions.
+    import interest_growth_native.web_tools as wt
+
+    connected = {}
+
+    def fake_create_connection(target, timeout=None, source_address=None):
+        connected["target"] = target
+        return socket.socket()
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+
+    class FakeContext(_FakeContext):
+        def wrap_socket(self, sock, server_hostname=None):
+            connected["server_hostname"] = server_hostname
+            return sock
+
+    conn = wt._PinnedHTTPSConnection(
+        "example.com", 443, pinned_ip="93.184.216.34", context=FakeContext()
+    )
+    conn.connect()
+
+    assert connected["target"] == ("93.184.216.34", 443)
+    assert connected["server_hostname"] == "example.com"
 
 
 def test_redirect_is_not_followed(monkeypatch):

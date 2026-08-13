@@ -17,12 +17,19 @@ use tauri_plugin_shell::{
 use url::Url;
 use uuid::Uuid;
 
+mod remote;
+mod runtime_mode;
+
+use remote::RemoteSession;
+use runtime_mode::{parse_runtime_mode, should_spawn_sidecar, RuntimeMode, RuntimeProfile};
+
 const KEYRING_SERVICE: &str = "app.psychologygrowth.desktop";
 const PROVIDER_SETTINGS_FILE: &str = "provider-settings.json";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeInfo {
+    runtime_id: String,
     endpoint: String,
     token: String,
     status: String,
@@ -30,6 +37,15 @@ struct RuntimeInfo {
     version: String,
     updater_configured: bool,
     platform: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeModeInfo {
+    runtime_id: String,
+    sidecar_launch: bool,
+    // Session immutable: the profile only applies after an explicit restart.
+    session_immutable: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -69,6 +85,10 @@ struct UpdateInfo {
 struct DesktopState {
     runtime: Mutex<RuntimeInfo>,
     child: Arc<Mutex<Option<CommandChild>>>,
+    mode: RuntimeMode,
+    // In-memory access credential for desktop-remote. The refresh credential
+    // never enters this struct nor the renderer (Gate C §11).
+    remote: Mutex<Option<RemoteSession>>,
 }
 
 fn secret_username(kind: &str) -> Result<&'static str, String> {
@@ -107,6 +127,32 @@ fn load_provider_settings(app_data: &Path) -> ProviderSettings {
         }
     }
     ProviderSettings::default()
+}
+
+fn runtime_profile_path(app_data: &Path) -> PathBuf {
+    app_data.join(runtime_mode::RUNTIME_PROFILE_FILE)
+}
+
+fn load_runtime_profile(app_data: &Path) -> Option<RuntimeProfile> {
+    let raw = std::fs::read_to_string(runtime_profile_path(app_data)).ok()?;
+    serde_json::from_str::<RuntimeProfile>(&raw).ok()
+}
+
+fn save_runtime_profile(app_data: &Path, profile: &RuntimeProfile) -> Result<(), String> {
+    std::fs::create_dir_all(app_data).map_err(|error| error.to_string())?;
+    let path = runtime_profile_path(app_data);
+    let temp = path.with_extension("json.tmp");
+    let payload = serde_json::to_vec_pretty(profile).map_err(|error| error.to_string())?;
+    {
+        let mut file = std::fs::File::create(&temp).map_err(|error| error.to_string())?;
+        file.write_all(&payload).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+    }
+    std::fs::rename(&temp, &path).map_err(|error| error.to_string())
+}
+
+fn resolve_runtime_mode(app_data: &Path) -> RuntimeMode {
+    parse_runtime_mode(load_runtime_profile(app_data).as_ref())
 }
 
 fn validate_http_url(label: &str, value: &str, https_or_loopback: bool) -> Result<String, String> {
@@ -178,12 +224,56 @@ fn desktop_runtime(state: State<'_, DesktopState>) -> RuntimeInfo {
 }
 
 #[tauri::command]
+fn desktop_runtime_mode(app: AppHandle) -> Result<RuntimeModeInfo, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let mode = resolve_runtime_mode(&app_data);
+    Ok(RuntimeModeInfo {
+        runtime_id: mode.as_str().into(),
+        sidecar_launch: should_spawn_sidecar(mode),
+        session_immutable: true,
+    })
+}
+
+// Gate C §5.2 — mode switch primitive. It persists the NEXT profile and never
+// hot-swaps the current session (session immutable). Gate D will add the
+// user-facing switch UX + explicit restart.
+#[tauri::command]
+fn set_desktop_runtime_mode(
+    app: AppHandle,
+    runtime_id: String,
+) -> Result<RuntimeModeInfo, String> {
+    if !runtime_mode::is_desktop_runtime_id(&runtime_id) {
+        return Err(format!("unsupported desktop runtime mode: {runtime_id}"));
+    }
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let profile = RuntimeProfile {
+        runtime_id: runtime_id.clone(),
+    };
+    save_runtime_profile(&app_data, &profile)?;
+    let mode = parse_runtime_mode(Some(&profile));
+    Ok(RuntimeModeInfo {
+        runtime_id: mode.as_str().into(),
+        sidecar_launch: should_spawn_sidecar(mode),
+        session_immutable: true,
+    })
+}
+
+#[tauri::command]
 fn desktop_platform_policy() -> serde_json::Value {
     serde_json::json!({
         "windows": "Windows 11 24H2+ (build 26100+, x64)",
         "macos": "macOS 13 Ventura+ (Apple Silicon)",
         "linux": "development/test host only"
     })
+}
+
+// Gate D §D5 — explicit restart boundary. A runtime-mode switch is persisted
+// as the NEXT profile and only applies after a real application restart, so
+// local and remote datasets are never mixed in one session (Gate C §5.3).
+#[tauri::command]
+fn restart_app(app: AppHandle) -> Result<(), String> {
+    app.request_restart();
+    Ok(())
 }
 
 #[tauri::command]
@@ -341,6 +431,7 @@ fn wait_for_core_health(port: u16, timeout: Duration) -> bool {
 fn spawn_core(
     app: &AppHandle,
     child_slot: Arc<Mutex<Option<CommandChild>>>,
+    mode: RuntimeMode,
 ) -> Result<RuntimeInfo, String> {
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&app_data).map_err(|error| error.to_string())?;
@@ -420,6 +511,7 @@ fn spawn_core(
     }
 
     Ok(RuntimeInfo {
+        runtime_id: mode.as_str().into(),
         endpoint,
         token,
         status: "ready".into(),
@@ -438,11 +530,32 @@ fn stop_core(child_slot: &Arc<Mutex<Option<CommandChild>>>) {
     }
 }
 
-fn runtime_error(app: &AppHandle, error: &str) -> RuntimeInfo {
+fn runtime_error(app: &AppHandle, error: &str, mode: RuntimeMode) -> RuntimeInfo {
     RuntimeInfo {
+        runtime_id: mode.as_str().into(),
         endpoint: "http://127.0.0.1:0".into(),
         token: String::new(),
         status: format!("error:{error}"),
+        data_dir: app
+            .path()
+            .app_data_dir()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        updater_configured: option_env!("PG_UPDATER_CONFIGURED") == Some("1"),
+        platform: std::env::consts::OS.into(),
+    }
+}
+
+// Gate C §5 — desktop-remote (or any non-local mode) never spawns a local
+// Core and never falls back to a local dataset. The status is explicit so the
+// renderer can honestly report "remote is not active in this build".
+fn runtime_remote(app: &AppHandle, mode: RuntimeMode) -> RuntimeInfo {
+    RuntimeInfo {
+        runtime_id: mode.as_str().into(),
+        endpoint: String::new(),
+        token: String::new(),
+        status: "mode:desktop-remote:sidecar-disabled".into(),
         data_dir: app
             .path()
             .app_data_dir()
@@ -459,14 +572,17 @@ fn restart_desktop_core(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<RuntimeInfo, String> {
+    if state.mode != RuntimeMode::DesktopLocal {
+        return Err("desktop core can only be restarted in desktop-local mode".into());
+    }
     stop_core(&state.child);
-    match spawn_core(&app, state.child.clone()) {
+    match spawn_core(&app, state.child.clone(), state.mode) {
         Ok(runtime) => {
             *state.runtime.lock().map_err(|_| "desktop state poisoned")? = runtime.clone();
             Ok(runtime)
         }
         Err(error) => {
-            let failed = runtime_error(&app, &error);
+            let failed = runtime_error(&app, &error, state.mode);
             *state.runtime.lock().map_err(|_| "desktop state poisoned")? = failed;
             Err(error)
         }
@@ -493,16 +609,26 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            let runtime = spawn_core(app.handle(), slot_for_setup.clone())
-                .unwrap_or_else(|error| runtime_error(app.handle(), &error));
+            let app_data = app.path().app_data_dir().unwrap_or_default();
+            let mode = resolve_runtime_mode(&app_data);
+            let runtime = if should_spawn_sidecar(mode) {
+                spawn_core(app.handle(), slot_for_setup.clone(), mode)
+                    .unwrap_or_else(|error| runtime_error(app.handle(), &error, mode))
+            } else {
+                runtime_remote(app.handle(), mode)
+            };
             app.manage(DesktopState {
                 runtime: Mutex::new(runtime),
                 child: slot_for_setup.clone(),
+                mode,
+                remote: Mutex::new(None),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             desktop_runtime,
+            desktop_runtime_mode,
+            set_desktop_runtime_mode,
             desktop_platform_policy,
             check_for_update,
             install_available_update,
@@ -511,7 +637,18 @@ pub fn run() {
             provider_secret_status,
             set_provider_secret,
             delete_provider_secret,
-            restart_desktop_core
+            restart_desktop_core,
+            restart_app,
+            // Gate D — native remote credential broker + transport.
+            remote::remote_probe_server,
+            remote::remote_bootstrap_owner,
+            remote::remote_login,
+            remote::remote_api_request,
+            remote::remote_api_upload,
+            remote::remote_refresh_now,
+            remote::remote_session_status,
+            remote::remote_verify_identity,
+            remote::remote_logout,
         ])
         .on_window_event(move |_window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {

@@ -4,10 +4,12 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Icon from '../components/Icon';
 import { WorkspaceBoard, useWorkspaceData } from '../components/WorkspaceWidgets';
+import { useRuntimeCopy } from '../components/useRuntimeCopy';
 import { api } from '../lib/api';
 
 export default function Home() {
   const router = useRouter();
+  const runtimeCopy = useRuntimeCopy();
   const { data, loading, error, reload } = useWorkspaceData();
   const [question, setQuestion] = useState('');
   const [busy, setBusy] = useState(false);
@@ -36,6 +38,6 @@ export default function Home() {
     </section>
     {error && <div className="serviceNotice"><Icon name="warning"/><span>{error}</span><button onClick={reload}>重试</button></div>}
     <WorkspaceBoard pageId="home" data={data} loading={loading} compact title="今日工作台"/>
-    <footer className="localFooter"><Icon name="status"/><span>本地保存 · 数据仅保存在你的设备上</span></footer>
+    <footer className="localFooter"><Icon name="status"/><span>{runtimeCopy.dataFooter}</span></footer>
   </div>;
 }

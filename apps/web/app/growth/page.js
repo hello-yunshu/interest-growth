@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import { CodeBlock, InsightCards, StatusChip } from '../../components/BeautifulUI';
 import { WorkspaceBoard, useWorkspaceData } from '../../components/WorkspaceWidgets';
+import { useRuntimeCopy } from '../../components/useRuntimeCopy';
 
 export default function GrowthPage() {
   const workspace = useWorkspaceData();
+  const runtimeCopy = useRuntimeCopy();
   const [narrative, setNarrative] = useState(null);
   const [memory, setMemory] = useState([]);
   const [graph, setGraph] = useState(null);
@@ -14,7 +16,7 @@ export default function GrowthPage() {
   const [form, setForm] = useState({ attracted_question: '', interest_drain: '', understanding_change: '', continue_topic: '', next_energy_mode: 'normal' });
   async function load() { const [nextNarrative, nextMemory] = await Promise.all([api('/growth/narrative'), api('/growth/memory')]); setNarrative(nextNarrative); setMemory(nextMemory.memory || []); }
   useEffect(() => { load().catch(error => setMessage(error.message)); }, []);
-  async function save(event) { event.preventDefault(); try { await api('/reflections', { method: 'POST', body: JSON.stringify(form) }); await load(); workspace.reload(); setMessage('这次回顾已经保存在本机。'); } catch (error) { setMessage(error.message); } }
+  async function save(event) { event.preventDefault(); try { await api('/reflections', { method: 'POST', body: JSON.stringify(form) }); await load(); workspace.reload(); setMessage(runtimeCopy.savedCopy); } catch (error) { setMessage(error.message); } }
   async function openMemoryGraph() { try { setGraph(await api('/memory/graph')); } catch (error) { setMessage(error.message); } }
   const hasLongTerm = memory.some(item => item.layer === 'g3_long_term');
   return <div className="stack growthPage">

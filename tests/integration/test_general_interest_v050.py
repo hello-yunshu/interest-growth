@@ -21,7 +21,7 @@ def test_fresh_install_has_domain_packs_area_and_real_migration(client):
         get_engine, get_session_factory,
     )
 
-    assert len(inspect(get_engine()).get_table_names()) == 49
+    assert len(inspect(get_engine()).get_table_names()) == 50
     with get_session_factory()() as db:
         assert {x.id for x in db.scalars(select(DomainPackModel)).all()} == {'general', 'psychology'}
         areas = db.scalars(select(InterestAreaModel)).all()
@@ -29,7 +29,7 @@ def test_fresh_install_has_domain_packs_area_and_real_migration(client):
         assert areas[0].slug == 'psychology'
         assert areas[0].domain_pack_id == 'psychology'
         assert areas[0].is_default is True
-        assert set(db.scalars(select(SchemaMigration.version)).all()) == set(range(1, 15))
+        assert set(db.scalars(select(SchemaMigration.version)).all()) == set(range(1, 16))
         # 2 general + 4 psychology builtin personas are scoped by pack.
         assert len(db.scalars(select(PersonaScopeModel)).all()) == 6
 
@@ -175,12 +175,13 @@ def test_generic_area_rejects_psychology_only_tutor_context(client):
 
 def test_web_area_context_and_curiosity_state_contract(project_root):
     api_js = (project_root / 'apps/web/lib/api.js').read_text('utf-8')
+    socket = (project_root / 'apps/web/lib/runtime/transports/socket.js').read_text('utf-8')
     curiosity = (project_root / 'apps/web/app/curiosity/page.js').read_text('utf-8')
     shell = (project_root / 'apps/web/components/DesktopShell.js').read_text('utf-8')
     tutor = (project_root / 'apps/web/app/tutor/page.js').read_text('utf-8')
     content = (project_root / 'apps/web/app/content/page.js').read_text('utf-8')
     assert 'X-PG-Interest-Area' in api_js
-    assert "params.set('area'" in api_js
+    assert "params.set('area'" in socket
     assert "state==='active_topic'" in curiosity
     assert "state==='promoted'" not in curiosity
     assert 'AreaSwitcher' in shell

@@ -27,7 +27,7 @@ v0.6 Host integration is implemented. Product packaging/runtime verification is 
 - retired external tutor-runtime paths: removed with explicit schema migration;
 - native DomainPolicy, Area capability and PermissionScope compilation: implemented.
 
-## v0.7 implementation status (2026-08-13)
+## v0.7 implementation status (2026-08-14)
 
 - Runtime/auth/version, threat, deployment, client and APK contracts: documented.
 - Single-owner bootstrap/login, named device sessions, access/refresh tokens and per-device revocation: implemented with automated coverage.
@@ -39,7 +39,11 @@ v0.6 Host integration is implemented. Product packaging/runtime verification is 
 - DB + Source + Artifact backup/restore bundle tooling: implemented.
 - Docker API/Web images: build and boot; health/capability/Web return 200 and an unauthenticated protected route returns 401.
 - Gate B (B1–B4) is closed at the source-and-test gate level.
-- ClientRuntime, desktop remote UX, Android target, emulator/device proof and signed APK delivery: not implemented.
+- Gate C ClientRuntime foundation: implemented — frozen `runtimeId` vocabulary, orthogonal platform adapters, connection state machine, SemVer/compatibility checks, URL normalization, runtime-scoped storage, secure credential boundary and retry policy under `apps/web/lib/runtime/`; Rust `runtime_mode.rs` decides `desktop-local`/`desktop-remote` with no sidecar spawn in remote mode; server instance identity (migration 15) implemented. Contract coverage: 45 JS pure tests, 12 Rust mode/remote-transport tests, 6 server-identity tests.
+- Gate D §D5–D7 desktop remote UX: implemented at source level — runtime mode selection (This device / Self-hosted server), server enrollment, owner bootstrap, login/logout, device listing/revoke and connection status via `RuntimeConnect` on the System page; provider settings gated to desktop-local; data-location visual distinction; explicit restart boundary with no silent local/server merge. Real public-TLS-server enrollment and real packaged Windows/macOS regression remain to be exercised.
+- Gate E mobile adaptation contract: implemented at source level — frozen `PLATFORM_CAPABILITIES` vocabulary and a `DESKTOP_ONLY_CAPABILITIES` gate (sidecar, token, vaults, updater, window controls, provider secrets) asserted false on every non-desktop runtime; `android-remote` assigns the renewal credential to Android Keystore and declares document picker / share sheet / suspend-resume lifecycle / biometric unlock as planned adapters (contract vocabulary only).
+- Android target/emulator/device proof and signed APK delivery (Gates E–F), cross-device proof (Gate G): not implemented — toolchain and hardware evidence remain an explicit boundary. Toolchain inventory checked 2026-08-14: no JDK/keytool, no Android SDK, no Rust Android targets, no `cargo-ndk`, no `adb`, no emulator/device.
+- 2026-08-14 full regression: 244 pytest passed, Native Core standalone PASS, 45 ClientRuntime JS tests passed, 12 Rust tests passed, Web lint/static build passed, all Host gate scripts PASS (`scripts/verify.py` version check synced to 0.7.0).
 
 Normative execution status and next order live in `docs/audits/V0_7_IMPLEMENTATION_AUDIT.md` and `docs/roadmap/V0_7_SELF_HOSTED_CROSS_DEVICE_PLAN.md`.
 
@@ -58,9 +62,15 @@ Normative execution status and next order live in `docs/audits/V0_7_IMPLEMENTATI
 - packaged desktop launch: PASS; current packaged sidecar health/token smoke is PASS;
 - Web JS/MJS syntax: **20 files / 0 parse failures**;
 - config parse: **6 JSON / 26 YAML / 2 TOML / 1 plist**, all PASS;
-- fresh DB includes 2 Domain Packs, 1 default Psychology Area, scoped Personas and migrations 1–14;
+- fresh DB includes 2 Domain Packs, 1 default Psychology Area, scoped Personas and migrations 1–15;
 - real desktop Core smoke: health 200, protected runtime without token 401, correct token 200;
 - exact real v0.4.1→v0.5 migration: representative legacy rows preserved and bound to default Psychology Area; legacy plugin state copied to neutral ID.
+- ClientRuntime contract tests (Node built-in runner): **45 PASS** (descriptors, compatibility, SemVer, URL normalization, connection state machine, storage namespace, credential store, retry safety, remote transport, Gate E mobile capability vocabulary + desktop-only gate);
+- Rust runtime-mode + remote-transport source tests: **12 PASS** (`cargo test --locked --lib`), covering default desktop-local, explicit desktop-local, desktop-remote never spawns sidecar, invalid profile never switches store, id validation, enrollment-origin normalization/validation and refresh-key namespace isolation;
+- server instance identity: **6 PASS** (fresh single identity, restart unchanged, second server distinct, migration 15 upgrade once, singleton index, display-name env);
+- Gate C desktop-local compatibility: existing install defaults to desktop-local; sidecar, App Data, DB, keyring and provider settings unchanged;
+- Gate C CSP/capabilities audit: no relaxation to arbitrary HTTPS/`connect-src *` introduced;
+- Gate D §D5–D7 source UX: `RuntimeConnect` compiles and lints (runtime mode selection, enrollment, login/logout, device management, connection status); System page provider settings gated to desktop-local; remote data location visually distinct in the desktop shell.
 
 Release packaging follows a strict external verification process: generate the ZIP from a clean frozen commit, UTF-8-safe re-extract it, then rerun every available gate. The exact archive result is recorded outside the source package in the release verification report so the frozen package does not contain a self-referential archive-status claim.
 

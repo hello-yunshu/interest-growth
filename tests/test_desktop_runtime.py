@@ -33,12 +33,14 @@ def test_desktop_http_token_gate(monkeypatch):
 
 
 def test_renderer_uses_official_tauri_environment_detection(project_root):
-    api_js = (project_root / "apps/web/lib/api.js").read_text(encoding="utf-8")
+    platform = (project_root / "apps/web/lib/runtime/platform.js").read_text(encoding="utf-8")
     shell_js = (project_root / "apps/web/components/DesktopShell.js").read_text(encoding="utf-8")
-    assert "isTauri as tauriIsTauri" in api_js
+    assert "isTauri" in platform
+    assert "import { isTauri } from '@tauri-apps/api/core'" in platform
     assert "import { isTauri } from '@tauri-apps/api/core'" in shell_js
-    assert "__TAURI_INTERNALS__" not in api_js
+    assert "__TAURI_INTERNALS__" not in platform
     assert "__TAURI_INTERNALS__" not in shell_js
+    assert "isTauri" not in (project_root / "apps/web/lib/api.js").read_text(encoding="utf-8")
 
 
 def test_desktop_runtime_files_and_static_export_config_exist(project_root):
@@ -198,6 +200,7 @@ def test_desktop_export_uses_native_save_dialog_with_runtime_scoped_write(projec
     import json
     cargo = (project_root / "apps/desktop/src-tauri/Cargo.toml").read_text(encoding="utf-8")
     web_package = json.loads((project_root / "apps/web/package.json").read_text(encoding="utf-8"))
+    adapter = (project_root / "apps/web/lib/runtime/platforms/tauri-desktop.js").read_text(encoding="utf-8")
     api_js = (project_root / "apps/web/lib/api.js").read_text(encoding="utf-8")
     capability = json.loads((project_root / "apps/desktop/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))
     rust = (project_root / "apps/desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
@@ -205,9 +208,9 @@ def test_desktop_export_uses_native_save_dialog_with_runtime_scoped_write(projec
     assert 'tauri-plugin-fs = "2"' in cargo
     assert "@tauri-apps/plugin-dialog" in web_package["dependencies"]
     assert "@tauri-apps/plugin-fs" in web_package["dependencies"]
-    assert "import('@tauri-apps/plugin-dialog')" in api_js
-    assert "import('@tauri-apps/plugin-fs')" in api_js
-    assert "writeFile(destination" in api_js
+    assert "import('@tauri-apps/plugin-dialog')" in adapter
+    assert "import('@tauri-apps/plugin-fs')" in adapter
+    assert "writeFile(destination" in adapter
     assert "dialog:allow-save" in capability["permissions"]
     assert "fs:allow-write-file" in capability["permissions"]
     assert "tauri_plugin_dialog::init()" in rust
@@ -233,10 +236,10 @@ def test_desktop_is_single_instance_to_protect_shared_app_data(project_root):
 
 def test_failed_desktop_core_restart_updates_runtime_error_state(project_root):
     rust = (project_root / "apps/desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
-    web = (project_root / "apps/web/lib/api.js").read_text(encoding="utf-8")
+    local_transport = (project_root / "apps/web/lib/runtime/transports/desktop-local.js").read_text(encoding="utf-8")
     assert "fn runtime_error(" in rust
-    assert "let failed = runtime_error(&app, &error);" in rust
-    assert "runtimePromise = null" in web
+    assert "let failed = runtime_error(&app, &error, state.mode);" in rust
+    assert "runtimePromise = null" in local_transport
 
 
 def test_pyinstaller_sidecar_has_static_fastapi_import_graph(project_root):
@@ -261,13 +264,13 @@ def test_desktop_renderer_csp_cannot_connect_directly_to_ai_providers(project_ro
 def test_unexpected_core_termination_invalidates_only_matching_runtime_token(project_root):
     rust = (project_root / "apps/desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
     shell = (project_root / "apps/web/components/DesktopShell.js").read_text(encoding="utf-8")
-    api_js = (project_root / "apps/web/lib/api.js").read_text(encoding="utf-8")
+    local_transport = (project_root / "apps/web/lib/runtime/transports/desktop-local.js").read_text(encoding="utf-8")
     assert "let runtime_token = token.clone();" in rust
     assert "if runtime.token == runtime_token" in rust
     assert "error:core-terminated" in rust
     assert "listen('core-terminated'" in shell
     assert "refreshDesktopRuntime" in shell
-    assert "runtimePromise = null" in api_js
+    assert "runtimePromise = null" in local_transport
 
 
 def test_native_ci_smokes_packaged_sidecar_before_tauri_bundle(project_root):

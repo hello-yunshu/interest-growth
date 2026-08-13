@@ -60,7 +60,8 @@ def test_backup_creates_complete_consistent_bundle(seeded_client, tmp_path):
     bundle = create_backup(destination_dir=str(tmp_path / "backups"))
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["product"] == "interest-growth"
-    assert manifest["schema_version"] == 14
+    assert manifest["schema_version"] == 15
+    assert manifest["server_instance_id"]
     assert manifest["database"]["sha256"]
     assert manifest["file_count"]["sources"] >= 1
     assert manifest["file_count"]["artifacts"] >= 1
@@ -90,11 +91,11 @@ def test_restore_round_trip_into_clean_live_paths(seeded_client, tmp_path):
     assert result["restored"] is True
     assert result["integrity"] == "ok"
     assert result["foreign_key_violations"] == 0
-    assert result["schema_version"] == 14
+    assert result["schema_version"] == 15
     assert result["missing_source_files"] == []
     assert result["missing_artifact_files"] == []
     with get_session_factory()() as db:
-        assert db.scalar(select(func.max(SchemaMigration.version))) == 14
+        assert db.scalar(select(func.max(SchemaMigration.version))) == 15
     reset_engine_for_tests()
 
 
@@ -118,6 +119,29 @@ def test_restore_rejects_incomplete_bundle(seeded_client, tmp_path):
     (bundle / "psychology_growth.db").unlink()
     with pytest.raises(ValueError, match="missing database snapshot"):
         restore_backup(bundle_dir=str(bundle))
+
+
+def test_restore_preserves_server_identity(seeded_client, tmp_path):
+    """Gate C 21.6: server_instance_id survives a backup/restore round trip."""
+    from pg_api.backup_restore import create_backup, restore_backup
+    from pg_api.db import ServerMetadataModel
+
+    def identity():
+        with get_session_factory()() as db:
+            row = db.scalar(select(ServerMetadataModel).limit(1))
+            return row.server_instance_id if row else None
+
+    before = identity()
+    assert before
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["server_instance_id"] == before
+    _wipe_live_state()
+    result = restore_backup(bundle_dir=str(bundle))
+    assert result["restored"] is True
+    assert identity() == before
+    assert identity() == manifest["server_instance_id"]
+    reset_engine_for_tests()
 
 
 # ------------------------------------------------------------- Gate B4
@@ -188,7 +212,7 @@ def test_restore_retains_previous_state_until_post_checks_then_cleans(seeded_cli
     ]
     assert leftovers == [], f"pre-restore state must be cleaned up after success: {leftovers}"
     with get_session_factory()() as db:
-        assert db.scalar(select(func.max(SchemaMigration.version))) == 14
+        assert db.scalar(select(func.max(SchemaMigration.version))) == 15
     reset_engine_for_tests()
 
 
@@ -202,7 +226,7 @@ def test_restore_migrates_older_bundle_schema_during_staging(seeded_client, tmp_
     bundle = create_backup(destination_dir=str(tmp_path / "backups"))
     db_file = bundle / "psychology_growth.db"
     conn = sqlite3.connect(db_file)
-    conn.execute("DELETE FROM schema_migrations WHERE version = 14")
+    conn.execute("DELETE FROM schema_migrations WHERE version = 15")
     conn.commit()
     conn.close()
     manifest_path = bundle / "manifest.json"
@@ -211,9 +235,9 @@ def test_restore_migrates_older_bundle_schema_during_staging(seeded_client, tmp_
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
     result = restore_backup(bundle_dir=str(bundle))
-    assert result["schema_version"] == 14
+    assert result["schema_version"] == 15
     with get_session_factory()() as db:
-        assert db.scalar(select(func.max(SchemaMigration.version))) == 14
+        assert db.scalar(select(func.max(SchemaMigration.version))) == 15
     reset_engine_for_tests()
 
 

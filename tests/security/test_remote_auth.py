@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from pg_api.db import SecurityEventModel, get_session_factory
+from pg_api.db import DeviceModel, SecurityEventModel, get_session_factory
 
 
 BOOTSTRAP_TOKEN = "bootstrap-secret-token"
@@ -70,10 +70,47 @@ def test_capabilities_contract_is_stable_and_public(remote_client):
     assert body["product"] == "interest-growth"
     assert body["api_version"] == "1"
     assert body["min_client_version"] == "0.7.0"
+    assert body["server_instance_id"]
+    assert body["server_display_name"] == "Interest Growth Server"
     assert body["online_first"] is True
     assert body["offline_sync"] is False
     assert body["auth"]["enabled"] is True
     assert body["auth"]["mode"] == "single_owner_devices"
+
+
+# ------------------------------------------------------------- server identity
+
+
+def test_server_identity_consistent_across_endpoints(remote_client):
+    """Gate C: capabilities, server-info and login report the same identity."""
+    _bootstrap(remote_client)
+    capabilities = remote_client.get("/api/system/capabilities").json()
+    server_info = remote_client.get("/api/auth/server-info").json()
+    login = _login(remote_client).json()
+    instance_id = capabilities["server_instance_id"]
+    display_name = capabilities["server_display_name"]
+    assert server_info["server_instance_id"] == instance_id
+    assert server_info["server_display_name"] == display_name
+    assert login["server"]["server_instance_id"] == instance_id
+    assert login["server"]["server_display_name"] == display_name
+
+
+def test_server_identity_is_not_auth_credential(remote_client):
+    """The identity is public metadata; it never appears in tokens or events."""
+    from pg_api.remote_auth import _issue_token_pair
+
+    _bootstrap(remote_client)
+    _login(remote_client)
+    instance_id = remote_client.get("/api/system/capabilities").json()["server_instance_id"]
+    with get_session_factory()() as db:
+        device = db.scalar(select(DeviceModel))
+        tokens = _issue_token_pair(db, device.id)
+        db.rollback()
+    assert instance_id not in tokens["access_token"]
+    assert instance_id not in tokens["refresh_token"]
+    with get_session_factory()() as db:
+        serialized = json.dumps(db.query(SecurityEventModel).all()[0].detail_json or {})
+    assert instance_id not in serialized
 
 
 def test_local_mode_remains_unchanged_when_remote_auth_disabled(client):

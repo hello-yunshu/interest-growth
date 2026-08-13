@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { api, getDesktopRuntime, refreshDesktopRuntime, getInterestAreaSelector, setInterestAreaSelector } from '../lib/api';
 import Icon from './Icon';
+import { useRuntimeCopy } from './useRuntimeCopy';
 
 const NAV = [
   { href: '/', label: '今日', icon: 'home', group: 'focus', keywords: 'home dashboard today 首页' },
@@ -25,7 +26,7 @@ const NAV = [
 
 const GROUPS = [['focus', '关注'], ['learn', '学习'], ['create', '创建'], ['reflect', '回顾']];
 
-function CommandPalette({ open, onClose }) {
+function CommandPalette({ open, onClose, runtimeCopy }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const [contentRows, setContentRows] = useState([]);
@@ -66,7 +67,7 @@ function CommandPalette({ open, onClose }) {
   return <div className="commandBackdrop" onMouseDown={onClose}>
     <div className="commandPalette" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="快速跳转">
       <div className="commandInputRow"><Icon name="search"/><input autoFocus value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} placeholder="搜索页面、问题、笔记或资料" onKeyDown={event => { if (event.key === 'Escape') onClose(); if (event.key === 'ArrowDown') { event.preventDefault(); setActive(value => Math.min(rows.length - 1, value + 1)); } if (event.key === 'ArrowUp') { event.preventDefault(); setActive(value => Math.max(0, value - 1)); } if (event.key === 'Enter') { event.preventDefault(); choose(rows[active]); } }}/><kbd>ESC</kbd></div>
-      <div className="commandResults" aria-live="polite">{rows.map((item, index) => <button key={item.id} className={`commandItem ${index === active ? 'is-active' : ''}`} onMouseEnter={() => setActive(index)} onClick={() => choose(item)}><span className="commandIcon"><Icon name={item.icon}/></span><span><strong>{item.label}</strong><small>{item.detail || item.kind}</small></span>{index === active && <kbd>↵</kbd>}</button>)}{!rows.length && <div className="commandEmpty"><Icon name="search"/><strong>{searching ? '正在搜索本地内容' : '没有找到匹配内容'}</strong><span>{searching ? '问题、笔记和资料仍保存在本机。' : '换一个更短的关键词试试。'}</span></div>}</div>
+      <div className="commandResults" aria-live="polite">{rows.map((item, index) => <button key={item.id} className={`commandItem ${index === active ? 'is-active' : ''}`} onMouseEnter={() => setActive(index)} onClick={() => choose(item)}><span className="commandIcon"><Icon name={item.icon}/></span><span><strong>{item.label}</strong><small>{item.detail || item.kind}</small></span>{index === active && <kbd>↵</kbd>}</button>)}{!rows.length && <div className="commandEmpty"><Icon name="search"/><strong>{searching ? runtimeCopy.searchEmptyTitle : '没有找到匹配内容'}</strong><span>{searching ? runtimeCopy.searchEmptyHint : '换一个更短的关键词试试。'}</span></div>}</div>
       <div className="commandFooter"><span>{query.trim() ? '当前兴趣中的页面与内容' : '快速跳转'}</span><span><kbd>↑↓</kbd> 选择 <kbd>↵</kbd> 打开</span></div>
     </div>
   </div>;
@@ -116,6 +117,7 @@ export default function DesktopShell({ children }) {
   const [areaReady, setAreaReady] = useState(false);
   const [theme, setTheme] = useState('light');
   const [mobileNav, setMobileNav] = useState(false);
+  const runtimeCopy = useRuntimeCopy();
   useEffect(() => {
     let unlisten = null; let active = true;
     setTheme(window.localStorage.getItem('interest-growth.theme') || 'light');
@@ -150,13 +152,13 @@ export default function DesktopShell({ children }) {
     </header>
     <div className="desktopBody">
       <aside className={`desktopSidebar ${mobileNav ? 'is-open' : ''}`}>
-        <Link href="/" className="desktopBrand" onClick={() => setMobileNav(false)}><span className="brandMark">IG</span><span><strong>Interest Growth</strong><small><i className="statusDot ok"/> 本地保存</small></span></Link>
+        <Link href="/" className="desktopBrand" onClick={() => setMobileNav(false)}><span className="brandMark">IG</span><span><strong>Interest Growth</strong><small><i className={`statusDot ${runtimeCopy.dataLocation === 'self-hosted-server' ? 'remote' : 'ok'}`}/> {runtimeCopy.dataStatusLabel}</small></span></Link>
         <nav className="sideNav">{GROUPS.map(([group, label]) => <div className="sideNavGroup" key={group}><div className="sideNavLabel">{label}</div>{NAV.filter(item => item.group === group).map(item => <Link key={item.href} href={item.href} onClick={() => setMobileNav(false)} className={`sideNavItem ${pathname === item.href ? 'active' : ''}`}><Icon name={item.icon}/><span>{item.label}</span></Link>)}</div>)}</nav>
         <div className="sidebarBottom"><button className="commandShortcut" onClick={() => setPalette(true)}><Icon name="link"/><span>快速跳转</span><kbd>⌘K</kbd></button><Link href="/system" className={`sideNavItem ${pathname === '/system' ? 'active' : ''}`}><Icon name="settings"/><span>设置</span></Link></div>
       </aside>
       {mobileNav && <button className="mobileNavBackdrop" aria-label="关闭导航" onClick={() => setMobileNav(false)}/>}
-      <main className="workspace"><div className="workspaceInner">{areaReady ? children : <div className="workspaceBoot"><span className="brandMark">IG</span><strong>正在打开你的兴趣空间</strong><small>内容仍保存在本机</small></div>}</div></main>
+      <main className="workspace"><div className="workspaceInner">{areaReady ? children : <div className="workspaceBoot"><span className="brandMark">IG</span><strong>正在打开你的兴趣空间</strong><small>{runtimeCopy.bootCopy}</small></div>}</div></main>
     </div>
-    <CommandPalette open={palette} onClose={() => setPalette(false)}/>
+    <CommandPalette open={palette} onClose={() => setPalette(false)} runtimeCopy={runtimeCopy}/>
   </div>;
 }

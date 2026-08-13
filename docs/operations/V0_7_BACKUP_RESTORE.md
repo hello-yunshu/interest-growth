@@ -33,7 +33,8 @@ backup-<utc-timestamp>/
 {
   "product": "interest-growth",
   "server_version": "0.7.0",
-  "schema_version": 13,
+  "schema_version": 15,
+  "server_instance_id": "<uuid>",
   "created_at": "…",
   "database": {"file": "psychology_growth.db", "sha256": "…"},
   "sources": {"sha256": "…"},
@@ -50,11 +51,12 @@ bundle is detectable before any restore attempt.
 1. The API process is the single writer. Backups use the SQLite online
    backup API for a consistent database snapshot instead of copying a live
    file.
-2. Stop or drain API writes for the whole backup operation. The current
-   implementation snapshots the DB first and then copies Source and Artifact
-   vaults; without this quiesce window, concurrent file mutations could make
-   the three parts represent different moments. Checksums detect bundle
-   corruption, not this cross-component timing drift.
+2. Backups take the exclusive maintenance/write lock, which drains application
+   vault writes for the whole DB + vault copy span (an in-process reader/writer
+   gate plus a cross-process advisory flock). The database snapshot is taken
+   first, then Source and Artifact vaults are copied under the same lock, so
+   the three parts represent one consistent moment. Checksums still detect
+   bundle corruption.
 3. Backups are written into a declared backup volume/directory, never into
    the live data volume paths.
 4. An operator may run backups manually (`scripts/backup_server.py`) or from
@@ -62,8 +64,11 @@ bundle is detectable before any restore attempt.
 
 ## 4. Restoring a backup
 
-1. Stop writes (API stopped or drained). The restore script replaces DB +
-   Sources + Artifacts from one bundle.
+1. Restore takes the exclusive maintenance/write lock and uses a staged,
+   rollback-safe sequence: the bundle is copied to temporary paths and fully
+   verified there before the live DB + Sources + Artifacts are switched. The
+   previous live state is retained as `*.pre-restore-<ts>` until post-restore
+   checks pass, so any failure leaves the original live state recoverable.
 2. Validate the manifest checksums before touching the live paths.
 3. Start the restored database, re-run migrations from the frozen schema
    version to the current one, then verify:
@@ -79,8 +84,8 @@ bundle is detectable before any restore attempt.
 
 - Backup of a quiesced database with product data produces a manifest with
   valid checksums.
-- A future online-backup mode must coordinate DB and vault mutations under one
-  maintenance/write lock and include a concurrent-write regression test.
+- Online backup coordinates DB and vault mutations under one maintenance/write
+  lock; a concurrent-write regression test passes.
 - Restore into a clean data directory passes integrity + reference checks.
 - Restoring an older schema version upgrades to the current version through
   the normal migration path.

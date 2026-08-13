@@ -23,6 +23,7 @@ from .db import (
     DeviceRefreshTokenModel,
     OwnerModel,
     SecurityEventModel,
+    get_server_identity,
     get_session_factory,
     now_utc,
 )
@@ -314,11 +315,14 @@ class DeviceRevokeRequest(BaseModel):
 
 @router.get("/server-info")
 def server_info(request: Request):
+    identity = get_server_identity()
     return {
         "product": PRODUCT_NAME,
         "server_version": SERVER_VERSION,
         "api_version": API_VERSION,
         "min_client_version": MIN_CLIENT_VERSION,
+        "server_instance_id": identity["server_instance_id"],
+        "server_display_name": identity["server_display_name"],
         "auth": {
             "mode": "single_owner_devices",
             "enabled": get_settings().remote_auth_enabled,
@@ -389,6 +393,7 @@ def owner_login(body: OwnerLoginRequest, request: Request):
         device_id = device.id
         device_name = device.name
     record_security_event("device_registered", device_id=device_id, ip_address=ip)
+    identity = get_server_identity()
     return {
         "device": {"id": device_id, "name": device_name},
         "tokens": tokens,
@@ -397,6 +402,8 @@ def owner_login(body: OwnerLoginRequest, request: Request):
             "server_version": SERVER_VERSION,
             "api_version": API_VERSION,
             "min_client_version": MIN_CLIENT_VERSION,
+            "server_instance_id": identity["server_instance_id"],
+            "server_display_name": identity["server_display_name"],
         },
     }
 
