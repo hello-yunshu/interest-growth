@@ -1,0 +1,30 @@
+{
+  "package": "native-execution-core",
+  "version": "0.6.0rc2",
+  "tree_sha256": "89fbd304d425c62b400d7a84fe5643fab2bb346555749699ba3c632330e6d286",
+  "expected_host_baseline": {
+    "version": "0.5.0",
+    "commit": "2c7141e7677fd48d12087159911cd60a51168502",
+    "archive_sha256": "524ed7868220567805626cdae316f35d6a896ecb35758f5ced2c32c07203a358"
+  },
+  "v03_invariant_reference": {
+    "version": "0.3.0",
+    "commit": "52e4687bc0be140e0f5e10e844ff3f2af88e342e",
+    "archive_sha256": "b08772c3046f048e47afea8db506a63b90fbd9d9e92aa2412d8954cc928ae11a"
+  },
+  "status": "host_wired_local_verification_complete",
+  "completed_host_wiring": [
+    "migration 11 registered in Host ledger",
+    "native provider bound without duplicating canonical product models",
+    "DomainPolicy compiled from current Interest Area Domain Pack",
+    "PermissionScope compiled from manifest PermissionBroker",
+    "global and Area capability lifecycle supplied explicitly",
+    "Host TutorSession and TutorTurn remain canonical",
+    "native event sequence persisted and replayable",
+    "native Knowledge Source parsing and retrieval use Host-owned originals",
+    "original Host tests and native core tests pass",
+    "production Web build, lint and browser product flow pass",
+    "desktop sidecar smoke and macOS Apple Silicon bundle build pass"
+  ],
+  "remaining_verification": []
+}

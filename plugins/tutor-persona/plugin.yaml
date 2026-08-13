@@ -1,0 +1,28 @@
+id: capability.tutor-persona
+name: Tutor Persona
+version: 0.5.0
+level: 3
+description: Domain-scoped behavior presets with optional external persona projection.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /learning
+  capabilities:
+  - tutor-persona
+  - persona-bridge
+  widgets: []
+permissions:
+  read:
+  - tutor_persona
+  write:
+  - tutor_persona
+risk:
+  network: true
+  shell: false
+  llm: false
+  destructive_data: false
+subscribes: []

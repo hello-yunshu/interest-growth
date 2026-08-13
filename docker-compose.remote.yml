@@ -1,0 +1,69 @@
+# Interest Growth v0.7 — authenticated remote server profile.
+#
+# Usage:
+#   cp .env.remote.example .env.remote
+#   docker compose -f docker-compose.yml -f docker-compose.remote.yml --env-file .env.remote up -d --build
+#
+# Docker itself intentionally serves HTTP. By default both published ports bind
+# only to 127.0.0.1. Terminate public/client-facing HTTPS in an external Nginx,
+# Caddy or another reverse proxy and forward to these loopback ports.
+#
+# Non-goals preserved: single owner, no open registration, no offline sync.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: !override [.env.remote]
+    environment:
+      APP_ENV: remote
+      APP_DATABASE_URL: sqlite:////app/data/psychology_growth.db
+      SOURCE_STORAGE_ROOT: /app/data/source_files
+      ARTIFACT_STORAGE_ROOT: /app/data/artifacts
+      PG_REMOTE_AUTH_ENABLED: "true"
+    # This profile is loopback-only by default, so the external reverse proxy
+    # is the sole network peer. Trust its forwarded scheme/IP metadata so the
+    # enrollment API reports the client-facing HTTPS state correctly.
+    command:
+      - uvicorn
+      - pg_api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    ports: !override
+      - "${REMOTE_BIND:-127.0.0.1}:${REMOTE_API_PORT:-8000}:8000"
+    volumes:
+      - psychology_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Same-origin is the safe default when an external reverse proxy serves
+        # both the UI and /api from one HTTPS hostname.
+        NEXT_PUBLIC_API_BASE: ${REMOTE_PUBLIC_API_BASE:-/api}
+    restart: unless-stopped
+    ports: !override
+      - "${REMOTE_BIND:-127.0.0.1}:${REMOTE_WEB_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  psychology_data:

@@ -1,0 +1,43 @@
+id: capability.content-studio
+name: Content Studio
+version: 0.5.0
+level: 3
+description: Human-reviewed content packs grounded according to the active Domain
+  Pack.
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /content
+  capabilities:
+  - content-pack
+  - publish-guard
+  widgets: []
+subscribes:
+- claim.revised
+- claim.reverification_required
+permissions:
+  read:
+  - topic
+  - claim
+  - claim_version
+  - evidence
+  - source
+  - learning_note
+  - practice_item
+  - practice_attempt
+  - learning_activity
+  - living_book_chapter
+  - artifact
+  - project
+  - grounding_ref
+  write:
+  - artifact
+  - grounding_ref
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false

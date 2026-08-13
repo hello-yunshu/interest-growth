@@ -1,0 +1,27 @@
+id: capability.reflection
+name: Reflection
+version: 0.5.0
+level: 3
+description: Area-scoped review centered on interest, energy and understanding changes.
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /reflection
+  capabilities:
+  - weekly-reflection
+  widgets: []
+subscribes: []
+permissions:
+  read:
+  - growth_event
+  - reflection
+  write:
+  - reflection
+risk:
+  network: false
+  shell: false
+  llm: false
+  destructive_data: false

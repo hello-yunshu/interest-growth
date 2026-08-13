@@ -1,0 +1,37 @@
+id: capability.mastery
+name: Flexible Mastery
+version: 0.5.0
+level: 3
+description: Domain-profiled mastery states without coercive streaks or automatic
+  promotion.
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /learning
+  capabilities:
+  - flexible-mastery
+  widgets: []
+subscribes:
+- claim.created
+permissions:
+  read:
+  - topic
+  - concept
+  - mastery
+  - claim
+  - claim_version
+  - evidence
+  - source
+  - knowledge_base
+  write:
+  - concept
+  - mastery
+  - capability_run
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false

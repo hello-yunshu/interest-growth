@@ -1,0 +1,27 @@
+id: capability.career
+name: Career Exploration
+version: 0.5.0
+level: 3
+description: Reversible career or practice experiments attached to an interest area.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /career
+  capabilities:
+  - career-exploration
+  widgets: []
+permissions:
+  read:
+  - career_experiment
+  write:
+  - career_experiment
+risk:
+  network: false
+  shell: false
+  llm: false
+  destructive_data: false
+subscribes: []

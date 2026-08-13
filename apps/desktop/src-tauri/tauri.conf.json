@@ -1,0 +1,75 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Interest Growth",
+  "version": "0.6.0",
+  "identifier": "app.psychologygrowth.desktop",
+  "build": {
+    "beforeDevCommand": "npm --prefix ../web run dev",
+    "devUrl": "http://127.0.0.1:3000",
+    "beforeBuildCommand": "npm --prefix ../web run build",
+    "frontendDist": "../../web/out"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Interest Growth",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1080,
+        "minHeight": 720,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Education",
+    "shortDescription": "Local-first multi-interest learning and practice workspace",
+    "longDescription": "Interest Growth is an independent, local-first desktop workspace for cultivating multiple interests through curiosity, learning, practice, research, reflection and expression. Psychology is the default Domain Pack.",
+    "externalBin": [
+      "binaries/psychology-growth-core"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": null,
+      "entitlements": "Entitlements.plist"
+    },
+    "windows": {
+      "allowDowngrades": false,
+      "minimumWebview2Version": "138.0.3351.55",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    },
+    "createUpdaterArtifacts": false,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": ""
+    }
+  }
+}

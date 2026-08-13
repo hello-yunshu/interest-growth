@@ -1,0 +1,36 @@
+id: capability.concept-graph
+name: Concept Graph
+version: 0.5.0
+level: 3
+description: Concept and grounding relationship graph for navigation and review.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /learning
+  capabilities:
+  - concept-graph
+  widgets: []
+permissions:
+  read:
+  - topic
+  - concept
+  - mastery
+  - claim
+  - claim_version
+  - evidence
+  - source
+  - artifact
+  - knowledge_base
+  write:
+  - artifact
+  - capability_run
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false
+subscribes: []

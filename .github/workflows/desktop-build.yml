@@ -1,0 +1,53 @@
+name: Desktop Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: { python-version: '3.13' }
+      - uses: actions/setup-node@v6
+        with: { node-version: '22' }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: '${{ matrix.target }}' }
+      - name: Install Python build dependencies
+        run: python -m pip install -e ".[desktop]"
+      - name: Install web dependencies
+        run: npm ci --prefix apps/web
+      - name: Install desktop CLI
+        run: npm ci --prefix apps/desktop
+      - name: Test core
+        run: python -m pytest
+      - name: Build Python sidecar
+        run: python scripts/build_desktop_sidecar.py --target ${{ matrix.target }}
+      - name: Smoke packaged Python sidecar
+        run: python scripts/smoke_desktop_sidecar.py --target ${{ matrix.target }}
+      - name: Self-audit source boundaries
+        run: python scripts/self_audit.py
+      - name: Build web static export
+        run: npm --prefix apps/web run build
+      - name: Build desktop bundle
+        run: npm --prefix apps/desktop run build -- --target ${{ matrix.target }}
+      - name: Upload unsigned build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: interest-growth-${{ matrix.target }}-unsigned
+          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
+          if-no-files-found: error

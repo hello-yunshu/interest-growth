@@ -38,6 +38,21 @@ def test_synthetic_clean_host_can_pass_strict_audit(tmp_path):
     assert p.returncode==0,p.stdout+p.stderr
     assert json.loads(p.stdout)["ready_for_native_cutover"] is True
 
+def test_host_audit_ignores_guard_examples_and_historical_docs(tmp_path):
+    h=host(tmp_path);(h/"packages/native-execution-core").mkdir()
+    (h/"tests").mkdir()
+    (h/"tests/test_guards.py").write_text(
+        "SAMPLE = \"import deeptutor; pg_deeptutor; global_capability_ids={'*'}\"\n",
+        "utf-8",
+    )
+    (h/"docs/history.md").write_text(
+        "A rejected plugin depends on integration.deeptutor.\n",
+        "utf-8",
+    )
+    p=subprocess.run([sys.executable,str(ROOT/"scripts/audit_host_v050.py"),str(h),"--strict"],cwd=ROOT,text=True,capture_output=True)
+    assert p.returncode==0,p.stdout+p.stderr
+    assert json.loads(p.stdout)["findings"] == []
+
 def test_migration_runner_preserves_legacy_sentinel(tmp_path):
     db=tmp_path/"host.db";conn=sqlite3.connect(db)
     conn.execute("CREATE TABLE legacy(id INTEGER PRIMARY KEY,value TEXT)")

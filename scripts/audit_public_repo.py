@@ -34,10 +34,7 @@ SECRET_PATTERNS = {
     "GitHub token": re.compile(r"\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     "OpenAI-style key": re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),
 }
-PROMPT_PATH_PATTERN = re.compile(
-    r"(?:^|/)(?:LOCAL_ONLY|[^/]*DO_NOT_COMMIT|[^/]*(?:prompt|提示词)[^/]*)",
-    re.IGNORECASE,
-)
+PROMPT_FILENAME_PATTERN = re.compile(r"(?:^|[_-])prompts?(?:[_-]|\.|$)|提示词", re.IGNORECASE)
 RUNTIME_ROOTS = ("interest_growth_native/",)
 RELEASE_CRITICAL_ROOTS = ("interest_growth_native/", "migrations/")
 
@@ -61,9 +58,13 @@ def forbidden_path_reason(path: str) -> str | None:
     lower = path.lower()
     parts = {part.lower() for part in pure.parts}
     name = pure.name.lower()
-    if PROMPT_PATH_PATTERN.search(path):
+    if any(part.lower() == "local_only" or "do_not_commit" in part.lower() for part in pure.parts):
         return "local-only or AI coding prompt material"
-    if name == ".env" or (name.startswith(".env.") and name != ".env.example"):
+    if PROMPT_FILENAME_PATTERN.search(name) and not path.startswith("docs/ai-coding/"):
+        return "local-only or AI coding prompt material"
+    if name == ".env" or (
+        name.startswith(".env.") and name not in {".env.example", ".env.remote.example"}
+    ):
         return "environment file"
     if pure.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}:
         return "credential file"

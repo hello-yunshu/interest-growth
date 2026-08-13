@@ -1,0 +1,40 @@
+id: capability.tutor-runtime
+name: Tutor Runtime
+version: 0.6.0
+level: 3
+description: Session-aware interactive learning runtime with replaceable providers.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /learning
+  capabilities:
+  - tutor-session
+  - interactive-turn
+  - wait-for-input
+  widgets: []
+permissions:
+  read:
+  - topic
+  - concept
+  - knowledge_base
+  - knowledge_mapping
+  - source
+  - auxiliary_agent_memory
+  - mastery
+  - tutor_persona
+  - tutor_session
+  - tutor_turn
+  write:
+  - tutor_session
+  - tutor_turn
+  - capability_run
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false
+subscribes: []

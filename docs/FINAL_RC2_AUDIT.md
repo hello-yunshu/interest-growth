@@ -8,9 +8,11 @@ It supersedes both:
 1. the rejected first `native-learning-runtime` prototype; and
 2. the pre-RC2 Native Execution Core that still regressed several v0.3 Tutor/RAG/Skill contracts.
 
-**Full merged Interest Growth v0.6 release is not claimed** because the frozen
-v0.5.0 246-file host source ZIP is still not available as raw bytes in this
-execution environment.
+The frozen v0.5.0 Host archive was later supplied and verified at SHA-256
+`524ed7868220567805626cdae316f35d6a896ecb35758f5ced2c32c07203a358`.
+The merged Host source now contains the execution integration, migration ledger,
+canonical Host bindings and combined regression suite. Native packaging and
+target-device release proof remain separate gates.
 
 ## High-risk regressions closed
 
@@ -45,22 +47,34 @@ The final source directory is required to pass:
 - source manifest verification;
 - Wheel build/install/import/store smoke.
 
-## Necessary remaining host boundary
+## Completed Host boundary
 
-The following require the real v0.5 host source:
-- real migration ledger registration;
-- removal/compat isolation of actual `pg_deeptutor` orchestration call sites;
-- preserving actual Host TutorSession/TutorTurn, KnowledgeIngestionRun,
-  Practice/MasteryEvidence, WritingRevision and LivingBook compiler code;
-- original 104 v0.5 tests + RC2 tests together;
-- real Browser/Next/desktop integration gates.
+- migration 11 is registered in the real Host migration ledger;
+- active legacy provider orchestration was removed through migration 12;
+- Host TutorSession/TutorTurn, KnowledgeIngestionRun, Practice/MasteryEvidence,
+  WritingRevision and LivingBook ownership remains canonical;
+- combined Host, native-contract, architecture, integration and security tests
+  run from the merged source tree;
+- Web production build and desktop source-contract gates run separately from
+  target-OS signing/notarization proof.
+
+## Exact RAG follow-up
+
+Reviewed optional adapters now bind LlamaIndex, LightRAG, Microsoft GraphRAG and
+PageIndex IDs to their actual upstream APIs. Unregistered IDs return
+`requires_review`; no legacy ID has a native fallback map. Whole-KB snapshots,
+collision-safe external names and fail-closed provenance mapping are test-gated.
 
 
-## Final source-tree verification snapshot
+## Final merged source-tree verification snapshot
 
-- collected pytest tests: **61**
-- all 61 passed
+- frozen v0.5 archive: exact SHA-256, **246 files**, original **104 tests passed**
+- merged pytest tests: **192 collected, 192 passed**
 - `scripts/verify.py`: PASS
+- strict Host audit: P0 0, P1 0, ready for native cutover
+- Web lint and 15-page static production build: PASS
+- desktop Rust `cargo check --locked`: PASS with a temporary sidecar placeholder
+- reviewed upstream dependency/API smoke: PASS for all four exact RAG adapters
 - runtime direct `deeptutor` imports: 0
 - runtime hardcoded Psychology policy terms: 0
 - TODO/FIXME/NotImplemented runtime placeholders: 0

@@ -1,0 +1,26 @@
+# Interest Growth v0.7 — optional TLS reverse proxy.
+# Used only with docker-compose.caddy.yml. The normal remote profile exposes
+# loopback HTTP for an operator-managed Nginx/Caddy edge.
+
+{$SERVER_DOMAIN} {
+	encode gzip
+
+	# API: the only process that may speak to the API container is Caddy.
+	reverse_proxy /api/* api:8000
+	reverse_proxy /api api:8000
+	reverse_proxy /docs api:8000
+	reverse_proxy /openapi.json api:8000
+	reverse_proxy /healthz api:8000
+
+	# Static browser client (optional, served through the same TLS boundary).
+	handle {
+		reverse_proxy web:80
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+}

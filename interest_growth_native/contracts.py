@@ -36,6 +36,8 @@ class SourceTextSnapshot:
     fingerprint: str = ""
     locator: SourceLocator = field(default_factory=SourceLocator)
     metadata: dict[str, Any] = field(default_factory=dict)
+    original_bytes: bytes = b""
+    media_type: str = ""
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeBaseSnapshot:

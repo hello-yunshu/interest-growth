@@ -25,6 +25,15 @@ class ValidationError(NativeExecutionError):
 class LegacyEngineReviewRequired(NativeExecutionError):
     pass
 
+class ExactRagAdapterError(NativeExecutionError):
+    pass
+
+class ExactRagDependencyError(ExactRagAdapterError):
+    pass
+
+class ExactRagProvenanceError(ExactRagAdapterError):
+    pass
+
 class StaleProposalError(NativeExecutionError):
     pass
 

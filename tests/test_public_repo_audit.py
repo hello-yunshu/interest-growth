@@ -25,6 +25,13 @@ def test_forbidden_public_paths_fail_closed():
     for path in cases:
         assert audit_public_repo.forbidden_path_reason(path), path
     assert audit_public_repo.forbidden_path_reason(".env.example") is None
+    assert audit_public_repo.forbidden_path_reason(".env.remote.example") is None
+    assert audit_public_repo.forbidden_path_reason(
+        "domains/general/skills/image-prompt/SKILL.md"
+    ) is None
+    assert audit_public_repo.forbidden_path_reason(
+        "docs/ai-coding/12_CODING_AGENT_MASTER_PROMPT.md"
+    ) is None
     assert audit_public_repo.forbidden_path_reason("docs/product_prompts.md") is not None
 
 

@@ -15,13 +15,14 @@ class RagEngineDescriptor:
     kind: str
     exact_upstream_equivalent: bool
     description: str = ""
+    upstream_distribution: str = ""
+    reviewed_version: str = ""
 
 @dataclass(frozen=True, slots=True)
 class LegacyEngineMigration:
     engine_id: str
     status: str
     message: str
-    suggested_native: str = ""
 
 class ExactRagAdapter(Protocol):
     """Exact third-party algorithm adapter.
@@ -32,6 +33,8 @@ class ExactRagAdapter(Protocol):
     canonical product owners.
     """
     engine_id: str
+    upstream_distribution: str
+    reviewed_version: str
     def build(self, kb: KnowledgeBaseSnapshot) -> Any: ...
     def retrieve(self, built: Any, *, query: str, top_k: int): ...
 
@@ -49,6 +52,12 @@ class RagEngineRegistry:
     def register_exact(self, adapter: ExactRagAdapter):
         if adapter.engine_id not in self.LEGACY:
             raise ValueError("exact adapters are reserved for reviewed legacy/third-party engine IDs")
+        if adapter.engine_id in self._exact:
+            raise ValueError(f"exact adapter already registered: {adapter.engine_id}")
+        if not getattr(adapter, "upstream_distribution", ""):
+            raise ValueError("exact adapter must declare its upstream distribution")
+        if not getattr(adapter, "reviewed_version", ""):
+            raise ValueError("exact adapter must declare its reviewed upstream version")
         self._exact[adapter.engine_id] = adapter
 
     def list(self):
@@ -57,7 +66,11 @@ class RagEngineRegistry:
             for k in self._native
         ]
         exact = [
-            RagEngineDescriptor(k,"exact-adapter",True,"Reviewed exact third-party adapter")
+            RagEngineDescriptor(
+                k,"exact-adapter",True,"Reviewed exact third-party adapter",
+                self._exact[k].upstream_distribution,
+                self._exact[k].reviewed_version,
+            )
             for k in sorted(self._exact)
         ]
         return tuple(native+exact)
@@ -73,14 +86,7 @@ class RagEngineRegistry:
         if engine_id not in self.LEGACY: return None
         if engine_id in self._exact:
             return LegacyEngineMigration(engine_id,"exact_adapter_available","Exact adapter registered.")
-        suggestions = {
-            "llamaindex":"native-lexical",
-            "lightrag":"native-lightgraph",
-            "graphrag":"native-concept-graph",
-            "pageindex":"native-heading",
-        }
         return LegacyEngineMigration(
             engine_id, "requires_review",
             "No exact adapter is registered. Silent algorithm substitution is forbidden.",
-            suggestions[engine_id],
         )

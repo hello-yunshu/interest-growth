@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib, json, re
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from .capabilities import CAP_KNOWLEDGE
 from .context import NativeRunContext
 from .contracts import KnowledgeBaseSnapshot, KnowledgeResolver, SourceLocator
-from .errors import AreaIsolationError, LegacyEngineReviewRequired
+from .errors import AreaIsolationError, ExactRagProvenanceError, LegacyEngineReviewRequired
 from .rag import RetrievalChunk, RagEngineRegistry
 
 def _source_fp(source) -> str:
@@ -51,16 +52,13 @@ def collision_safe_adapter_snapshot(kb: KnowledgeBaseSnapshot) -> KnowledgeBaseS
     """
     safe_sources=[]
     for source in kb.sources:
-        suffix=""
-        name=source.filename or "source"
-        if "." in name:
-            base, suffix = name.rsplit(".",1)
-            suffix="."+suffix
-        else:
-            base=name
-        sid=re.sub(r"[^A-Za-z0-9_-]+","-",source.source_id).strip("-") or hashlib.sha256(source.source_id.encode()).hexdigest()[:12]
+        name=Path(source.filename or "source").name
+        suffix=re.sub(r"[^A-Za-z0-9.]", "", Path(name).suffix)[:16]
+        base=name[:-len(suffix)] if suffix else name
+        source_hash=hashlib.sha256(source.source_id.encode()).hexdigest()[:12]
+        sid=re.sub(r"[^A-Za-z0-9_-]+","-",source.source_id).strip("-")[:48] or "source"
         base=re.sub(r"[^A-Za-z0-9._-]+","-",base).strip("-") or "source"
-        alias=f"{sid}__{base}{suffix}"
+        alias=f"{sid}-{source_hash}__{base}{suffix}"
         safe_sources.append(replace(source,filename=alias))
     return replace(kb,sources=tuple(safe_sources))
 
@@ -148,21 +146,39 @@ class NativeRetrievalEngine:
                 normalized=[]
                 for candidate in candidates:
                     source=source_map.get(candidate.source_id)
-                    if source is not None:
-                        mapped_locator=(
-                            source.locator if candidate.locator==SourceLocator()
-                            else replace(candidate.locator, filename=source.filename)
+                    if source is None:
+                        raise ExactRagProvenanceError(
+                            f"{kb.engine_id} returned an unmappable Source ID; result rejected"
                         )
-                        candidate=replace(
-                            candidate,
-                            filename=source.filename,
-                            source_fingerprint=_source_fp(source),
-                            locator=mapped_locator,
+                    if candidate.engine_id != kb.engine_id:
+                        raise ExactRagProvenanceError(
+                            f"{kb.engine_id} adapter returned engine_id={candidate.engine_id!r}"
                         )
+                    mapped_locator=(
+                        source.locator if candidate.locator==SourceLocator()
+                        else replace(candidate.locator, filename=source.filename)
+                    )
+                    candidate=replace(
+                        candidate,
+                        kb_id=kb.kb_id,
+                        filename=source.filename,
+                        source_fingerprint=_source_fp(source),
+                        locator=mapped_locator,
+                    )
                     normalized.append(candidate)
                 merged.extend(normalized)
         merged.sort(key=lambda x:x.score,reverse=True)
         return merged[:top_k]
+
+    def prepare(self, context: NativeRunContext, *, kb_ids) -> tuple[str, ...]:
+        """Build exact/native projections while Host retains ingestion-run truth."""
+        context.require_capability(CAP_KNOWLEDGE)
+        context.permission_scope.require_read("knowledge")
+        prepared = []
+        for kb in self._resolve(context, kb_ids):
+            self._built(kb)
+            prepared.append(effective_kb_fingerprint(kb))
+        return tuple(prepared)
 
     def invalidate(self,kb_id:str):
         for key in [x for x in self._cache if x[0]==kb_id]:del self._cache[key]

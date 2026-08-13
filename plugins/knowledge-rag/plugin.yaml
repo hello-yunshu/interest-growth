@@ -1,0 +1,42 @@
+id: capability.knowledge
+name: Knowledge & RAG
+version: 0.6.0
+level: 3
+description: Own-data-first source library with native local retrieval and optional rebuildable external RAG projections.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /knowledge
+  capabilities:
+  - knowledge-sync
+  - rag-rebuild
+  - document-preview
+  - knowledge-retrieve
+  widgets: []
+permissions:
+  read:
+  - source
+  - topic
+  - knowledge_base
+  - knowledge_mapping
+  - knowledge_ingestion_run
+  - retrieval_candidate
+  - capability_run
+  write:
+  - source
+  - knowledge_base
+  - knowledge_mapping
+  - knowledge_ingestion_run
+  - retrieval_candidate
+  - capability_run
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false
+subscribes:
+- source.uploaded

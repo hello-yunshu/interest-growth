@@ -5,6 +5,8 @@ from .helpers import StaticResolver,ctx,store
 
 class FakeExact:
     engine_id="lightrag"
+    upstream_distribution="fake-reviewed-lightrag"
+    reviewed_version="test-review"
     def __init__(self):self.seen=None
     def build(self,kb):
         self.seen=kb
@@ -31,5 +33,6 @@ def test_exact_adapter_receives_whole_kb_once_and_collision_safe_source_names():
     assert len(adapter.seen.sources)==2
     names=[x.filename for x in adapter.seen.sources]
     assert len(names)==len(set(names))
-    assert names[0].startswith("s1__") and names[1].startswith("s2__")
+    assert names[0].startswith("s1-") and names[1].startswith("s2-")
+    assert "__paper.pdf" in names[0] and "__paper.pdf" in names[1]
     assert out[0].source_id=="s1"

@@ -7,6 +7,7 @@ from .capabilities import *
 from .cowriter import NativeCoWriterExecutor
 from .execution_store import SQLiteExecutionStore
 from .knowledge import NativeRetrievalEngine
+from .rag import RagEngineRegistry
 from .learning import NativeGuidedLearningExecutor
 from .llm import LLMClient,UnavailableLLM
 from .math_animator import NativeMathAnimator
@@ -39,12 +40,13 @@ class NativeEngineBundle:
         config:NativeExecutionConfig|None=None,
         product_tool_hooks:dict[str,Callable]|None=None,
         usage_sink:UsageSink|None=None,
+        rag_registry:RagEngineRegistry|None=None,
     ):
         self.config=config or NativeExecutionConfig()
         base_llm=llm or UnavailableLLM()
         self.llm=base_llm;self.store=store
         if self.config.recover_stale_running_on_startup:self.store.recover_stale_running()
-        self.retrieval=NativeRetrievalEngine(knowledge_resolver)
+        self.retrieval=NativeRetrievalEngine(knowledge_resolver,rag_registry)
         self.memory=AgentMemoryExecutor(store)
         self.web_fetcher=SafeWebFetcher();self.paper_search=CrossrefPaperSearch()
         self.capabilities=CapabilityRegistry();self.tools=ToolRegistry()
@@ -160,7 +162,6 @@ class NativeEngineBundle:
         return {
             "provider":self.provider_id,
             "version":"0.6.0rc2",
-            "deeptutor_runtime_required":False,
             "owns_canonical_product_data":False,
             "llm_available":ai_available,
             "degraded_capabilities":[] if ai_available else [
