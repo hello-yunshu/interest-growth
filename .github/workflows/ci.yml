@@ -51,7 +51,7 @@ jobs:
       - name: Install and verify standalone package
         working-directory: packages/native-execution-core
         run: |
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,api]"
           python scripts/verify.py
       - name: Build standalone Wheel
         working-directory: packages/native-execution-core
