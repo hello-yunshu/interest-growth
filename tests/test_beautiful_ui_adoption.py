@@ -103,8 +103,9 @@ def test_research_external_source_links_allow_only_http_https(project_root):
     assert "['http:','https:'].includes(url.protocol)" in research
     assert "href={s.canonical_url}" not in research
     assert "openExternalUrl(safe)" in research
+    adapter = (project_root / "apps/web/lib/runtime/platforms/tauri-desktop.js").read_text(encoding="utf-8")
     api = (project_root / "apps/web/lib/api.js").read_text(encoding="utf-8")
-    assert "@tauri-apps/plugin-opener" in api
+    assert "@tauri-apps/plugin-opener" in adapter
     assert "Only HTTP/HTTPS external URLs are allowed." in api
 
 
@@ -114,9 +115,9 @@ def test_native_export_keeps_user_selected_write_scope_narrow(project_root):
     assert "dialog:allow-save" in permissions
     assert "fs:allow-write-file" in permissions
     assert "fs:write-all" not in permissions
-    api = (project_root / "apps/web/lib/api.js").read_text(encoding="utf-8")
-    assert "@tauri-apps/plugin-dialog" in api
-    assert "writeFile(destination" in api
+    adapter = (project_root / "apps/web/lib/runtime/platforms/tauri-desktop.js").read_text(encoding="utf-8")
+    assert "@tauri-apps/plugin-dialog" in adapter
+    assert "writeFile(destination" in adapter
 
 
 def test_prompt_bar_does_not_render_fake_tool_controls(project_root):

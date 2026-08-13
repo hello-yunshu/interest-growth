@@ -6,6 +6,7 @@ import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContaine
 import Icon from './Icon';
 import { buildHeatmap, buildOutputDistribution, buildWeeklyTrend, formatRelativeDate, loadWorkspaceData, normalizeClaimRecord, outputTypeMeta } from '../lib/workspaceData';
 import { readLayout, resetLayout, saveLayout } from '../lib/workspaceLayout';
+import { useRuntimeCopy } from './useRuntimeCopy';
 
 export const PAGE_WIDGETS = {
   home: ['recent-outputs', 'focus', 'heatmap', 'questions', 'old-note', 'weekly-trend', 'output-distribution'],
@@ -53,10 +54,11 @@ const META = {
 };
 
 export function useWorkspaceData() {
+  const runtimeCopy = useRuntimeCopy();
   const [state, setState] = useState({ loading: true, data: null, error: '' });
   const reload = () => {
     setState(current => ({ ...current, loading: true, error: '' }));
-    loadWorkspaceData().then(data => setState({ loading: false, data, error: data.offline ? '暂时连接不到本地服务。你的内容仍安全保存在设备上。' : '' }))
+    loadWorkspaceData().then(data => setState({ loading: false, data, error: data.offline ? runtimeCopy.offlineCopy : '' }))
       .catch(error => setState({ loading: false, data: null, error: error.message }));
   };
   useEffect(reload, []);

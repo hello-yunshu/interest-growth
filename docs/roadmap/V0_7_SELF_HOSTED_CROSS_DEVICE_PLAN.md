@@ -33,43 +33,87 @@ Add a secure single-owner Docker server mode and an Android remote client while 
 
 ### Gate B audit follow-ups (2026-08-13)
 
-- [ ] Make refresh-token consumption and replacement one atomic transaction and add a concurrent replay test.
-- [ ] Enforce the one-owner invariant in the database so concurrent bootstrap requests cannot create multiple owners.
-- [ ] Require a quiesced backup window now, then add an application maintenance/write lock before advertising online consistent backup.
-- [ ] Stage restore into temporary paths and retain rollback state until migrations and smoke checks pass.
+- [x] Make refresh-token consumption and replacement one atomic transaction and add a concurrent replay test.
+- [x] Enforce the one-owner invariant in the database so concurrent bootstrap requests cannot create multiple owners.
+- [x] Require a quiesced backup window now, then add an application maintenance/write lock before advertising online consistent backup.
+- [x] Stage restore into temporary paths and retain rollback state until migrations and smoke checks pass.
 - [ ] Integrate and test device authentication on each real WebSocket route when one is introduced; the current source has only an authentication helper and no active WebSocket endpoint.
 
 Gate C starts after the security/data-consistency items above are closed or explicitly accepted as release blockers.
 
 ## Gate C — ClientRuntime refactor
 
-- [ ] Replace the every-Tauri-is-desktop assumption with an explicit runtime/platform adapter.
-- [ ] Centralize API base URL, auth headers, WebSocket auth/reconnect, export and external links.
-- [ ] Add enrolled-server identity and server-version state.
-- [ ] Replace local-only error copy in remote mode.
-- [ ] Add secure native credential storage; do not use `localStorage` for renewal credentials.
-- [ ] Give CSP/capabilities the minimum platform-specific remote origin and permissions.
+- [x] Replace the every-Tauri-is-desktop assumption with an explicit runtime/platform adapter.
+- [x] Centralize API base URL, auth headers, WebSocket auth/reconnect, export and external links.
+- [x] Add enrolled-server identity and server-version state.
+- [x] Replace local-only error copy in remote mode.
+- [x] Add secure native credential storage; do not use `localStorage` for renewal credentials.
+- [x] Give CSP/capabilities the minimum platform-specific remote origin and permissions.
+
+### Gate C verification (2026-08-13)
+
+- [x] ClientRuntime pure contract tests (Node built-in runner): 41 passed (descriptors, compatibility, SemVer, URL normalization, connection state machine, storage namespace, credential store, retry safety, remote transport).
+- [x] Rust runtime-mode + remote-transport source tests: 12 passed (`cargo test --locked --lib`), covering default desktop-local, explicit desktop-local, desktop-remote never spawns sidecar, invalid profile never switches store, id validation, enrollment-origin normalization/validation and refresh-key namespace isolation.
+- [x] Server instance identity: 6 tests passed (fresh single identity, restart unchanged, second server distinct, migration 15 upgrade once, singleton index, display-name env).
+- [x] Main Python suite: 244 passed, including Gate B security/concurrency regressions; Native Execution Core standalone: 98 passed.
+- [x] Web ESLint and static production build: passed; Host verify, Native Core mirror sync, self-audit and strict Host cutover audit: passed.
+- [x] Desktop-local compatibility: existing install defaults to desktop-local; sidecar behavior, App Data, DB, keyring and provider settings unchanged.
+- [x] Desktop-remote decision: explicit runtime mode never spawns the sidecar; no silent fallback to a local store; remote failure maps to Offline/LoginExpired/IdentityChanged with mutations disabled.
+- [x] Browser remote stays honest: cookie auth not implemented, so `browser-remote` remains a planned/not-release-proven adapter skeleton; no refresh token in `localStorage`.
+- [x] Gate D §D5–D7 UX source: `RuntimeConnect` (mode selection, server enrollment, owner bootstrap, login/logout, device listing/revoke, connection status) integrated into the System page; provider settings gated to desktop-local; data-location visual distinction in the desktop shell; explicit restart boundary with no silent local/server merge.
+- [ ] Real desktop remote UX against a real public TLS host, real Windows/macOS package regression and real remote-server runtime: not done (Gate D finish).
 
 ## Gate D — Desktop remote mode
 
-- [ ] Add explicit local-device versus self-hosted-server selection.
-- [ ] Preserve existing loopback sidecar startup, token rotation, App Data and provider keyring behavior.
-- [ ] Add remote enrollment/login/logout/device revocation UX.
-- [ ] Keep server data visually distinguishable from local-device data.
-- [ ] Define explicit local export/server import; do not silently merge stores.
-- [ ] Verify Windows/macOS local mode has no regression.
+- [x] Add explicit local-device versus self-hosted-server selection (source UX in `RuntimeConnect`).
+- [x] Add remote enrollment/login/logout/device revocation UX (source UX in `RuntimeConnect`).
+- [x] Keep server data visually distinguishable from local-device data (data-location labels + status dot; provider settings hidden in remote mode).
+- [x] Define explicit runtime switch boundary; mode changes persist the NEXT profile, require an explicit restart and never silently merge local and server stores.
+- [ ] Preserve existing loopback sidecar startup, token rotation, App Data and provider keyring behavior under a real packaged Windows/macOS regression.
+- [ ] Verify Windows/macOS local mode has no regression on real packages.
+- [ ] Exercise enrollment/login against a real public TLS host and remote-server runtime.
 
 ## Gate E — Android application
 
+### Source-level contract (2026-08-14)
+
+- [x] Define the mobile adaptation contract: `android-remote` runtime
+      descriptor with a frozen mobile capability vocabulary (no sidecar, no
+      desktop token, no local vaults, no desktop updater, no window controls;
+      Android Keystore for the renewal credential; document picker / share
+      sheet / system browser / suspend-resume lifecycle as planned adapters).
+- [x] Add a desktop-only gate inventory: the Rust surface that must be gated
+      when the Android target is initialized — sidecar spawn, updater,
+      single-instance, window-state and the OS-keyring provider/credential
+      commands — is recorded in the runtime contract so a mobile build cannot
+      silently pull in a desktop/local path.
+
+### Hardware / toolchain work (not started)
+
+Toolchain inventory checked 2026-08-14 on the build machine: no Java/JDK
+(`keytool` unavailable), no Android SDK (`ANDROID_HOME` unset, no
+`~/Library/Android/sdk`), no Rust Android targets and no `cargo-ndk`, no `adb`
+and no emulator or physical device. Until this toolchain is provisioned, none
+of the items below can be compiled, signed or executed; this is an explicit
+boundary, not an inferred pass.
+
 - [ ] Initialize the Tauri Android project and mobile entry point.
-- [ ] Gate sidecar, updater, single-instance, window-state and desktop-only credential code.
-- [ ] Select mobile-supported secure storage, opener, dialog/document and lifecycle implementations.
-- [ ] Implement remote server enrollment and authentication.
-- [ ] Complete narrow-screen navigation, system Back, keyboard/insets, touch and suspend/resume behavior.
-- [ ] Verify uploads, downloads/exports, Tutor WebSocket reconnect and external links.
+- [ ] Gate sidecar, updater, single-instance, window-state and desktop-only
+      credential code behind the Android target (inventory above; no Android
+      target exists to compile against yet).
+- [ ] Select mobile-supported secure storage, opener, dialog/document and
+      lifecycle implementations.
+- [ ] Implement remote server enrollment and authentication on Android.
+- [ ] Complete narrow-screen navigation, system Back, keyboard/insets, touch
+      and suspend/resume behavior.
+- [ ] Verify uploads, downloads/exports, Tutor WebSocket reconnect and
+      external links.
 - [ ] Test emulator plus at least one physical Android device.
 
 ## Gate F — Direct APK release
+
+No APK work is started: there is no Android project, no release keystore and
+no signed APK. The deliverable evidence below remains an explicit boundary.
 
 - [ ] Produce a debug-signed APK for internal/ADB testing.
 - [ ] Generate and securely back up a project-owned release keystore outside Git.
@@ -80,6 +124,9 @@ Gate C starts after the security/data-consistency items above are closed or expl
 - [ ] Recheck current Android developer-verification/sideload rules before broad handoff and choose an explicit path: ADB/internal use, current limited-device distribution, verified broad distribution or documented advanced user flow.
 
 ## Gate G — Cross-device and recovery proof
+
+No cross-device or recovery evidence exists: no second client has run and no
+clean-deployment restore has been exercised on hardware.
 
 - [ ] Mutate representative canonical data on one client and verify it on desktop and Android.
 - [ ] Exercise Area isolation, Evidence/Claim review, Tutor resume and Artifact download across clients.

@@ -19,6 +19,7 @@ class Settings:
     desktop_token: str
     remote_auth_enabled: bool
     owner_bootstrap_token: str
+    server_display_name: str
     access_token_ttl_seconds: int
     refresh_token_ttl_seconds: int
     auth_rate_limit_attempts: int
@@ -63,6 +64,8 @@ def get_settings() -> Settings:
         desktop_token=os.getenv("PG_DESKTOP_TOKEN", ""),
         remote_auth_enabled=_bool("PG_REMOTE_AUTH_ENABLED", "false"),
         owner_bootstrap_token=os.getenv("PG_OWNER_BOOTSTRAP_TOKEN", ""),
+        server_display_name=os.getenv("PG_SERVER_DISPLAY_NAME", "Interest Growth Server").strip()
+        or "Interest Growth Server",
         access_token_ttl_seconds=_int("PG_ACCESS_TOKEN_TTL_SECONDS", 15 * 60),
         refresh_token_ttl_seconds=_int("PG_REFRESH_TOKEN_TTL_SECONDS", 30 * 24 * 60 * 60),
         auth_rate_limit_attempts=_int("PG_AUTH_RATE_LIMIT_ATTEMPTS", 10),

@@ -1,6 +1,6 @@
 [package]
 name = "interest-growth-desktop"
-version = "0.6.0"
+version = "0.7.0"
 description = "Interest Growth desktop runtime"
 authors = ["Interest Growth"]
 edition = "2021"
@@ -28,3 +28,6 @@ uuid = { version = "1", features = ["v4"] }
 keyring = { version = "4.1", features = ["v1"] }
 
 url = "2"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+base64 = "0.22"

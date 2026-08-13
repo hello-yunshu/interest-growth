@@ -56,6 +56,18 @@ Per-runtime capability table (frozen):
 | System-browser external links | yes | yes | yes | yes (scoped) |
 | Export via OS Save/picker | yes | yes | Android picker/share | server download |
 
+Mobile adaptation contract (additive, Gate E — source vocabulary, adapters
+planned): every runtime descriptor exposes the frozen capability vocabulary
+from `apps/web/lib/runtime/contract.js` (`PLATFORM_CAPABILITIES`). The
+desktop-only gate (`DESKTOP_ONLY_CAPABILITIES`) — launch sidecar, loopback
+token, OS save dialog, local vaults, desktop updater, window controls and
+local provider-secret administration — MUST be false on every non-desktop
+runtime, so a mobile build can never silently reach a desktop/local path.
+`android-remote` assigns the renewal credential to Android Keystore
+(`canUseNativeSecureStore` true) and declares document picker / share sheet /
+suspend-resume lifecycle / optional biometric unlock as planned adapters; they
+are contract vocabulary, not implemented surfaces.
+
 ## 3. Authentication contract (frozen)
 
 1. Every non-health HTTP route authenticates the owner/device session first;
@@ -163,9 +175,13 @@ server data
   backup operation; copying a live SQLite file alone is not a backup.
 - Restore must re-run migrations, check database integrity and file
   references, and verify representative reads/downloads.
-- The current backup CLI requires API writes to be stopped or drained for the
-  whole DB + vault copy. A future online backup must coordinate database and
-  file-vault mutations under one maintenance/write lock.
+- Online backup and restore coordinate DB + Source + Artifact mutations under
+  one maintenance/write lock (an in-process reader/writer gate plus a
+  cross-process advisory flock), so a bundle never references a file that was
+  not copied. Restore stages and verifies the bundle on temporary paths and
+  retains the previous live state until post-restore checks pass. (This bullet
+  is a post-Gate-B fact sync of §7 wording — no change to other frozen Gate A
+  contract semantics.)
 
 ## 8. Non-goals (frozen for v0.7)
 

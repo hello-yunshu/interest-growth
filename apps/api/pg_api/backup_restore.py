@@ -22,7 +22,7 @@ from uuid import uuid4
 
 import sqlalchemy
 
-from .db import CURRENT_SCHEMA_VERSION, get_session_factory, init_db
+from .db import CURRENT_SCHEMA_VERSION, get_server_identity, get_session_factory, init_db
 from .maintenance import maintenance_lock
 from .remote_auth import SERVER_VERSION
 from pg_shared import get_settings
@@ -179,6 +179,7 @@ def create_backup(
             "server_version": SERVER_VERSION,
             "schema_version": _schema_version(),
             "current_schema_version": CURRENT_SCHEMA_VERSION,
+            "server_instance_id": get_server_identity()["server_instance_id"],
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "database": {"file": DB_FILE_NAME, "sha256": _sha256_file(db_dest)},
             "sources": {"sha256": _tree_sha256(bundle / "sources")},
@@ -211,15 +212,27 @@ def verify_bundle(bundle_dir: str) -> dict[str, Any]:
     with sqlite3.connect(db_file) as conn:
         integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_key_check").fetchall()
+        try:
+            identity_row = conn.execute(
+                "SELECT server_instance_id FROM server_metadata LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError:  # pre-Gate-C bundle without the table
+            identity_row = None
     if integrity != "ok":
         raise ValueError(f"backup database integrity check failed: {integrity}")
     if foreign_keys:
         raise ValueError(f"backup database foreign key violations: {foreign_keys}")
+    manifest_identity = manifest.get("server_instance_id")
+    if manifest_identity is not None:
+        stored_identity = identity_row[0] if identity_row else None
+        if stored_identity != manifest_identity:
+            raise ValueError("backup bundle server identity does not match manifest")
     return {
         "manifest": manifest,
         "checks": checks,
         "integrity": integrity,
         "foreign_key_violations": len(foreign_keys),
+        "server_instance_id": manifest_identity,
     }
 
 

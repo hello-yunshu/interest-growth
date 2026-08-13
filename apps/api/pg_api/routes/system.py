@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from pg_shared import get_settings
 
-from ..db import FeatureFlagModel, get_session_factory
+from ..db import FeatureFlagModel, get_server_identity, get_session_factory
 from ..engines import integration_status
 from ..features import feature_enabled
 from ..plugins import get_plugin_runtime, require_plugin_resource
@@ -25,11 +25,14 @@ async def health():
 @router.get("/system/capabilities")
 def system_capabilities():
     settings = get_settings()
+    identity = get_server_identity()
     return {
         "product": PRODUCT_NAME,
         "server_version": SERVER_VERSION,
         "api_version": API_VERSION,
         "min_client_version": MIN_CLIENT_VERSION,
+        "server_instance_id": identity["server_instance_id"],
+        "server_display_name": identity["server_display_name"],
         "runtime_modes": ["desktop-local", "desktop-remote", "android-remote", "browser-remote"],
         "auth": {
             "mode": "single_owner_devices" if settings.remote_auth_enabled else "none",
