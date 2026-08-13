@@ -23,7 +23,8 @@
           "radius": 12
         }
       }
-    ]
+    ],
+    "macOSPrivateApi": true
   },
   "bundle": {
     "targets": [
