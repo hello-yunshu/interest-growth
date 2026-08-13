@@ -181,7 +181,14 @@ def test_graphrag_adapter_calls_build_and_local_search_and_joins_documents(tmp_p
             self.local_called = False
 
         def load_config(self, workspace):
-            self.input_name = next((Path(workspace) / "input").iterdir()).name
+            inputs = sorted((Path(workspace) / "input").iterdir())
+            assert len(inputs) == 2
+            assert len({path.name for path in inputs}) == 2
+            self.input_name = next(
+                path.name
+                for path in inputs
+                if path.read_text(encoding="utf-8").startswith("Alpha")
+            )
             return {"workspace": str(workspace)}
 
         async def build_index(self, *, config):
