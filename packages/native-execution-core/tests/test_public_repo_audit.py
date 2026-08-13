@@ -25,13 +25,19 @@ def test_forbidden_public_paths_fail_closed():
     for path in cases:
         assert audit_public_repo.forbidden_path_reason(path), path
     assert audit_public_repo.forbidden_path_reason(".env.example") is None
+    assert audit_public_repo.forbidden_path_reason(".env.remote.example") is None
+    assert audit_public_repo.forbidden_path_reason(
+        "domains/general/skills/image-prompt/SKILL.md"
+    ) is None
+    assert audit_public_repo.forbidden_path_reason(
+        "docs/ai-coding/12_CODING_AGENT_MASTER_PROMPT.md"
+    ) is None
     assert audit_public_repo.forbidden_path_reason("docs/product_prompts.md") is not None
 
 
 def test_runtime_content_guards_detect_architecture_and_security_regressions():
-    retired_runtime = "deep" + "tutor"
-    runtime = f"""\
-import {retired_runtime}
+    runtime = """\
+import deeptutor
 import os
 
 def run(payload):
@@ -39,7 +45,7 @@ def run(payload):
     return eval(payload), os.system(payload)  # TODO
 """
     findings = audit_public_repo.content_findings("interest_growth_native/bad.py", runtime)
-    assert "direct retired runtime import" in findings
+    assert "direct DeepTutor runtime import" in findings
     assert "hard-coded Psychology policy in runtime" in findings
     assert "arbitrary code execution call: eval" in findings
     assert "arbitrary code execution call: os.system" in findings

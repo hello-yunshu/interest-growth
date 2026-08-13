@@ -28,8 +28,9 @@ from .db import (
     get_session_factory,
 )
 from .domains import get_domain_context, require_entity_in_current_area
+from .maintenance import write_lock
 
-storage = LocalFilesystemStorage(get_settings().artifact_storage_root)
+storage = LocalFilesystemStorage(get_settings().artifact_storage_root, write_lock=write_lock)
 
 
 def get_storage():

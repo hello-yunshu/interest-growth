@@ -1673,6 +1673,13 @@ rag-pageindex = [
     { name = "pageindex" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pyinstaller" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
@@ -1692,6 +1699,13 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 provides-extras = ["dev", "desktop", "rag-llamaindex", "rag-lightrag", "rag-graphrag", "rag-pageindex"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyinstaller", specifier = ">=6.22.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0" },
+]
 
 [[package]]
 name = "isodate"

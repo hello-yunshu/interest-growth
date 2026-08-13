@@ -598,12 +598,16 @@ class OwnerModel(Base):
     """Single-owner account. Exactly one row exists once bootstrapped.
 
     Only the salted password hash is stored; the raw password never leaves
-    the enrollment/login request.
+    the enrollment/login request. The database itself enforces the singleton
+    through the unique `singleton` marker so that concurrent bootstraps can
+    never create more than one owner.
     """
 
     __tablename__ = "auth_owners"
+    __table_args__ = (UniqueConstraint("singleton", name="ux_auth_owners_singleton"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    singleton: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
@@ -667,19 +671,25 @@ _SessionLocal = None
 _current_url = None
 
 
-def get_engine():
+def get_engine(database_url: str | None = None):
     global _engine, _SessionLocal, _current_url
-    url = get_settings().database_url
+    url = database_url or get_settings().database_url
     if _engine is None or _current_url != url:
-        kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {}
+        if url.startswith("sqlite"):
+            # check_same_thread: FastAPI serves requests on multiple threads.
+            # timeout: SQLite is a single-writer database; concurrent refresh
+            # rotations must wait for the writer instead of failing instantly.
+            kwargs = {"connect_args": {"check_same_thread": False, "timeout": 30}}
+        else:
+            kwargs = {}
         _engine = create_engine(url, **kwargs)
         _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
         _current_url = url
     return _engine
 
 
-def get_session_factory():
-    get_engine()
+def get_session_factory(database_url: str | None = None):
+    get_engine(database_url)
     return _SessionLocal
 
 
@@ -821,6 +831,26 @@ def _migration_13_remote_auth(engine) -> None:
         table.create(engine, checkfirst=True)
 
 
+def _migration_14_enforce_single_owner(engine) -> None:
+    """Enforce the single-owner invariant at the database level (Gate B2).
+
+    SQLite cannot add a UNIQUE column via ALTER TABLE, so the singleton is a
+    plain NOT NULL DEFAULT 1 column guarded by a partial unique index. The
+    index also deduplicates any pre-existing multi-owner rows, keeping the
+    earliest-created owner as the legitimate one.
+    """
+    inspector = inspect(engine)
+    if "auth_owners" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("auth_owners")}
+    if "singleton" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE auth_owners ADD COLUMN singleton INTEGER NOT NULL DEFAULT 1"))
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM auth_owners WHERE id NOT IN (SELECT id FROM auth_owners ORDER BY created_at ASC, id ASC LIMIT 1)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_owners_singleton ON auth_owners (singleton)"))
+
+
 MIGRATIONS: dict[int, Any] = {
     8: _migration_8_create_general_interest_schema,
     9: _migration_9_seed_and_backfill,
@@ -828,15 +858,16 @@ MIGRATIONS: dict[int, Any] = {
     11: _migration_11_native_execution_state,
     12: _migration_12_native_only_product,
     13: _migration_13_remote_auth,
+    14: _migration_14_enforce_single_owner,
 }
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 LEGACY_BASELINE_VERSION = 7
 
 
-def init_db() -> None:
+def init_db(database_url: str | None = None) -> None:
     from .scoping import install_area_scoping_hooks
     install_area_scoping_hooks()
-    engine = get_engine()
+    engine = get_engine(database_url)
     fresh = not _table_exists(engine, "schema_migrations")
     if fresh:
         # Fresh installs may create the complete current schema in one transaction-like
@@ -845,7 +876,7 @@ def init_db() -> None:
         # Native execution tables intentionally have no Host ORM models.
         _migration_11_native_execution_state(engine)
         _migration_12_native_only_product(engine)
-        with get_session_factory()() as db:
+        with get_session_factory(database_url)() as db:
             db.info["skip_area_scope"] = True
             for version in range(1, CURRENT_SCHEMA_VERSION + 1):
                 _record_migration(db, version)
@@ -854,21 +885,21 @@ def init_db() -> None:
         seed_domain_packs_and_default_area()
         return
 
-    with get_session_factory()() as db:
+    with get_session_factory(database_url)() as db:
         versions = {int(v) for v in db.scalars(select(SchemaMigration.version)).all()}
     missing_legacy = [v for v in range(1, LEGACY_BASELINE_VERSION + 1) if v not in versions]
     if missing_legacy:
         raise RuntimeError(f"database legacy migration ledger incomplete: {missing_legacy}")
 
     for version in range(LEGACY_BASELINE_VERSION + 1, CURRENT_SCHEMA_VERSION + 1):
-        with get_session_factory()() as db:
+        with get_session_factory(database_url)() as db:
             if db.get(SchemaMigration, version) is not None:
                 continue
         migration = MIGRATIONS.get(version)
         if migration is None:
             raise RuntimeError(f"missing migration implementation for version {version}")
         migration(engine)
-        with get_session_factory()() as db:
+        with get_session_factory(database_url)() as db:
             db.info["skip_area_scope"] = True
             _record_migration(db, version)
             db.commit()

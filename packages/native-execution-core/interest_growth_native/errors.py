@@ -13,6 +13,18 @@ class ToolNotGranted(PermissionDenied):
 class ProviderUnavailable(NativeExecutionError):
     pass
 
+class ProviderAuthError(ProviderUnavailable):
+    pass
+
+class ProviderRateLimited(ProviderUnavailable):
+    pass
+
+class ProviderTimeout(ProviderUnavailable):
+    pass
+
+class ProviderProtocolError(ProviderUnavailable):
+    pass
+
 class AreaIsolationError(NativeExecutionError):
     pass
 

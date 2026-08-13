@@ -5,7 +5,8 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, text
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from pg_api.db import SecurityEventModel, get_session_factory
 
@@ -120,6 +121,82 @@ def test_owner_bootstrap_requires_strong_password(remote_client):
     assert response.status_code == 422
 
 
+def test_database_enforces_single_owner_row(remote_client):
+    """Gate B2: the unique singleton index rejects a second owner at the DB layer."""
+    from pg_api.db import OwnerModel
+
+    _bootstrap(remote_client)
+    with get_session_factory()() as db:
+        db.add(OwnerModel(password_hash="not-a-real-hash"))
+        try:
+            db.commit()
+            assert False, "second owner insert must fail"
+        except IntegrityError:
+            db.rollback()
+        count = db.execute(text("SELECT COUNT(*) FROM auth_owners")).scalar()
+    assert count == 1
+
+
+def test_concurrent_bootstrap_creates_exactly_one_owner(remote_client):
+    """Gate B2: overlapping first bootstraps never create multiple owners."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def attempt(_):
+        return remote_client.post(
+            "/api/auth/owner/bootstrap",
+            json={"owner_password": OWNER_PASSWORD},
+            headers={"X-PG-Owner-Bootstrap-Token": BOOTSTRAP_TOKEN},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(attempt, range(6)))
+    codes = [r.status_code for r in responses]
+    assert codes.count(201) == 1, codes
+    assert set(codes) <= {201, 409}, codes
+    with get_session_factory()() as db:
+        count = db.execute(text("SELECT COUNT(*) FROM auth_owners")).scalar()
+    assert count == 1
+
+
+def test_schema_14_upgrade_adds_single_owner_invariant(client):
+    """A v0.7 database at schema 13 upgrades to 14 with the singleton enforced."""
+    from sqlalchemy import inspect
+
+    from pg_api.db import (
+        OwnerModel,
+        SchemaMigration,
+        get_engine,
+        get_session_factory,
+        init_db,
+    )
+
+    with get_session_factory()() as db:
+        db.execute(delete(SchemaMigration).where(SchemaMigration.version >= 14))
+        db.commit()
+        before = db.scalar(
+            select(func.count()).select_from(OwnerModel)
+        )
+    init_db()
+    with get_session_factory()() as db:
+        assert 14 in set(db.scalars(select(SchemaMigration.version)).all())
+        assert db.scalar(select(func.count()).select_from(OwnerModel)) == before
+        owners = db.execute(text("SELECT id, singleton FROM auth_owners")).all()
+    indexes = {
+        index["name"]: index["unique"]
+        for index in inspect(get_engine()).get_indexes("auth_owners")
+    }
+    assert indexes.get("ux_auth_owners_singleton")
+    with get_session_factory()() as db:
+        db.add(OwnerModel(password_hash="legitimate-owner-hash"))
+        db.commit()
+        db.add(OwnerModel(password_hash="second-owner-hash"))
+        try:
+            db.commit()
+            assert False, "unique index must reject a second owner"
+        except IntegrityError:
+            db.rollback()
+
+
 def test_login_rate_limited(remote_client, monkeypatch):
     monkeypatch.setenv("PG_AUTH_RATE_LIMIT_ATTEMPTS", "2")
     monkeypatch.setenv("PG_AUTH_RATE_LIMIT_WINDOW_SECONDS", "600")
@@ -199,6 +276,82 @@ def test_refresh_rejects_unknown_device(remote_client):
         json={"device_id": "does-not-exist", "refresh_token": login["tokens"]["refresh_token"]},
     )
     assert other_device.status_code == 401
+
+
+def test_refresh_with_wrong_device_id_does_not_consume_token(remote_client):
+    """Atomic consume: a failed match must not mutate the credential."""
+    _bootstrap(remote_client)
+    phone = _login(remote_client, name="phone").json()
+    tablet = _login(remote_client, name="tablet").json()
+    mismatched = remote_client.post(
+        "/api/auth/device/refresh",
+        json={
+            "device_id": tablet["device"]["id"],
+            "refresh_token": phone["tokens"]["refresh_token"],
+        },
+    )
+    assert mismatched.status_code == 401
+    retry = remote_client.post(
+        "/api/auth/device/refresh",
+        json={
+            "device_id": phone["device"]["id"],
+            "refresh_token": phone["tokens"]["refresh_token"],
+        },
+    )
+    assert retry.status_code == 200, retry.text
+
+
+def test_refresh_expired_token_rejected_without_consumption(remote_client, monkeypatch):
+    monkeypatch.setenv("PG_REFRESH_TOKEN_TTL_SECONDS", "0")
+    _bootstrap(remote_client)
+    login = _login(remote_client).json()
+    device_id = login["device"]["id"]
+    refresh = login["tokens"]["refresh_token"]
+    expired = remote_client.post(
+        "/api/auth/device/refresh",
+        json={"device_id": device_id, "refresh_token": refresh},
+    )
+    assert expired.status_code == 401
+    with get_session_factory()() as db:
+        rows = db.query(SecurityEventModel).filter(SecurityEventModel.event_type == "refresh_failed").all()
+    assert rows
+    with get_session_factory()() as db:
+        row = db.execute(
+            text("SELECT revoked_at FROM auth_refresh_tokens WHERE device_id = :did"),
+            {"did": device_id},
+        ).first()
+    assert row.revoked_at is None  # expiry rejection never burns the row
+
+
+def test_concurrent_refresh_with_same_token_exactly_one_succeeds(remote_client):
+    """Gate B1: rotation must be atomic under overlapping requests."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    _bootstrap(remote_client)
+    login = _login(remote_client).json()
+    device_id = login["device"]["id"]
+    refresh = login["tokens"]["refresh_token"]
+
+    def attempt(_):
+        return remote_client.post(
+            "/api/auth/device/refresh",
+            json={"device_id": device_id, "refresh_token": refresh},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(attempt, range(8)))
+    codes = [r.status_code for r in responses]
+    assert codes.count(200) == 1, codes
+    assert codes.count(401) == len(codes) - 1, codes
+    with get_session_factory()() as db:
+        active = db.execute(
+            text(
+                "SELECT COUNT(*) FROM auth_refresh_tokens "
+                "WHERE device_id = :did AND revoked_at IS NULL"
+            ),
+            {"did": device_id},
+        ).scalar()
+    assert active == 1  # exactly one replacement credential survives
 
 
 # ------------------------------------------------------------- revocation

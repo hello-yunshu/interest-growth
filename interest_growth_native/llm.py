@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
+from urllib.error import HTTPError, URLError
 
-from .errors import ProviderUnavailable
+from .errors import (
+    ProviderAuthError, ProviderProtocolError, ProviderRateLimited,
+    ProviderTimeout, ProviderUnavailable,
+)
 
 @dataclass(frozen=True, slots=True)
 class LLMResponse:
@@ -131,6 +136,36 @@ class OpenAICompatibleClient:
             payload["stream_options"] = {"include_usage": True}
         return payload
 
+    @staticmethod
+    def _raise_http(exc: HTTPError) -> None:
+        # Normalized transport taxonomy. Messages never echo request headers,
+        # API keys, tokens or the request body.
+        status = int(exc.code)
+        if status in (401, 403):
+            raise ProviderAuthError("provider rejected credentials") from exc
+        if status == 429:
+            raise ProviderRateLimited("provider rate limit exceeded") from exc
+        if status >= 500:
+            raise ProviderUnavailable("provider server error") from exc
+        raise ProviderProtocolError("provider returned unexpected HTTP status") from exc
+
+    @staticmethod
+    def _raise_transport(exc: BaseException | str) -> None:
+        if isinstance(exc, (TimeoutError, socket.timeout)):
+            raise ProviderTimeout("provider request timed out") from exc
+        cause = exc if isinstance(exc, BaseException) else None
+        raise ProviderUnavailable("provider connection failed") from cause
+
+    def _open(self, req: urllib.request.Request):
+        try:
+            return urllib.request.urlopen(req, timeout=self.timeout)
+        except HTTPError as exc:
+            self._raise_http(exc)
+        except URLError as exc:
+            self._raise_transport(exc.reason if getattr(exc, "reason", None) is not None else exc)
+        except (TimeoutError, socket.timeout, ConnectionError, OSError) as exc:
+            self._raise_transport(exc)
+
     def _request_json(self, payload):
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
@@ -141,8 +176,23 @@ class OpenAICompatibleClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        with self._open(req) as resp:
+            raw = resp.read().decode("utf-8")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ProviderProtocolError("provider returned invalid JSON") from exc
+
+    def _complete_data(self, data):
+        if not isinstance(data, dict):
+            raise ProviderProtocolError("provider response schema unexpected")
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ProviderProtocolError("provider response schema unexpected")
+        choice = choices[0]
+        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+            raise ProviderProtocolError("provider response schema unexpected")
+        return choice
 
     def complete(self, *, messages, tools=None, temperature=0.2, response_format=None):
         work = list(messages)
@@ -154,7 +204,7 @@ class OpenAICompatibleClient:
                 messages=work, tools=tools, temperature=temperature,
                 response_format=response_format,
             ))
-            choice = data["choices"][0]
+            choice = self._complete_data(data)
             msg = choice["message"]
             reason = choice.get("finish_reason")
             final_reason = str(reason) if reason is not None else None
@@ -194,7 +244,7 @@ class OpenAICompatibleClient:
             },
             method="POST",
         )
-        return urllib.request.urlopen(req, timeout=self.timeout)
+        return self._open(req)
 
     def stream(self, *, messages, tools=None, temperature=0.2, response_format=None):
         payload = self._payload(
@@ -212,7 +262,10 @@ class OpenAICompatibleClient:
                 data = line[5:].strip()
                 if data == "[DONE]":
                     break
-                obj = json.loads(data)
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise ProviderProtocolError("provider stream event invalid JSON") from exc
                 if obj.get("usage"):
                     usage = obj["usage"]
                 choices = obj.get("choices") or []

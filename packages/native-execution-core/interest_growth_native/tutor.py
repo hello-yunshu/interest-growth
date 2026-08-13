@@ -359,7 +359,14 @@ class NativeTutorExecutor:
         if snap.get("area_id")!=c.area_id or snap.get("session_id")!=c.session_id:
             raise InvalidStateTransition("execution snapshot scope mismatch")
         messages=list(snap.get("messages") or [])
-        granted=tuple(snap.get("granted_tools") or ())
+        # Historical authorization must not become future executable grants.
+        # The resumed turn may only keep tools still granted under the CURRENT
+        # context (capability, PermissionScope, network/LLM risk, Area,
+        # tool eligibility). New permissions granted while paused do not
+        # automatically expand an older turn's grant.
+        snap_granted=tuple(snap.get("granted_tools") or ())
+        current_granted=self._granted_tools(c)
+        granted=tuple(x for x in snap_granted if x in set(current_granted))
         pending=snap.get("pending_call") or {}
         cleaned=[]
         for item in answers or ():

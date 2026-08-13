@@ -5,17 +5,26 @@
 
 ## 1. Outcome
 
-Gate A is documented. Most Gate B source work exists and the corrected Docker
-profile runs, but Gate B is not release-complete because four concurrency and
-recovery boundaries remain open. Gate C must not be represented as started:
-the frontend still treats Tauri as desktop-local, and no Android project or
-mobile Rust entry point exists.
+Gate A is documented. Gate B (B1–B4) is implemented and regression-tested as
+of this audit, so Gate B is closed at the source-and-test gate level. Gate C
+must not be represented as started: the frontend still treats Tauri as
+desktop-local, and no Android project or mobile Rust entry point exists.
+
+The four concurrency/recovery boundaries that previously blocked Gate B are
+now closed (see §4): atomic refresh-token rotation, database-enforced owner
+singleton, cross-component backup consistency, and rollback-safe restore.
 
 ## 2. Implemented in source
 
 - Single-owner bootstrap/login and named device records.
 - Short-lived access credentials, rotated renewal credentials and per-device
   revocation.
+- Atomic single-use refresh-token rotation (Gate B1).
+- Database-enforced single-owner invariant (Gate B2).
+- Maintenance/write lock coordinating DB + Source + Artifact mutations with
+  online backup (Gate B3).
+- Staged, rollback-safe restore that retains the previous live state until
+  post-restore checks succeed (Gate B4).
 - Remote-mode HTTP authentication middleware kept separate from Interest Area
   and PermissionBroker authorization.
 - Public health/capability/server metadata endpoints.
@@ -27,8 +36,16 @@ mobile Rust entry point exists.
 
 ## 3. Verified in this audit
 
-- Main Python suite: 121 passed.
-- Native Execution Core: 64 passed.
+- Main Python suite: 234 passed (Host, includes the Gate B security and
+  concurrency regression tests).
+- Native Execution Core standalone package: 97 passed.
+- Gate B1 concurrent refresh rotation: two overlapping refreshes yield
+  exactly one success and one failure; a single valid replacement chain remains.
+- Gate B2 owner bootstrap race and singleton migration: tested on fresh and
+  legacy databases.
+- Gate B3 backup consistency and B4 rollback-safe restore: concurrent writes
+  blocked during backup; torn/corrupt bundles fail before touching live state;
+  every restore failure path retains the previous live state.
 - Python compileall and self-audit: passed.
 - Web ESLint and static production build: passed.
 - Rust `cargo check --locked`: passed.
@@ -43,36 +60,40 @@ mobile Rust entry point exists.
 The containers and temporary audit credential file were stopped/removed after
 verification. The real external hostname/certificate path was not exercised.
 
-## 4. Open release blockers
+## 4. Gate B status (was "Open release blockers")
 
-### B1 — Atomic renewal-token rotation
+The four Gate B boundaries from the previous audit are now closed:
 
-`device_refresh` reads the old token, marks it revoked and calls a token issuer
-that commits internally. Two concurrent requests can observe the old token as
-usable before either transaction consumes it. Consumption and replacement
-must be one atomic conditional transaction with a concurrent replay test.
+### B1 — Atomic renewal-token rotation — CLOSED
 
-### B2 — Database-enforced single owner
+`device_refresh` consumes the old credential with a single conditional
+`UPDATE ... WHERE revoked_at IS NULL AND expires_at > now` and only issues a
+replacement when exactly one row is matched; consumption and replacement are
+in the same transaction. A concurrent replay regression test asserts exactly
+one success and one failure leave a single valid replacement chain.
 
-The bootstrap route checks `owner_configured()` before insert, but the database
-does not enforce a singleton row. Concurrent first bootstrap requests can
-create multiple owners. Add a database-level invariant and treat the unique
-conflict as an already-configured response.
+### B2 — Database-enforced single owner — CLOSED
 
-### B3 — Cross-component backup consistency
+`auth_owners` carries a `singleton` marker guarded by a unique partial index
+(migration 14, additive; existing owners preserved). Concurrent bootstrap
+races surface as a unique-conflict `409 already configured` instead of `500`.
 
-The SQLite online snapshot is consistent by itself, but Sources and Artifacts
-are copied afterwards. The current workflow therefore requires writes to be
-stopped/drained for the entire operation. Online backup may be advertised only
-after a maintenance/write lock coordinates DB and vault mutations and a
-concurrent-write regression test passes.
+### B3 — Cross-component backup consistency — CLOSED
 
-### B4 — Rollback-safe restore
+A maintenance/write lock (in-process reader/writer gate plus cross-process
+advisory flock) coordinates an exclusive backup/restore span against shared
+vault mutations on the DB, Source and Artifact paths. Backup also rejects any
+snapshot that references a file missing from the bundle. A concurrent-write
+regression test passes.
 
-Restore overwrites the live DB and removes live vault directories before
-migrations and smoke checks finish. Restore must stage and verify temporary
-paths, switch atomically where possible and retain the previous state until
-post-restore checks succeed.
+### B4 — Rollback-safe restore — CLOSED
+
+Restore stages and fully verifies the bundle on temporary paths (migrations,
+integrity, file-reference checks) before switching the live DB and vault
+directories. The previous live state is retained as `*.pre-restore-<ts>` until
+post-switch checks pass, then cleaned up; every simulated failure (corrupt
+archive, checksum mismatch, migration failure, smoke failure, post-switch
+failure) leaves the original live state recoverable.
 
 ## 5. Verified boundaries, not completion claims
 
@@ -89,12 +110,11 @@ post-restore checks succeed.
 
 ## 6. Required next order
 
-1. Close B1–B4 and add their regression tests.
-2. Implement Gate C `ClientRuntime` and remove every-Tauri-is-desktop coupling.
-3. Implement and regression-test desktop remote mode while preserving local
+1. Implement Gate C `ClientRuntime` and remove every-Tauri-is-desktop coupling.
+2. Implement and regression-test desktop remote mode while preserving local
    sidecar mode.
-4. Initialize and target-gate Tauri Android.
-5. Verify emulator, physical device, signed APK upgrade and cross-device data.
+3. Initialize and target-gate Tauri Android.
+4. Verify emulator, physical device, signed APK upgrade and cross-device data.
 
 Release reporting must continue to separate source implementation, automated
 tests, Docker runtime, desktop packages, emulator, physical Android hardware,

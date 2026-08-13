@@ -192,3 +192,21 @@ def test_skeptic_pass_blocks_structurally_unsupported_claim_without_verifying_it
 
     current = client.get(f"/api/claims?topic_id={topic['id']}").json()["claims"][0]["claim"]
     assert current["verification_state"] == "unverified"
+
+
+def test_persist_sources_keeps_verified_false(client):
+    """Research citations are candidate grounding, never automatically verified Evidence."""
+    topic = _topic(client)
+    response = client.post(
+        "/api/research/run",
+        json={"topic_id": topic["id"], "question": topic["title"], "depth": "normal", "persist_sources": True},
+    )
+    assert response.status_code == 200
+    source_ids = response.json()["result"]["source_ids"]
+    if not source_ids:
+        return
+    sources = client.get(f"/api/sources?topic_id={topic['id']}").json()
+    by_id = {s["id"]: s for s in sources["sources"]}
+    for sid in source_ids:
+        assert by_id[sid]["verified"] is False
+        assert by_id[sid]["verified_at"] is None
