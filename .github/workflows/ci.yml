@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   host:
-    name: Merged Host · Python ${{ matrix.python-version }}
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
