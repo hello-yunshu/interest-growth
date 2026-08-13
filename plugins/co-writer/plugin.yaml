@@ -1,0 +1,32 @@
+id: capability.co-writer
+name: Co-Writer
+version: 0.5.0
+level: 4
+description: Selection-aware drafting with accept/reject revisions and optional grounding.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /writing
+  capabilities:
+  - selection-edit
+  - revision-review
+  widgets: []
+permissions:
+  read:
+  - topic
+  - knowledge_base
+  - writing_document
+  - writing_revision
+  write:
+  - writing_document
+  - writing_revision
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false
+subscribes: []

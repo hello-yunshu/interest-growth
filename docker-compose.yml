@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file: [.env]
+    environment:
+      APP_DATABASE_URL: sqlite:////app/data/psychology_growth.db
+      SOURCE_STORAGE_ROOT: /app/data/source_files
+    volumes:
+      - psychology_data:/app/data
+    ports: ["${HOST_BIND:-127.0.0.1}:8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: http://localhost:8000/api
+    ports: ["${HOST_BIND:-127.0.0.1}:3000:80"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  psychology_data:

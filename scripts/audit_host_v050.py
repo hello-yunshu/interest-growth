@@ -5,11 +5,31 @@ from pathlib import Path
 
 SKIP={".git","node_modules",".next",".venv","__pycache__",".pytest_cache"}
 TEXT={".py",".js",".mjs",".cjs",".ts",".tsx",".jsx",".json",".yaml",".yml",".toml",".md",".sql"}
+ACTIVE_ROOTS=(
+    "apps/api",
+    "adapters",
+    "domains",
+    "interest_growth_native",
+    "plugins",
+    "packages/artifacts",
+    "packages/domain",
+    "packages/engine-contracts",
+    "packages/event-bus",
+    "packages/native-execution-core/interest_growth_native",
+    "packages/plugin-runtime",
+    "packages/shared",
+)
 
 def files(root):
     for p in root.rglob("*"):
         if p.is_file() and p.suffix.lower() in TEXT and not any(x in SKIP for x in p.parts):
             yield p,p.read_text("utf-8",errors="ignore")
+
+def active_files(root):
+    for relative in ACTIVE_ROOTS:
+        base=root/relative
+        if base.exists():
+            yield from files(base)
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument("root",type=Path);ap.add_argument("--strict",action="store_true");a=ap.parse_args();root=a.root.resolve()
@@ -20,10 +40,13 @@ def main():
     if not (root/"packages/native-execution-core").exists():add("P0","NATIVE_CORE_MISSING","packages/native-execution-core","RC2 package not copied")
     for rel in ("apps/web/package-lock.json","apps/desktop/package-lock.json","apps/desktop/src-tauri/Cargo.lock"):
         if not (root/rel).exists():add("P1","LOCKFILE_MISSING",rel,"reproducible-build lockfile missing")
-    migration=False
-    for p,t in files(root):
+    migration=any(
+        "0011_native_execution_state" in t.lower()
+        or ("native_tutor_checkpoint" in t.lower() and "migration" in str(p).lower())
+        for p,t in files(root/"migrations")
+    )
+    for p,t in active_files(root):
         rel=p.relative_to(root);low=t.lower()
-        if "0011_native_execution_state" in low or ("native_tutor_checkpoint" in low and "migration" in str(rel).lower()):migration=True
         if p.suffix==".py" and re.search(r"^\s*(from|import)\s+deeptutor\b",t,re.M):
             add("P0","DEEPTUTOR_DIRECT_IMPORT",rel,"active source imports deeptutor")
         if "pg_deeptutor" in t and "compat" not in low and "native-execution-core" not in rel.parts:

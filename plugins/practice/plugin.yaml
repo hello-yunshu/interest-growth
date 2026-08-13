@@ -1,0 +1,40 @@
+id: capability.practice
+name: Practice & Learning Activity
+version: 0.6.0
+level: 3
+description: Quiz practice plus general practice/activity evidence; never auto-promotes
+  mastery.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /learning
+  capabilities:
+  - practice
+  - question-bank-bridge
+  - mastery-evidence
+  widgets: []
+permissions:
+  read:
+  - concept
+  - topic
+  - tutor_session
+  - practice_item
+  - practice_attempt
+  - mastery_evidence
+  - learning_activity
+  - mastery
+  write:
+  - practice_item
+  - practice_attempt
+  - mastery_evidence
+  - learning_activity
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false
+subscribes: []

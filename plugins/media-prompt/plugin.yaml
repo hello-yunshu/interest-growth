@@ -1,0 +1,30 @@
+id: capability.media-prompt
+name: Media Prompt
+version: 0.5.0
+level: 2
+description: Image/video prompt packs and local visual cards for any interest.
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /content/media
+  capabilities:
+  - image-prompt
+  - video-prompt
+  - local-card-renderer
+  widgets: []
+subscribes:
+- content.created
+permissions:
+  read:
+  - topic
+  - artifact
+  write:
+  - artifact
+risk:
+  network: false
+  shell: false
+  llm: false
+  destructive_data: false
