@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -35,6 +37,10 @@ def seeded_client(client, tmp_path):
     return client
 
 
+def _sha256(path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def _wipe_live_state() -> None:
     settings = get_settings()
     get_engine().dispose()
@@ -54,7 +60,7 @@ def test_backup_creates_complete_consistent_bundle(seeded_client, tmp_path):
     bundle = create_backup(destination_dir=str(tmp_path / "backups"))
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["product"] == "interest-growth"
-    assert manifest["schema_version"] == 13
+    assert manifest["schema_version"] == 14
     assert manifest["database"]["sha256"]
     assert manifest["file_count"]["sources"] >= 1
     assert manifest["file_count"]["artifacts"] >= 1
@@ -84,11 +90,11 @@ def test_restore_round_trip_into_clean_live_paths(seeded_client, tmp_path):
     assert result["restored"] is True
     assert result["integrity"] == "ok"
     assert result["foreign_key_violations"] == 0
-    assert result["schema_version"] == 13
+    assert result["schema_version"] == 14
     assert result["missing_source_files"] == []
     assert result["missing_artifact_files"] == []
     with get_session_factory()() as db:
-        assert db.scalar(select(func.max(SchemaMigration.version))) == 13
+        assert db.scalar(select(func.max(SchemaMigration.version))) == 14
     reset_engine_for_tests()
 
 
@@ -112,3 +118,211 @@ def test_restore_rejects_incomplete_bundle(seeded_client, tmp_path):
     (bundle / "psychology_growth.db").unlink()
     with pytest.raises(ValueError, match="missing database snapshot"):
         restore_backup(bundle_dir=str(bundle))
+
+
+# ------------------------------------------------------------- Gate B4
+
+
+def test_restore_torn_bundle_fails_before_touching_live_state(seeded_client, tmp_path):
+    """Gate B4: a bundle that fails staged verification leaves live paths intact."""
+    from pg_api.backup_restore import create_backup, restore_backup
+    from pg_api.db import SourceModel, create_engine
+
+    settings = get_settings()
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    db_before = Path(settings.database_url[len("sqlite:///"):]).read_bytes()
+    live_files = {
+        p.relative_to(Path(settings.source_storage_root))
+        for p in Path(settings.source_storage_root).rglob("*")
+        if p.is_file()
+    }
+
+    db_file = bundle / "psychology_growth.db"
+    # Insert a ghost source that claims a local file missing from the bundle.
+    # Populate via the ORM so every NOT NULL column gets its app-level default.
+    backup_engine = create_engine(f"sqlite:///{db_file}")
+    with backup_engine.begin() as conn:
+        from sqlalchemy import insert
+        conn.execute(
+            insert(SourceModel.__table__).values(
+                id=f"ghost-{int(time.time())}", title="ghost",
+                source_type="document", authors=[], publisher="", doi="",
+                pmid="", isbn="", canonical_url="", full_text_available=False,
+                ai_summary_only=False, verified=False, local_file="ghost.md",
+            )
+        )
+    backup_engine.dispose()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["database"]["sha256"] = _sha256(db_file)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="references missing files"):
+        restore_backup(bundle_dir=str(bundle))
+    assert Path(settings.database_url[len("sqlite:///"):]).read_bytes() == db_before
+    now_files = {
+        p.relative_to(Path(settings.source_storage_root))
+        for p in Path(settings.source_storage_root).rglob("*")
+        if p.is_file()
+    }
+    assert now_files == live_files
+
+
+def test_restore_retains_previous_state_until_post_checks_then_cleans(seeded_client, tmp_path):
+    """Gate B4: previous live state survives the switch window; leftovers are removed."""
+    from pg_api.backup_restore import create_backup, restore_backup
+
+    settings = get_settings()
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    live_db = Path(settings.database_url[len("sqlite:///"):])
+    live_dir = live_db.parent
+    live_db.write_bytes(b"not-the-backup-state")  # overwrite with junk to force a real switch
+    result = restore_backup(bundle_dir=str(bundle))
+    assert result["restored"] is True
+    assert result["integrity"] == "ok"
+    assert result["missing_source_files"] == []
+    assert result["missing_artifact_files"] == []
+    leftovers = [
+        p
+        for p in live_dir.rglob("*.pre-restore-*")
+    ]
+    assert leftovers == [], f"pre-restore state must be cleaned up after success: {leftovers}"
+    with get_session_factory()() as db:
+        assert db.scalar(select(func.max(SchemaMigration.version))) == 14
+    reset_engine_for_tests()
+
+
+def test_restore_migrates_older_bundle_schema_during_staging(seeded_client, tmp_path):
+    """Gate B4: an older-schema bundle is upgraded during staged verification."""
+    import sqlite3
+
+    from pg_api.backup_restore import create_backup, restore_backup
+
+    settings = get_settings()
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    db_file = bundle / "psychology_growth.db"
+    conn = sqlite3.connect(db_file)
+    conn.execute("DELETE FROM schema_migrations WHERE version = 14")
+    conn.commit()
+    conn.close()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["database"]["sha256"] = _sha256(db_file)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = restore_backup(bundle_dir=str(bundle))
+    assert result["schema_version"] == 14
+    with get_session_factory()() as db:
+        assert db.scalar(select(func.max(SchemaMigration.version))) == 14
+    reset_engine_for_tests()
+
+
+# ------------------------------------------------------------- Gate B3
+
+
+def test_maintenance_lock_blocks_vault_writes_while_exclusive(seeded_client, tmp_path):
+    """A backup's exclusive lock drains vault writes; writers resume after."""
+    import threading
+    import time
+
+    from pg_api.maintenance import maintenance_lock
+    from pg_api.knowledge import source_storage
+
+    def writer():
+        source_storage().put_bytes("locks/writer-probe.txt", b"written")
+
+    lock_url = get_settings().database_url
+    with maintenance_lock(exclusive=True, database_url=lock_url, timeout=10):
+        done = threading.Event()
+
+        def blocked_writer():
+            writer()
+            done.set()
+
+        thread = threading.Thread(target=blocked_writer)
+        thread.start()
+        time.sleep(0.3)
+        assert not done.is_set(), "vault write must be blocked while backup holds the lock"
+    thread.join(timeout=10)
+    assert done.is_set(), "vault write must complete after the backup lock is released"
+
+
+def test_maintenance_lock_exclusive_timeout(seeded_client, tmp_path):
+    import threading
+
+    from pg_api.maintenance import maintenance_lock
+
+    lock_url = get_settings().database_url
+    with maintenance_lock(exclusive=True, database_url=lock_url, timeout=10):
+        outcome = {}
+
+        def contender():
+            try:
+                with maintenance_lock(exclusive=True, database_url=lock_url, timeout=0.3):
+                    outcome["state"] = "acquired"
+            except TimeoutError:
+                outcome["state"] = "timed_out"
+
+        thread = threading.Thread(target=contender)
+        thread.start()
+        thread.join(timeout=10)
+    assert outcome["state"] == "timed_out"
+
+
+def test_backup_refuses_torn_bundle(seeded_client, tmp_path):
+    """Gate B3: a bundle whose snapshot references a missing vault file fails loudly."""
+    import pg_api.backup_restore as backup_module
+    from pg_api.backup_restore import create_backup
+    from pg_api.knowledge import source_storage
+
+    def tearing_copy(src_root, bundle_root, name):
+        # Simulate a vault mutation that happened after the DB snapshot but
+        # before the vault copy: the file disappears from the live tree.
+        if name == "sources":
+            victim = next(Path(src_root).rglob("*.md"), None)
+            if victim is not None:
+                victim.unlink()
+        return original_copy(src_root, bundle_root, name)
+
+    original_copy = backup_module._copy_dir
+    backup_module._copy_dir = tearing_copy
+    try:
+        with pytest.raises(ValueError, match="not captured"):
+            create_backup(destination_dir=str(tmp_path / "backups"))
+    finally:
+        backup_module._copy_dir = original_copy
+
+
+def test_backup_under_concurrent_writes_never_ships_torn_bundle(seeded_client, tmp_path):
+    """Gate B3: concurrent vault writes cannot produce a silently torn backup."""
+    import threading
+    import time
+
+    from pg_api.backup_restore import create_backup, verify_bundle
+    from pg_api.content import get_storage
+    from pg_api.knowledge import source_storage
+
+    stop = threading.Event()
+
+    def churn():
+        index = 0
+        while not stop.is_set():
+            index += 1
+            source_storage().put_bytes(f"churn/source-{index}.txt", b"s")
+            get_storage().put_text(f"churn/card-{index}.html", "<p>c</p>")
+            time.sleep(0.01)
+
+    writer = threading.Thread(target=churn)
+    writer.start()
+    try:
+        bundles = []
+        for _ in range(5):
+            bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+            verified = verify_bundle(str(bundle))
+            assert verified["checks"] == {"database": True, "sources": True, "artifacts": True}
+            assert verified["integrity"] == "ok"
+            bundles.append(bundle)
+    finally:
+        stop.set()
+        writer.join(timeout=10)
+    assert len(bundles) == 5

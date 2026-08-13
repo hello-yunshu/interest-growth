@@ -9,6 +9,7 @@ from pg_artifacts import LocalFilesystemStorage
 from pg_shared import get_settings
 
 from .domains import require_entity_in_current_area
+from .maintenance import write_lock as _write_lock
 
 from .db import (
     KnowledgeBaseModel,
@@ -23,7 +24,10 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._()\-\u4e00-\u9fff]+")
 
 
 def source_storage() -> LocalFilesystemStorage:
-    return LocalFilesystemStorage(get_settings().source_storage_root)
+    return LocalFilesystemStorage(
+        get_settings().source_storage_root,
+        write_lock=_write_lock,
+    )
 
 
 def safe_filename(name: str) -> str:

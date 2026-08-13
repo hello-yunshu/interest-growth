@@ -21,23 +21,37 @@ def test_apply_copies_rc2_but_does_not_claim_host_wiring(tmp_path):
     assert m["status"]=="package_copied_host_wiring_not_claimed"
     assert (h/"packages/native-execution-core/HOST_INTEGRATION_SPEC.json").exists()
 
-def test_host_audit_detects_retired_bridge_and_fail_open_global_default(tmp_path):
+def test_host_audit_detects_deeptutor_bridge_and_fail_open_global_default(tmp_path):
     h=host(tmp_path);(h/"packages/native-execution-core").mkdir()
-    retired_runtime="deep"+"tutor"
     (h/"apps/api/bad.py").write_text(
-        f"import {retired_runtime}\npg_{retired_runtime} = object()\nglobal_capability_ids={{'*'}}\n",
+        "import deeptutor\npg_deeptutor = object()\nglobal_capability_ids={'*'}\n",
         "utf-8",
     )
     p=subprocess.run([sys.executable,str(ROOT/"scripts/audit_host_v050.py"),str(h),"--strict"],cwd=ROOT,text=True,capture_output=True)
     assert p.returncode==2
     ids={x["id"] for x in json.loads(p.stdout)["findings"]}
-    assert {"RETIRED_RUNTIME_DIRECT_IMPORT","RETIRED_RUNTIME_DIRECT_BRIDGE","GLOBAL_CAPABILITY_FAIL_OPEN"} <= ids
+    assert {"DEEPTUTOR_DIRECT_IMPORT","DEEPTUTOR_DIRECT_BRIDGE","GLOBAL_CAPABILITY_FAIL_OPEN"} <= ids
 
 def test_synthetic_clean_host_can_pass_strict_audit(tmp_path):
     h=host(tmp_path);(h/"packages/native-execution-core").mkdir()
     p=subprocess.run([sys.executable,str(ROOT/"scripts/audit_host_v050.py"),str(h),"--strict"],cwd=ROOT,text=True,capture_output=True)
     assert p.returncode==0,p.stdout+p.stderr
     assert json.loads(p.stdout)["ready_for_native_cutover"] is True
+
+def test_host_audit_ignores_guard_examples_and_historical_docs(tmp_path):
+    h=host(tmp_path);(h/"packages/native-execution-core").mkdir()
+    (h/"tests").mkdir()
+    (h/"tests/test_guards.py").write_text(
+        "SAMPLE = \"import deeptutor; pg_deeptutor; global_capability_ids={'*'}\"\n",
+        "utf-8",
+    )
+    (h/"docs/history.md").write_text(
+        "A rejected plugin depends on integration.deeptutor.\n",
+        "utf-8",
+    )
+    p=subprocess.run([sys.executable,str(ROOT/"scripts/audit_host_v050.py"),str(h),"--strict"],cwd=ROOT,text=True,capture_output=True)
+    assert p.returncode==0,p.stdout+p.stderr
+    assert json.loads(p.stdout)["findings"] == []
 
 def test_migration_runner_preserves_legacy_sentinel(tmp_path):
     db=tmp_path/"host.db";conn=sqlite3.connect(db)

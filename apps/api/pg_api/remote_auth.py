@@ -12,7 +12,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from pg_shared import get_settings
 
@@ -120,6 +121,11 @@ def _token_hash(token: str) -> str:
 
 
 def _issue_token_pair(db, device_id: str) -> dict[str, Any]:
+    """Stage a new access/refresh pair in the caller's transaction.
+
+    Deliberately does NOT commit: callers own the transaction so that
+    rotation and issuance are atomic with the consume of the old token.
+    """
     settings = get_settings()
     now = now_utc()
     access = _new_token()
@@ -140,7 +146,6 @@ def _issue_token_pair(db, device_id: str) -> dict[str, Any]:
     )
     db.add(refresh_row)
     db.flush()
-    db.commit()
     return {
         "access_token": access,
         "refresh_token": refresh,
@@ -338,9 +343,15 @@ def owner_bootstrap(body: OwnerBootstrapRequest, request: Request):
     ip = _client_ip(request)
     if _rate_limit_exceeded("bootstrap", ip):
         return _rate_limited_response()
-    with get_session_factory()() as db:
-        db.add(OwnerModel(password_hash=hash_password(body.owner_password)))
-        db.commit()
+    try:
+        with get_session_factory()() as db:
+            db.add(OwnerModel(password_hash=hash_password(body.owner_password)))
+            db.commit()
+    except IntegrityError:
+        # The unique singleton index is the authority: a concurrent bootstrap
+        # that won the race surfaces here as the already-configured answer.
+        record_security_event("owner_bootstrap_failed", ip_address=ip)
+        raise HTTPException(409, "owner is already configured")
     record_security_event("owner_bootstrapped", ip_address=ip)
     return {"status": "owner_configured", "device_registration_required": True}
 
@@ -374,6 +385,7 @@ def owner_login(body: OwnerLoginRequest, request: Request):
             db.add(device)
             db.flush()
         tokens = _issue_token_pair(db, device.id)
+        db.commit()
         device_id = device.id
         device_name = device.name
     record_security_event("device_registered", device_id=device_id, ip_address=ip)
@@ -413,7 +425,24 @@ def device_refresh(body: DeviceRefreshRequest, request: Request):
         if device is None or device.revoked_at is not None:
             record_security_event("refresh_failed", ip_address=ip)
             raise HTTPException(401, "device revoked")
-        row.revoked_at = now
+        # Atomic conditional consume: a single UPDATE revokes the credential
+        # only if it is still unconsumed and unexpired. A concurrent winner
+        # makes this statement match zero rows, so overlapping rotations can
+        # never issue two replacements for the same credential.
+        consumed = db.execute(
+            update(DeviceRefreshTokenModel)
+            .where(
+                DeviceRefreshTokenModel.token_hash == digest,
+                DeviceRefreshTokenModel.revoked_at.is_(None),
+                DeviceRefreshTokenModel.expires_at > now,
+            )
+            .values(revoked_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if consumed.rowcount != 1:
+            db.rollback()  # release the write lock; nothing was consumed
+            record_security_event("refresh_failed", ip_address=ip)
+            raise HTTPException(401, "refresh token invalid or already rotated")
         device.last_seen_at = now
         tokens = _issue_token_pair(db, device.id)
         row.replaced_by = tokens["refresh_id"]

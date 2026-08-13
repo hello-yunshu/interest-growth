@@ -29,8 +29,16 @@ class ResearchCitation:
     id:str;source_type:str;source_ref:str;title:str="";url:str="";excerpt:str="";status:str="candidate_not_evidence"
 
 @dataclass(frozen=True,slots=True)
+class ResearchClaim:
+    text:str
+    citation_ids:tuple[str,...]=()
+    grounding_status:str="ungrounded"
+
+@dataclass(frozen=True,slots=True)
 class ResearchBlockResult:
     id:str;title:str;overview:str;summary:str;citation_ids:tuple[str,...]
+    claims:tuple[ResearchClaim,...]=()
+    candidate_ids:tuple[str,...]=()
     appended_topics:tuple[ResearchSubtopic,...]=()
     status:str="completed";error_type:str=""
 
@@ -121,15 +129,31 @@ class NativeResearchExecutor:
         return raw,cit
     def _run_block(self,c,*,bid,topic,root,kb_ids):
         raw,cits=self._collect_candidates(c,kb_ids,topic.title)
+        supplied={x["citation_id"] for x in raw}
         context="\n\n".join(f"[{x['citation_id']}]\n{x.get('excerpt','')}" for x in raw)
-        p,errors=self._structured(c,messages=[{"role":"system","content":"Research one confirmed block. Return JSON summary and append_topics (0-2). Use supplied citation IDs only; never call candidates verified Evidence."},{"role":"user","content":f"Root: {root}\nBlock: {topic.title}\nOverview: {topic.overview}\nCandidates:\n{context or '(none)'}"}],schema_hint='{"summary":"...","append_topics":[{"title":"...","overview":"..."}]}',temperature=.25)
-        if p is None:return ResearchBlockResult(bid,topic.title,topic.overview,"",tuple(x.id for x in cits),(), "partial","structured_output_invalid"),tuple(cits),tuple(raw)
-        summary=str(p.get("summary") or "").strip();app=[]
+        p,errors=self._structured(c,messages=[{"role":"system","content":"Research one confirmed block. Return JSON with summary, claims (each with text and citation_ids taken ONLY from the supplied IDs), and append_topics (0-2). Supplied citation IDs are research candidates, never verified Evidence."},{"role":"user","content":f"Root: {root}\nBlock: {topic.title}\nOverview: {topic.overview}\nCandidates:\n{context or '(none)'}"}],schema_hint='{"summary":"...","claims":[{"text":"...","citation_ids":["C-..."]}],"append_topics":[{"title":"...","overview":"..."}]}',temperature=.25)
+        if p is None:return ResearchBlockResult(bid,topic.title,topic.overview,"",(),(),tuple(x.id for x in cits),(), "partial","structured_output_invalid"),tuple(cits),tuple(raw)
+        summary=str(p.get("summary") or "").strip();claims=[];used=[];invalid=False;app=[]
+        if isinstance(p.get("claims"),list):
+            for x in p["claims"]:
+                if not isinstance(x,dict):continue
+                text=str(x.get("text") or "").strip()
+                if not text:continue
+                ids=tuple(str(i).strip() for i in (x.get("citation_ids") or []) if str(i).strip())
+                unknown=tuple(i for i in ids if i not in supplied)
+                if unknown:invalid=True
+                claims.append(ResearchClaim(text,ids,"invalid_grounding" if unknown else ("grounded" if ids else "ungrounded")))
+                for i in ids:
+                    if i in supplied and i not in used:used.append(i)
         if isinstance(p.get("append_topics"),list):
             for x in p["append_topics"][:2]:
                 if isinstance(x,dict) and str(x.get("title") or "").strip():app.append(ResearchSubtopic(str(x["title"]).strip(),str(x.get("overview") or "").strip()))
-        status="completed" if summary and not errors else "partial"
-        return ResearchBlockResult(bid,topic.title,topic.overview,summary,tuple(x.id for x in cits),tuple(app),status,("" if status=="completed" else (errors[0] if errors else "missing_summary"))),tuple(cits),tuple(raw)
+        status="completed" if summary and claims and not errors and not invalid else "partial"
+        if invalid:error_type="invalid_grounding"
+        elif errors:error_type=errors[0]
+        elif not claims:error_type="missing_claims"
+        else:error_type="missing_summary"
+        return ResearchBlockResult(bid,topic.title,topic.overview,summary,tuple(used),tuple(claims),tuple(x.id for x in cits),tuple(app),status,error_type),tuple(cits),tuple(raw)
     def run_confirmed(self,c,*,question,subtopics,kb_ids=(),max_queue=8,outline_status="host_confirmed"):
         self._require(c);queue=list(subtopics);seen={x.title.strip().lower() for x in queue};blocks=[];citations={};candidates=[];failed=[];counter=0
         while queue and counter<max_queue:

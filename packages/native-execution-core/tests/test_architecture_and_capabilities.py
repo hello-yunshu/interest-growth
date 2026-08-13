@@ -14,12 +14,11 @@ class Simple:
     available=True
     def complete(self,**kwargs):return LLMResponse("answer")
 
-def test_runtime_has_no_retired_runtime_import_or_domain_specific_policy():
+def test_runtime_has_no_deeptutor_import_or_domain_specific_policy():
     root=Path(__file__).resolve().parents[1]/"interest_growth_native";hits=[]
-    retired_runtime="deep"+"tutor"
     for p in root.rglob("*.py"):
         t=p.read_text("utf-8")
-        if re.search(rf"^\s*(from|import)\s+{retired_runtime}\b",t,re.M):hits.append(str(p))
+        if re.search(r"^\s*(from|import)\s+deeptutor\b",t,re.M):hits.append(str(p))
         if re.search(r"\bPsychology\b|心理学",t,re.I):hits.append(str(p)+":domain")
     assert hits==[]
 
