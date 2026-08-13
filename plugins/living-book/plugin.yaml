@@ -1,0 +1,43 @@
+id: capability.living-book
+name: Living Book
+version: 0.5.0
+level: 4
+description: Source-fingerprinted local books compiled from area-scoped learning material.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /book
+  capabilities:
+  - living-book
+  - source-fingerprint
+  - book-projection
+  widgets: []
+permissions:
+  read:
+  - topic
+  - concept
+  - claim
+  - claim_version
+  - evidence
+  - source
+  - learning_note
+  - practice_item
+  - learning_activity
+  - knowledge_base
+  - living_book
+  - living_book_chapter
+  write:
+  - living_book
+  - living_book_chapter
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false
+subscribes:
+- claim.revised
+- claim.reverification_required

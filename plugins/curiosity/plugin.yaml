@@ -1,0 +1,32 @@
+id: capability.curiosity
+name: Curiosity
+version: 0.5.0
+level: 3
+description: Curiosity Inbox, pause/return and topic promotion for any interest.
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /curiosity
+  capabilities:
+  - curiosity-inbox
+  widgets:
+  - active-topics
+subscribes:
+- question.created
+- question.returned
+permissions:
+  read:
+  - question
+  - topic
+  - growth_event
+  write:
+  - question
+  - topic
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false

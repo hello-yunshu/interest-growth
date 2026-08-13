@@ -1,0 +1,30 @@
+id: capability.learning-notebook
+name: Learning Notebook
+version: 0.5.0
+level: 3
+description: Own-data-first notes with optional external projection.
+default_enabled: true
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /learning
+  capabilities:
+  - learning-note
+  - notebook-projection
+  widgets: []
+permissions:
+  read:
+  - topic
+  - concept
+  - learning_note
+  write:
+  - learning_note
+risk:
+  network: true
+  shell: false
+  llm: false
+  destructive_data: false
+subscribes: []

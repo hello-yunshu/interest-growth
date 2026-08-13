@@ -1,0 +1,26 @@
+id: core.interest-growth
+name: Interest Growth Core
+version: 0.6.0
+level: 2
+description: General interest-growth primitives, energy modes, boundaries and growth
+  events.
+provides:
+  capabilities:
+  - growth-events
+  widgets: []
+  pages: []
+permissions:
+  read:
+  - question
+  - topic
+  write:
+  - growth_event
+risk:
+  network: false
+  shell: false
+  llm: false
+  destructive_data: false
+requires:
+  core: '>=0.1,<1.0'
+  plugins: []
+subscribes: []

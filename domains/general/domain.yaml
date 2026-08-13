@@ -1,0 +1,96 @@
+id: general
+name: General Interest
+version: 1.0.0
+description: Neutral domain pack for interests that do not require a specialized policy pack.
+mastery_profile: general:adaptive
+capabilities:
+  capability.curiosity: true
+  capability.research-evidence: true
+  capability.knowledge: true
+  capability.mastery: true
+  capability.practice: true
+  capability.learning-notebook: true
+  capability.tutor-persona: true
+  capability.tutor-runtime: true
+  capability.co-writer: true
+  capability.living-book: true
+  capability.content-studio: true
+  capability.media-prompt: true
+  capability.growth-feedback: true
+  capability.reflection: true
+  capability.memory-graph: true
+  capability.concept-graph: true
+  capability.career: true
+skills:
+- generic-research
+- generic-writing
+- image-prompt
+- video-prompt
+- xhs-writing
+personas:
+- curious-peer
+- socratic-guide
+research:
+  planner_system: You decompose a learning or research question without assuming a specific subject. Distinguish direct sources, practical demonstrations, expert interpretation, uncertainty, and what still requires verification. Do not pretend to have read a source that was not retrieved.
+  brief_template: 围绕“{question}”建立适合当前兴趣领域的可核验学习/研究简报。
+  subquestions:
+  - 核心概念、技能或对象是什么？常见混淆是什么？
+  - 哪些权威资料、原始材料、实践示范或代表性案例最值得查看？
+  - 有哪些替代观点、失败案例、边界条件或实践限制？
+  - 下一步最小可行的学习、观察或练习是什么？
+  desired_sources:
+  - authoritative overview
+  - primary or original source
+  - practical demonstration or worked example
+  - contrasting perspective
+quick_explore:
+  system: Help the user lower the threshold for beginning an interest. Keep the answer short and concrete. Do not invent sources or claim verification. Prefer a tiny next action over performance pressure.
+  template: '兴趣问题：{question}
+
+    用户特别想看：{focus}
+
+
+    做一次非常轻量的快速探索：
+
+    1. 用 3-5 个短要点指出最核心的概念、技能或观察维度；
+
+    2. 指出一个最容易混淆或误判的地方；
+
+    3. 给出一个 10-30 分钟即可尝试的最小实践/观察；
+
+    4. 如果继续深入，建议追问一个问题。
+
+    明确这只是快速探索，不是已核验证据。'
+  manual_template: '先只把「{question}」拆成三个很轻的观察点：
+
+    1. 这里最核心的概念、技能或观察维度是什么？
+
+    2. 最容易混淆、误判或做得过头的地方是什么？
+
+    3. 现在能做的一个 10–30 分钟小实践/观察是什么？
+
+
+    这只是快速探索，不是研究结论；不需要先建立 Claim 才能继续学习。'
+content:
+  default_audience: 对这个兴趣感兴趣的普通读者
+  evidence_required: false
+  factual_claim_policy: Use grounding references when factual claims are made; do not invent sources.
+  forbidden_patterns: []
+  tags:
+  - 兴趣学习
+  - 学习记录
+  - 实践记录
+mastery_profiles:
+- id: general:adaptive
+  name: Adaptive Interest Mastery
+  description: Flexible profile for conceptual, procedural, creative, and project-based interests.
+  default: true
+  states:
+  - unfamiliar
+  - familiar
+  - understand
+  - practice
+  - apply
+  - reflect
+  - transfer
+  - self_directed

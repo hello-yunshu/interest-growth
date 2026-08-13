@@ -1,0 +1,111 @@
+id: psychology
+name: Psychology
+version: 1.0.0
+description: Evidence-heavy default pack for learning, researching, and expressing psychology safely.
+mastery_profile: psychology:conceptual-evidence
+capabilities:
+  capability.curiosity: true
+  capability.research-evidence: true
+  capability.knowledge: true
+  capability.mastery: true
+  capability.practice: true
+  capability.learning-notebook: true
+  capability.tutor-persona: true
+  capability.tutor-runtime: true
+  capability.co-writer: true
+  capability.living-book: true
+  capability.content-studio: true
+  capability.media-prompt: true
+  capability.growth-feedback: true
+  capability.reflection: true
+  capability.memory-graph: true
+  capability.concept-graph: true
+  capability.career: true
+skills:
+- psychology-research
+- psychology-evidence-review
+- psychology-claim-check
+- psychology-skeptic
+- psychology-writing
+- psychology-xhs-writing
+- image-prompt
+- video-prompt
+personas:
+- psychology-peer
+- psychology-socratic-tutor
+- psychology-research-assistant
+- psychology-evidence-reviewer
+research:
+  planner_system: 你负责拆解心理学研究问题。不要给个体诊断或治疗决策。区分原始来源、综述、模型概述、 候选证据与人工核验证据；主动检查样本、因果、测量、文化与方法学边界。
+  brief_template: 围绕“{question}”建立可核验、可反驳、明确边界的心理学研究简报。
+  subquestions:
+  - 核心概念如何定义，常见混淆是什么？
+  - 高质量综述、元分析或关键原始研究支持什么？
+  - 有哪些相反结果、边界条件、样本或方法学限制？
+  - 哪些结论适合公开表达，哪些只能保留为待核验理解？
+  desired_sources:
+  - systematic review
+  - meta-analysis
+  - primary study
+  - authoritative handbook
+quick_explore:
+  system: 你帮助用户降低开始学习心理学的门槛。保持简短、谨慎，不虚构已阅读文献；不要做个体诊断或治疗建议。
+  template: '心理学学习问题：{question}
+
+    用户特别想看：{focus}
+
+
+    做一次非常轻量的快速探索：用 3-5 个短要点说明核心概念、一个最值得区分的误区、
+
+    以及若要继续研究应问的一个问题。明确这是快速理解，不是已核验证据。
+
+    不要做个体诊断或治疗建议。'
+  manual_template: '先只把「{question}」拆成三个很轻的观察点：
+
+    1. 这里最核心的心理学概念是什么？
+
+    2. 哪两个相近概念最容易混淆？
+
+    3. 什么证据出现时，会让你修改现在的直觉？
+
+
+    这只是快速探索工作区，不是研究结论，也不会自动创建 Evidence；不要做个体诊断或治疗建议。'
+content:
+  default_audience: 对心理学感兴趣的普通读者
+  evidence_required: true
+  factual_claim_policy: Psychology factual publishing must be grounded in local Claim/Evidence chains. Human verification is required before a factual claim can be treated as publication-ready. Never infer diagnosis or promise treatment effects.
+  forbidden_patterns:
+  - 心理学证明
+  - 你就是
+  - 说明你有
+  - 你患有
+  - 保证有效
+  tags:
+  - 心理学学习
+  - 心理学科普
+  - 证据意识
+  - 学习记录
+  risk_rules:
+  - pattern: 心理学证明
+    severity: high
+    message: 避免把复杂研究写成“心理学证明”；请说明具体证据类型和边界。
+  - pattern: 你就是|说明你有|你患有|你属于.{0,8}人格
+    severity: high
+    message: 出现个体诊断式语言；Psychology Domain Pack 不支持自动诊断。
+  - pattern: 治愈|保证有效|治疗一定
+    severity: high
+    message: 出现治疗承诺，需要删除或重写。
+mastery_profiles:
+- id: psychology:conceptual-evidence
+  name: Conceptual + Evidence Mastery
+  description: Existing psychology mastery ladder preserved as a domain profile.
+  default: true
+  states:
+  - unfamiliar
+  - familiar
+  - explain
+  - example
+  - distinguish
+  - transfer
+  - evidence_boundary
+  - stable_expression

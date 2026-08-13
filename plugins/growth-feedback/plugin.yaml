@@ -1,0 +1,40 @@
+id: capability.growth-feedback
+name: Growth Feedback
+version: 0.5.0
+level: 3
+description: Positive feedback from returns, revisions, practice and user-recognized
+  ability change.
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /growth
+  capabilities:
+  - growth-feedback
+  widgets:
+  - weekly-growth
+subscribes:
+- question.returned
+- claim.revised
+- mastery.updated
+- research.completed
+- reflection.completed
+permissions:
+  read:
+  - growth_event
+  - growth_memory
+  - mastery
+  - claim
+  - claim_version
+  - question
+  - reflection
+  - concept
+  write:
+  - growth_memory
+risk:
+  network: false
+  shell: false
+  llm: false
+  destructive_data: false

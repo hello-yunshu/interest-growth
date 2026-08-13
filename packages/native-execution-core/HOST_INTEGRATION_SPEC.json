@@ -1,0 +1,108 @@
+{
+  "schema_version": 2,
+  "release": "0.6.0rc2",
+  "target_product": "Interest Growth",
+  "target_host_baseline": {
+    "version": "0.5.0",
+    "commit": "2c7141e7677fd48d12087159911cd60a51168502",
+    "archive_sha256": "524ed7868220567805626cdae316f35d6a896ecb35758f5ced2c32c07203a358"
+  },
+  "v03_reference": {
+    "version": "0.3.0",
+    "commit": "52e4687bc0be140e0f5e10e844ff3f2af88e342e",
+    "archive_sha256": "b08772c3046f048e47afea8db506a63b90fbd9d9e92aa2412d8954cc928ae11a"
+  },
+  "architecture_law": {
+    "interest_area": "what the user cultivates",
+    "capability_plugin": "what the product can do",
+    "domain_pack": "how the feature behaves in a domain",
+    "permission_broker": "what this operation may access/do",
+    "native_execution_core": "how an already-authorized operation executes",
+    "canonical_data_owner": "Interest Growth host"
+  },
+  "mandatory_v03_invariants": [
+    "only answer-visible content builds Tutor assistant_text",
+    "wait_for_input resumes the exact same execution turn snapshot",
+    "reconnect uses monotonic event sequence cursor / after_seq",
+    "RAG use emits sanitized sources/provenance",
+    "retrieval candidate includes local source identity and location metadata",
+    "same-name source filenames are collision-safe for external adapters",
+    "whole-KB index build truth belongs to host KnowledgeIngestionRun",
+    "Skill package fingerprint covers supporting file bytes",
+    "Notebook and Practice remain independently disableable",
+    "Practice output never auto-updates Mastery",
+    "CoWriter proposal cannot apply across document revision/fingerprint changes",
+    "Living Book host compiler retains source/claim fingerprints and staleness",
+    "Growth Memory remains authoritative over agent memory",
+    "raw tool result bodies/private reasoning never enter public Activity Trace"
+  ],
+  "public_tutor_events": [
+    "answer_delta",
+    "thinking",
+    "activity",
+    "sources",
+    "wait_for_input",
+    "result",
+    "done",
+    "error"
+  ],
+  "allowed_native_tables": [
+    "native_tutor_checkpoint",
+    "native_run_event",
+    "native_aux_memory"
+  ],
+  "forbidden_native_canonical_tables": [
+    "native_kb",
+    "native_document",
+    "native_source",
+    "native_skill",
+    "native_persona",
+    "native_mastery",
+    "native_practice",
+    "native_note",
+    "native_book",
+    "native_writing",
+    "native_claim",
+    "native_evidence",
+    "native_growth_memory"
+  ],
+  "global_lifecycle": {
+    "host_must_supply_global_capability_ids": true,
+    "wildcard_default_allowed_in_production": false
+  },
+  "rag": {
+    "native_engines": [
+      "native-lexical",
+      "native-lightgraph",
+      "native-concept-graph",
+      "native-heading"
+    ],
+    "legacy_exact_ids": [
+      "llamaindex",
+      "lightrag",
+      "graphrag",
+      "pageindex"
+    ],
+    "silent_algorithm_substitution_forbidden": true,
+    "exact_adapter_receives_whole_kb_sources": true,
+    "collision_safe_external_filenames": true,
+    "host_owns_ingestion_task_identity": true,
+    "retrieval_truth_state": "candidate_not_evidence"
+  },
+  "host_merge_gates": [
+    "register migration 11 in real host migration ledger",
+    "bind native Engine Contracts without duplicating canonical product models",
+    "remove all retired external tutor-runtime call sites and compatibility paths",
+    "compile DomainPolicy from current Area Domain Pack",
+    "compile PermissionScope from existing PermissionBroker",
+    "supply explicit global plugin lifecycle (fail closed)",
+    "preserve host TutorSession/TutorTurn canonical ownership",
+    "persist native event seq into reconnect transport",
+    "preserve host KnowledgeIngestionRun whole-KB task truth",
+    "preserve host Living Book staleness/reverification compiler",
+    "run original v0.5 tests plus RC2 tests",
+    "run browser multi-Area rapid-switch/reconnect E2E",
+    "run production Next build and lockfile gates",
+    "re-extract and retest exact merged archive"
+  ]
+}

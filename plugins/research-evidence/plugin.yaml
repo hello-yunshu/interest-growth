@@ -1,0 +1,40 @@
+id: capability.research-evidence
+name: Research & Evidence
+version: 0.5.0
+level: 3
+description: Optional research planning and Source/Evidence/Claim ledger, shaped by
+  the active Domain Pack.
+requires:
+  core: '>=0.1,<1.0'
+  plugins:
+  - core.interest-growth
+provides:
+  pages:
+  - /research
+  capabilities:
+  - research
+  - claim-ledger
+  widgets: []
+subscribes:
+- topic.activated
+permissions:
+  read:
+  - question
+  - topic
+  - knowledge_base
+  - source
+  - evidence
+  - claim
+  - claim_version
+  - capability_run
+  write:
+  - source
+  - evidence
+  - claim
+  - claim_version
+  - capability_run
+risk:
+  network: true
+  shell: false
+  llm: true
+  destructive_data: false
