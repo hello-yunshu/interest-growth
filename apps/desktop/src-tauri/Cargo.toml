@@ -14,7 +14,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2" }
+# `macos-private-api` is declared in the base tauri.conf.json allowlist (app.macOSPrivateApi)
+# so that the allowlist is identical on every platform and a plain `cargo check` passes on
+# macOS, Linux and Windows CI hosts. On non-macOS the feature only flips a cfg flag; the
+# actual private-API code inside tauri is `cfg(target_os = "macos")` gated and unused.
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
@@ -26,12 +30,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 keyring = { version = "4.1", features = ["v1"] }
-
-# `macos-private-api` is required only on macOS (tauri.macos.conf.json sets
-# macOSPrivateApi). Gate it behind the target so non-macOS CI builds never
-# enable a feature that would mismatch the allowlist.
-[target.'cfg(target_os = "macos")'.dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
 
 url = "2"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart"] }
