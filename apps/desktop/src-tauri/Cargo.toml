@@ -30,11 +30,23 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 keyring = { version = "4.1", features = ["v1"] }
+# keyring-core exposes the CredentialStoreApi trait + Entry used only by the
+# cfg(target_os = "android") AndroidKeystoreStore. Already in the dependency tree
+# via `keyring`, so this adds no new crate on desktop.
+keyring-core = "1"
 
 url = "2"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 base64 = "0.22"
+
+# Gate E §6.4 — on Android the OS-backed secure credential store is the Android
+# Keystore (via android-native-keyring-store, which encrypts refresh credentials
+# into SharedPreferences with a Keystore-held key). Declared ONLY under the
+# android target so it is inert on desktop hosts and never enters the desktop
+# build graph.
+[target.'cfg(target_os = "android")'.dependencies]
+keyring-android = { package = "android-native-keyring-store", version = "1.0" }
 
 [dev-dependencies]
 # Deterministic local broker integration tests (Gate D §P24) spin up a raw
