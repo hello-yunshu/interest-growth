@@ -65,6 +65,33 @@ SafeWebFetcher SSRF rules.
 mode the client shows provider availability only; server-side administration
 belongs to a deliberate server-admin surface in a later milestone.
 
+### 7. Credentials are sent only after a fresh probe; probe results are display cache only
+
+The enrollment probe is a public metadata endpoint and is the only remote
+command callable in any runtime mode (so the System page can show enrollment
+choices before a mode is active). Its result is display cache only: it is
+never reused as authorization for sending a credential. Login and bootstrap
+perform their own FRESH verified probe inside the same call that sends the
+credential, so a server replaced behind the same URL is detected right
+before the password/refresh leaves the process.
+
+### 8. Runtime gate for credential-bearing commands
+
+Every other remote command (bootstrap, login, refresh, api request/upload,
+session status, verify identity, logout) requires the ACTIVE `desktop-remote`
+runtime mode and fails closed with a coded `RUNTIME_MODE_DENIED` otherwise.
+The renderer is never treated as a security boundary: `api_request` also
+accepts only the frozen HTTP method allowlist (GET/HEAD/OPTIONS/POST/PUT/
+PATCH/DELETE).
+
+### 9. Stable error-code taxonomy
+
+Every native remote error is `{"code": ..., "message": ...}` with a frozen
+taxonomy (NETWORK_UNAVAILABLE, LOGIN_EXPIRED, IDENTITY_CHANGED,
+UPDATE_REQUIRED, UNSUPPORTED_SERVER, CREDENTIAL_PERSISTENCE_FAILURE,
+PROTOCOL_ERROR, RUNTIME_MODE_DENIED, INTERNAL_ERROR). The renderer
+classifies by code, never by guessing from message text.
+
 ## Consequences
 
 - Feature pages keep using the existing `api.js` facade; runtime selection,
@@ -83,18 +110,26 @@ belongs to a deliberate server-admin surface in a later milestone.
 
 - ClientRuntime pure contract tests (Node built-in runner): 59 passed,
   including remote-transport connection-state guards, positive header
-  allowlist, upload bounds, and Gate E mobile capability vocabulary +
-  desktop-only gate.
-- Rust runtime-mode + remote-transport + native broker integration tests: 39
+  allowlist, upload bounds, coded error-code classification, Offline
+  recovery, machine `subscribe`, response-header passthrough, and Gate E
+  mobile capability vocabulary + desktop-only gate; plus 7
+  runtime-connect-controller reducer tests.
+- Rust runtime-mode + remote-transport + native broker integration tests: 44
   passed (`cargo test --locked --lib`) covering runtime-mode decisions
   (default/explicit desktop-local, desktop-remote never spawning the sidecar,
   invalid-profile store isolation, active/pending runtime separation,
-  provider-admin gating), enrollment-origin normalization/validation,
-  refresh-key namespace isolation, and deterministic native broker tests
-  against an in-memory server: redirects never followed, compatibility
-  rejects, identity before credentials, single-flight refresh with
-  keyring-failure recovery, truthful logout revoke results, header positive
-  allowlist and bounded uploads.
+  provider-admin gating, remote-command runtime gate), enrollment-origin
+  normalization/validation, refresh-key namespace isolation, and deterministic
+  native broker tests against an in-memory server: redirects never followed,
+  compatibility rejects, strict fail-closed metadata parsing (missing/empty/
+  malformed fields → PROTOCOL_ERROR), identity before credentials including
+  login identity-swap refusal, 401-recovery (forced rotation of a
+  locally-valid rejected token; generation-based single flight: 20 concurrent
+  401s share exactly one rotation and one retry), two-slot keyring crash
+  recovery (restart reads the durable pending slot; both-write failure stages
+  in memory), restart lifecycle (`auth_expired` only after an explicit server
+  denial), HTTP method allowlist, truthful logout revoke results, header
+  positive allowlist and bounded uploads.
 - Gate C/D desktop-local compatibility and CSP audits: PASS; no CSP relaxation
   to arbitrary HTTPS/`connect-src *`.
 - SOURCE_MANIFEST integrity: deterministic generation + CI check PASS.

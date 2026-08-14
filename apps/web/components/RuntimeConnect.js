@@ -9,7 +9,7 @@
 // app restart (Gate C §5.3 session immutable). All secrets stay native: the
 // renderer only submits owner passwords / relative API paths, and never
 // receives a refresh credential.
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   getDesktopRuntimeMode,
   setDesktopRuntimeMode,
@@ -26,6 +26,7 @@ import {
   getDesktopRuntime,
 } from '../lib/api';
 import { getClientRuntime } from '../lib/runtime/client-runtime.js';
+import { remoteErrorEvent } from '../lib/runtime/transports/remote.js';
 import {
   initialRuntimeConnectState,
   runtimeConnectReducer,
@@ -70,7 +71,11 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
   const [msg, setMsg] = useState({ tone: 'success', text: '' });
 
   const [session, setSession] = useState(null);
+  // HIGH-5: the ConnectionStateMachine is the ONE source of truth for the
+  // connection state. This component only MIRRORS it through a subscription —
+  // it never derives its own verdict from status fields.
   const [connectionState, setConnectionState] = useState('Initializing');
+  const machineRef = useRef(null);
 
   const [serverUrl, setServerUrl] = useState('');
   const [probe, setProbe] = useState(null);
@@ -90,27 +95,37 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setMsg({ tone, text });
   }
 
-  async function refreshConnectionState() {
-    try {
-      const client = await getClientRuntime();
-      setConnectionState(client?.connection?.state || 'Initializing');
-    } catch {
-      setConnectionState('LocalCoreError');
-    }
-  }
-
   async function loadSession() {
     const status = await remoteSessionStatus();
     setSession(status);
-    if (status?.enrolled) {
-      if (status.connected) setConnectionState('Connected');
-      else if (status.authExpired) setConnectionState('LoginExpired');
-      else setConnectionState('Offline');
-    } else {
-      setConnectionState('Initializing');
-    }
     return status;
   }
+
+  // HIGH-5: connection state is mirrored from the machine only. The machine is
+  // resolved once by ClientRuntime (which performs the HIGH-2 startup
+  // recovery); every transition here comes from its subscription, never from a
+  // local re-derivation of native status fields.
+  useEffect(() => {
+    let active = true;
+    let unsubscribe = null;
+    (async () => {
+      try {
+        const client = await getClientRuntime();
+        if (!active || !client?.connection) return;
+        machineRef.current = client.connection;
+        if (active) setConnectionState(client.connection.state);
+        unsubscribe = client.connection.subscribe((next) => {
+          if (active) setConnectionState(next);
+        });
+      } catch {
+        if (active) setConnectionState('LocalCoreError');
+      }
+    })();
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
 
   async function loadDevices() {
     try {
@@ -145,12 +160,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       }
       try {
         const status = await remoteSessionStatus();
-        if (active) {
-          setSession(status);
-          if (status?.enrolled) {
-            setConnectionState(status.connected ? 'Connected' : status.authExpired ? 'LoginExpired' : 'Offline');
-          }
-        }
+        if (active) setSession(status);
       } catch {
         if (active) setSession({ enrolled: false });
       }
@@ -262,7 +272,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       setDeviceName('');
       setProbe(null);
       const status = await loadSession();
-      setConnectionState('Connected');
+      machineRef.current?.handle('BOOTSTRAP_OK');
       if (status?.enrolled && status?.connected) {
         setDevicesLoaded(false);
         setDevices([]);
@@ -282,10 +292,10 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     try {
       const status = await remoteRefreshNow();
       setSession(status);
-      setConnectionState('Connected');
+      machineRef.current?.handle('RECONNECT_OK');
       flash('连接状态已刷新，会话有效。');
     } catch (error) {
-      setConnectionState('LoginExpired');
+      machineRef.current?.handle(remoteErrorEvent(error));
       flash(error.message, 'error');
     } finally {
       setBusy(false);
@@ -298,10 +308,10 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     try {
       const result = await remoteVerifyIdentity();
       if (result?.identityChanged) {
-        setConnectionState('IdentityChanged');
+        machineRef.current?.handle('IDENTITY_MISMATCH');
         flash('检测到服务器身份变化：同一地址后面的服务器实例已被替换。请重新验证后再接入。', 'error');
       } else {
-        setConnectionState('Connected');
+        machineRef.current?.handle('RECONNECT_OK');
         flash('服务器身份验证通过：与接入时是同一实例。');
       }
     } catch (error) {
@@ -322,7 +332,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       setSession(null);
       setDevices([]);
       setDevicesLoaded(false);
-      setConnectionState('Initializing');
+      machineRef.current?.handle('RESET');
       if (revoke && result && !result.revoked) {
         flash('已从本机移除登录信息，但服务器端设备撤销未确认。', 'error');
       } else if (revoke) {

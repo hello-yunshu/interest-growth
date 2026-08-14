@@ -33,6 +33,26 @@ regression), not for missing source/test security closure. Gate E
 contract is vocabulary only and no Android toolchain/hardware exists on the
 build machine.
 
+On 2026-08-14 the final Gate C/D closure round (this audit's last recorded
+round) closed the remaining HIGH/MEDIUM/P11 findings of the previous audit
+(see §2 "Gate C/D final closure round"): the client now genuinely recovers
+from a business 401 (forced rotation, never a locally-unexpired reuse), the
+restart lifecycle no longer misreads "enrolled + refresh stored + not yet
+connected" as LoginExpired, every credential send is preceded by a FRESH
+native probe (no probe cache is ever reused as a credential-send
+authorization), server metadata is parsed fail-closed, connection state has a
+single source of truth, native remote commands are gated to the active
+desktop-remote runtime with a frozen HTTP method allowlist, refresh rotation
+survives keyring write failure and even a crash (two-slot durable pending +
+active keyring slots), session writes are never `try_lock`, response
+metadata headers reach the renderer through the safe allowlist, Offline is
+recoverable, and every remote failure carries a stable error code the
+renderer classifies instead of guessing from message text. Rust integration
+tests grew to 44 and ClientRuntime JS tests to 59; the full regression
+(244+ Python, 59 JS, 44 Rust, native-core verify, RAG upstream pin, web
+lint/build, strict host audit, SOURCE_MANIFEST integrity) is green in the
+same environment.
+
 ## 2. Implemented in source
 
 - Single-owner bootstrap/login and named device records.
@@ -150,6 +170,84 @@ in the credential-bearing product path:
   WebSocket route exists); no CSP relaxation to arbitrary HTTPS was
   introduced.
 
+### Gate C/D final closure round (2026-08-14, this audit's last round)
+
+The findings below were recorded in the prior audit and are CLOSED in this
+round, each with directed tests that uniquely trigger the fixed path:
+
+- **HIGH — a 401 must genuinely force a refresh** (`remote.rs`): a business
+  401 now goes through `refresh_after_401`, which compares the access
+  GENERATION the request was sent with against the current one. If another
+  caller already rotated, its newer access credential is reused (single
+  flight); otherwise the rejected credential is FORCE-rotated even when it is
+  still locally unexpired, then the original request is retried exactly once.
+  A second 401 is LoginExpired. Directed tests: locally-valid token rejected
+  → exactly 1 forced refresh + exactly 1 retry; 20 concurrent 401s →
+  exactly 1 rotation shared by generation coalescing.
+- **HIGH — restart with a stored refresh is NOT LoginExpired** (`remote.rs` +
+  `client-runtime.js`): `auth_expired` is now set ONLY when the server
+  explicitly denied the refresh credential (`refresh_denied` flag, cleared on
+  login/logout/successful refresh). On startup, "enrolled + refresh stored +
+  not connected" triggers an automatic native refresh attempt that maps to
+  Connected / LoginExpired / IdentityChanged / offline honestly. Directed
+  test: fresh broker over a stored credential reports `auth_expired: false`;
+  a server denial flips it to true.
+- **HIGH — credentials are only sent after a FRESH probe** (TOCTOU closure,
+  `remote.rs`): the `PendingEnrollment` probe cache was removed; login and
+  bootstrap call `fresh_verified_server()` inside the same call that sends
+  the credential, so a server replaced behind the same URL is detected
+  right before the password/refresh leaves the process. Directed test: probe
+  answers instance-A, login endpoint answers instance-B → refused with
+  IDENTITY_CHANGED and nothing persisted.
+- **HIGH — fail-closed protocol parsing** (`remote.rs`): `ParsedMetadata`
+  with `unwrap_or_default` was replaced by strictly-typed parsers for the two
+  frozen metadata endpoints. Every required field (including
+  `auth.owner_configured` on both endpoints, `runtime_modes`, `tls`,
+  `online_first`, `offline_sync`) must be present and correctly typed;
+  versions must be numeric dotted; the two endpoints must agree on all shared
+  fields or the probe fails with PROTOCOL_ERROR. No field ever defaults open.
+- **HIGH — single connection-state source of truth** (`RuntimeConnect.js`):
+  the component no longer derives its own verdict from status fields; it
+  mirrors the `ConnectionStateMachine` through its new `subscribe()` API and
+  only ever feeds it events from user actions (login/refresh/verify/logout).
+  The transport also drives the machine from coded error verdicts instead of
+  a blanket network-fail guess.
+- **HIGH — native remote commands are runtime-gated** (`remote.rs`): every
+  remote command except the public probe now requires the ACTIVE
+  `desktop-remote` runtime mode (`ensure_remote_mode`, coded
+  RUNTIME_MODE_DENIED), and `api_request` only accepts the frozen HTTP method
+  allowlist (GET/HEAD/OPTIONS/POST/PUT/PATCH/DELETE) — CONNECT/TRACE/arbitrary
+  strings never reach reqwest. The renderer is not treated as a security
+  boundary.
+- **MEDIUM — refresh rotation crash recovery** (`remote.rs`): the keyring
+  store now has two slots per server/device — a durable PENDING slot and the
+  ACTIVE slot (which keeps the legacy keyring key for exact migration
+  compatibility). Rotation writes pending first, promotes, then clears; a
+  crash between the two leaves the replacement readable from pending; only if
+  BOTH slots fail is the replacement staged in memory for the session.
+  Directed tests: active-write failure keeps pending readable by a restarted
+  broker; both-write failure stages in memory and still rotates.
+- **MEDIUM — session writes never `try_lock`** (`remote.rs`): `set_session`
+  is now async and always awaits the session mutex; every write bumps a
+  generation counter that powers the 401 coalescing above.
+- **MEDIUM — response metadata headers reach the renderer**
+  (`remote.rs` + `remote.js`): the native broker surfaces its safe response
+  header allowlist (`etag`/`last-modified`) and `responseFromNative` copies
+  them onto the fetch-compatible `Response`, so caching behaves like a normal
+  HTTP client.
+- **MEDIUM — Offline is recoverable** (`connection-state.js`): Offline left
+  the terminal set; it is the bounded-retry resting state and a later
+  `RECONNECT_OK`/`BOOTSTRAP_OK` recovers it. Mutations still fail closed
+  outside Connected.
+- **P11 — stable remote error codes** (`remote.rs` + `remote.js`): every
+  native error is `{"code": ..., "message": ...}` with a frozen taxonomy
+  (NETWORK_UNAVAILABLE, LOGIN_EXPIRED, IDENTITY_CHANGED, UPDATE_REQUIRED,
+  UNSUPPORTED_SERVER, CREDENTIAL_PERSISTENCE_FAILURE, PROTOCOL_ERROR,
+  RUNTIME_MODE_DENIED, INTERNAL_ERROR). The renderer classifies via
+  `parseRemoteErrorCode`/`remoteErrorEvent`; server verdicts become their
+  honest terminal states and ambiguous failures stay recoverable network
+  failures. Errors never contain passwords or tokens.
+
 ### Gate E — Android mobile contract (source vocabulary only)
 
 - Frozen `PLATFORM_CAPABILITIES` vocabulary and a `DESKTOP_ONLY_CAPABILITIES`
@@ -172,17 +270,23 @@ in the credential-bearing product path:
   machine, storage namespace, credential store, retry safety, remote
   transport with connection-state guards, positive header allowlist, upload
   bounds, Gate E mobile capability vocabulary + desktop-only gate).
-- Rust runtime-mode + remote-transport + native broker integration tests: 39
+- Rust runtime-mode + remote-transport + native broker integration tests: 44
   passed (`cargo test --locked --lib`) — runtime-mode decisions (default and
   explicit desktop-local, desktop-remote never spawns sidecar, invalid
   profile never switches store, active/pending separation, provider-admin
-  gating) plus deterministic native broker tests against an in-memory server:
-  redirects never followed (login/refresh/bootstrap secrets stay local),
-  compatibility rejects (wrong product/API version/min-client/runtime
-  mode/auth), identity before credentials (mismatched instance id blocks
-  before any secret is sent), single-flight refresh (exactly one refresh
-  under concurrency) with keyring-failure rotation recovery, truthful logout
-  revoke results, header positive allowlist and bounded uploads.
+  gating, remote-command runtime gate) plus deterministic native broker tests
+  against an in-memory server: redirects never followed (login/refresh/
+  bootstrap secrets stay local), compatibility rejects (wrong product/API
+  version/min-client/runtime mode/auth), strict metadata parsing fails
+  closed (missing/empty/malformed fields → PROTOCOL_ERROR), identity before
+  credentials (mismatched instance id blocks before any secret is sent;
+  login identity-swap between fresh probe and login refused), 401-recovery
+  (forced rotation of a locally-valid rejected token, exactly one refresh and
+  one retry; 20 concurrent 401s share exactly one rotation), two-slot keyring
+  crash recovery (restart reads the pending slot; both-write failure stages
+  in memory), restart lifecycle (`auth_expired` only after a server denial),
+  HTTP method allowlist, truthful logout revoke results, header positive
+  allowlist and bounded uploads.
 - Server instance identity: 6 passed (fresh single identity, restart
   unchanged, second server distinct, migration 15 upgrade once, singleton
   index, display-name env).
@@ -209,18 +313,23 @@ verification. The real external hostname/certificate path was not exercised.
 
 ### 2026-08-14 full regression and toolchain boundary (Gates C–E source, F/G)
 
-- Web: `npm run lint` passed; ClientRuntime contract tests 59 passed; static
-  production build passed.
-- Rust: `cargo test --locked --lib` 39 passed, including the deterministic
+- Web: `npm run lint` passed; ClientRuntime contract tests 59 passed
+  (including Offline-recovery, machine `subscribe`, coded error-taxonomy
+  classification and response-header passthrough) plus the 7
+  runtime-connect-controller tests; static production build passed.
+- Rust: `cargo test --locked --lib` 44 passed, including the deterministic
   native remote-broker integration tests (compile of the lib doubles as
   `cargo check --locked --lib`).
 - Main Python suite: 244 passed. Native Execution Core standalone verify: PASS.
 - Host gates: `scripts/verify.py` PASS (version check synced from 0.6.0 to
   0.7.0, matching the v0.7 project version; SOURCE_MANIFEST integrity check
-  PASS), `verify_native_core_sync.py`
-  IN SYNC, `self_audit.py` PASS, `audit_public_repo.py` PASS (432 tracked
+  PASS — manifest regenerated for the changed native-broker/web files),
+  `verify_native_core_sync.py`
+  IN SYNC, `self_audit.py` PASS, `audit_public_repo.py` PASS (460 tracked
   paths), strict `audit_host_v050.py . --strict` PASS
-  (`ready_for_native_cutover: true`).
+  (`ready_for_native_cutover: true`). Reviewed RAG upstream pin re-verified:
+  graphrag 3.1.0, lightrag-hku 1.5.6, llama-index-core 0.14.23, pageindex
+  0.1.3.
 - Android toolchain inventory checked 2026-08-14: no Java/JDK (`keytool`
   unavailable), no Android SDK (`ANDROID_HOME` unset), no Rust Android
   targets, no `cargo-ndk`, no `adb`, no emulator or physical device. Gates E
