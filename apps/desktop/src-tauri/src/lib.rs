@@ -20,7 +20,7 @@ use uuid::Uuid;
 mod remote;
 mod runtime_mode;
 
-use remote::RemoteSession;
+use remote::{KeyringStore, RemoteBroker};
 use runtime_mode::{parse_runtime_mode, should_spawn_sidecar, RuntimeMode, RuntimeProfile};
 
 const KEYRING_SERVICE: &str = "app.psychologygrowth.desktop";
@@ -39,13 +39,31 @@ struct RuntimeInfo {
     platform: String,
 }
 
+// Gate C §5.3 / Gate D §P10 — active/pending runtime separation.
+//
+// `active_runtime_id` is the process-lifetime immutable mode resolved at setup
+// (the only source of truth for this session). `pending_runtime_id` is the
+// persisted NEXT profile that only applies after an explicit restart.
+// `restart_required` is true whenever the persisted profile differs from the
+// active mode, so the UI can never present a pending mode as already active.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeModeInfo {
-    runtime_id: String,
-    sidecar_launch: bool,
+    active_runtime_id: String,
+    pending_runtime_id: String,
+    restart_required: bool,
     // Session immutable: the profile only applies after an explicit restart.
     session_immutable: bool,
+}
+
+fn runtime_mode_info(active: RuntimeMode, pending: Option<&RuntimeProfile>) -> RuntimeModeInfo {
+    let pending_mode = parse_runtime_mode(pending);
+    RuntimeModeInfo {
+        active_runtime_id: active.as_str().into(),
+        pending_runtime_id: pending_mode.as_str().into(),
+        restart_required: active != pending_mode,
+        session_immutable: true,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -86,9 +104,10 @@ struct DesktopState {
     runtime: Mutex<RuntimeInfo>,
     child: Arc<Mutex<Option<CommandChild>>>,
     mode: RuntimeMode,
-    // In-memory access credential for desktop-remote. The refresh credential
+    // Native remote broker: owns the HTTP transport, the OS-keyring credential
+    // store and the shared session state (Gate D §P24). The refresh credential
     // never enters this struct nor the renderer (Gate C §11).
-    remote: Mutex<Option<RemoteSession>>,
+    broker: RemoteBroker,
 }
 
 fn secret_username(kind: &str) -> Result<&'static str, String> {
@@ -224,22 +243,25 @@ fn desktop_runtime(state: State<'_, DesktopState>) -> RuntimeInfo {
 }
 
 #[tauri::command]
-fn desktop_runtime_mode(app: AppHandle) -> Result<RuntimeModeInfo, String> {
+fn desktop_runtime_mode(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<RuntimeModeInfo, String> {
+    // The ACTIVE mode is the process-lifetime value resolved at setup. Reading
+    // the disk profile here must never pretend a pending mode is already active.
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    let mode = resolve_runtime_mode(&app_data);
-    Ok(RuntimeModeInfo {
-        runtime_id: mode.as_str().into(),
-        sidecar_launch: should_spawn_sidecar(mode),
-        session_immutable: true,
-    })
+    let pending = load_runtime_profile(&app_data);
+    Ok(runtime_mode_info(state.mode, pending.as_ref()))
 }
 
 // Gate C §5.2 — mode switch primitive. It persists the NEXT profile and never
-// hot-swaps the current session (session immutable). Gate D will add the
-// user-facing switch UX + explicit restart.
+// hot-swaps the current session (session immutable). The response keeps
+// `activeRuntimeId` unchanged so the UI shows the real data location and an
+// explicit restart requirement until the restart happens.
 #[tauri::command]
 fn set_desktop_runtime_mode(
     app: AppHandle,
+    state: State<'_, DesktopState>,
     runtime_id: String,
 ) -> Result<RuntimeModeInfo, String> {
     if !runtime_mode::is_desktop_runtime_id(&runtime_id) {
@@ -247,15 +269,11 @@ fn set_desktop_runtime_mode(
     }
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let profile = RuntimeProfile {
-        runtime_id: runtime_id.clone(),
+        runtime_id,
     };
     save_runtime_profile(&app_data, &profile)?;
-    let mode = parse_runtime_mode(Some(&profile));
-    Ok(RuntimeModeInfo {
-        runtime_id: mode.as_str().into(),
-        sidecar_launch: should_spawn_sidecar(mode),
-        session_immutable: true,
-    })
+    let pending = load_runtime_profile(&app_data);
+    Ok(runtime_mode_info(state.mode, pending.as_ref()))
 }
 
 #[tauri::command]
@@ -318,8 +336,27 @@ async fn install_available_update(app: AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+// Gate D §P14 — provider administration is desktop-local only. The renderer
+// is not a security boundary: even if the UI hides these controls in remote
+// mode, a remote-mode renderer must never read or mutate local provider
+// settings / secrets, and desktop-remote never owns a local Core to restart.
+fn ensure_local_mode(mode: RuntimeMode) -> Result<(), String> {
+    if mode != RuntimeMode::DesktopLocal {
+        return Err("this action is only available in desktop-local mode".into());
+    }
+    Ok(())
+}
+
+fn require_desktop_local(state: &State<'_, DesktopState>) -> Result<(), String> {
+    ensure_local_mode(state.mode)
+}
+
 #[tauri::command]
-fn desktop_provider_settings(app: AppHandle) -> Result<ProviderSettings, String> {
+fn desktop_provider_settings(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<ProviderSettings, String> {
+    require_desktop_local(&state)?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     Ok(load_provider_settings(&app_data))
 }
@@ -327,8 +364,10 @@ fn desktop_provider_settings(app: AppHandle) -> Result<ProviderSettings, String>
 #[tauri::command]
 fn set_desktop_provider_settings(
     app: AppHandle,
+    state: State<'_, DesktopState>,
     settings: ProviderSettings,
 ) -> Result<ProviderSettings, String> {
+    require_desktop_local(&state)?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let normalized = normalize_provider_settings(settings)?;
     save_provider_settings(&app_data, &normalized)?;
@@ -336,7 +375,11 @@ fn set_desktop_provider_settings(
 }
 
 #[tauri::command]
-fn provider_secret_status(kind: String) -> Result<ProviderSecretStatus, String> {
+fn provider_secret_status(
+    kind: String,
+    state: State<'_, DesktopState>,
+) -> Result<ProviderSecretStatus, String> {
+    require_desktop_local(&state)?;
     let username = secret_username(&kind)?;
     let entry = match Entry::new(KEYRING_SERVICE, username) {
         Ok(entry) => entry,
@@ -361,7 +404,12 @@ fn provider_secret_status(kind: String) -> Result<ProviderSecretStatus, String> 
 }
 
 #[tauri::command]
-fn set_provider_secret(kind: String, secret: String) -> Result<ProviderSecretStatus, String> {
+fn set_provider_secret(
+    kind: String,
+    secret: String,
+    state: State<'_, DesktopState>,
+) -> Result<ProviderSecretStatus, String> {
+    require_desktop_local(&state)?;
     let value = secret.trim();
     if value.is_empty() {
         return Err("secret cannot be empty".into());
@@ -376,7 +424,11 @@ fn set_provider_secret(kind: String, secret: String) -> Result<ProviderSecretSta
 }
 
 #[tauri::command]
-fn delete_provider_secret(kind: String) -> Result<ProviderSecretStatus, String> {
+fn delete_provider_secret(
+    kind: String,
+    state: State<'_, DesktopState>,
+) -> Result<ProviderSecretStatus, String> {
+    require_desktop_local(&state)?;
     let entry = secret_entry(&kind)?;
     if entry.get_password().is_ok() {
         entry.delete_credential().map_err(|error| error.to_string())?;
@@ -572,9 +624,7 @@ fn restart_desktop_core(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<RuntimeInfo, String> {
-    if state.mode != RuntimeMode::DesktopLocal {
-        return Err("desktop core can only be restarted in desktop-local mode".into());
-    }
+    require_desktop_local(&state)?;
     stop_core(&state.child);
     match spawn_core(&app, state.child.clone(), state.mode) {
         Ok(runtime) => {
@@ -617,11 +667,13 @@ pub fn run() {
             } else {
                 runtime_remote(app.handle(), mode)
             };
+            let broker = RemoteBroker::new(Arc::new(KeyringStore))
+                .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
             app.manage(DesktopState {
                 runtime: Mutex::new(runtime),
                 child: slot_for_setup.clone(),
                 mode,
-                remote: Mutex::new(None),
+                broker,
             });
             Ok(())
         })
@@ -657,4 +709,54 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Interest Growth desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runtime_mode::RUNTIME_ID_DESKTOP_LOCAL;
+
+    // Gate D §P10 — active/pending runtime separation.
+    #[test]
+    fn active_local_with_no_pending_profile() {
+        let info = runtime_mode_info(RuntimeMode::DesktopLocal, None);
+        assert_eq!(info.active_runtime_id, RUNTIME_ID_DESKTOP_LOCAL);
+        assert_eq!(info.pending_runtime_id, RUNTIME_ID_DESKTOP_LOCAL);
+        assert!(!info.restart_required);
+        assert!(info.session_immutable);
+    }
+
+    #[test]
+    fn persist_remote_pending_keeps_active_local_and_requires_restart() {
+        let pending = RuntimeProfile {
+            runtime_id: runtime_mode::RUNTIME_ID_DESKTOP_REMOTE.into(),
+        };
+        let info = runtime_mode_info(RuntimeMode::DesktopLocal, Some(&pending));
+        assert_eq!(info.active_runtime_id, RUNTIME_ID_DESKTOP_LOCAL);
+        assert_eq!(info.pending_runtime_id, runtime_mode::RUNTIME_ID_DESKTOP_REMOTE);
+        assert!(info.restart_required, "restart must be required after persisting a switch");
+    }
+
+    #[test]
+    fn after_restart_active_matches_pending_and_no_restart_needed() {
+        let pending = RuntimeProfile {
+            runtime_id: runtime_mode::RUNTIME_ID_DESKTOP_REMOTE.into(),
+        };
+        let info = runtime_mode_info(RuntimeMode::DesktopRemote, Some(&pending));
+        assert_eq!(info.active_runtime_id, runtime_mode::RUNTIME_ID_DESKTOP_REMOTE);
+        assert_eq!(info.pending_runtime_id, runtime_mode::RUNTIME_ID_DESKTOP_REMOTE);
+        assert!(!info.restart_required);
+    }
+
+    // Gate D §P14 — provider administration is desktop-local only.
+    #[test]
+    fn local_mode_permits_provider_administration() {
+        assert!(ensure_local_mode(RuntimeMode::DesktopLocal).is_ok());
+    }
+
+    #[test]
+    fn remote_mode_denies_provider_administration() {
+        let error = ensure_local_mode(RuntimeMode::DesktopRemote).unwrap_err();
+        assert!(error.contains("desktop-local"));
+    }
 }

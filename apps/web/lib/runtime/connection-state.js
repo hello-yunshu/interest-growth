@@ -28,6 +28,11 @@ export class ConnectionStateMachine {
     return this.state === 'Connected';
   }
 
+  // Terminal states are blocking and never auto-flip back to Connected.
+  get isTerminal() {
+    return TERMINAL_STATES.has(this.state);
+  }
+
   // Mutations are only allowed when the connection is honestly Connected.
   get mutationsAllowed() {
     return this.state === 'Connected';

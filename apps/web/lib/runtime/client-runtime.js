@@ -144,12 +144,31 @@ export async function getRuntimeLabels() {
 // Gate C §18 — user copy is derived from the runtime descriptor, never
 // hardcoded per feature page. Offline/remote copy never claims "content is
 // safe on this device".
-export function buildRuntimeLabels(client) {
+//
+// Gate D §P13 — remote labels react to the real connection state so the UI
+// never shows "已连接" while the transport is Offline / LoginExpired /
+// IdentityChanged. An explicit `connectionState` may be passed (for live UI
+// updates); otherwise the client's current state machine is used.
+const REMOTE_STATE_META = {
+  Initializing: { status: '正在初始化', footer: '连接中' },
+  Connected: { status: '已连接', footer: '在线' },
+  Reconnecting: { status: '重新连接中', footer: '重新连接中' },
+  Offline: { status: '离线', footer: '离线' },
+  LoginExpired: { status: '登录已过期', footer: '登录已过期' },
+  IdentityChanged: { status: '服务器身份变化', footer: '服务器身份变化' },
+  UpdateRequired: { status: '需要更新客户端', footer: '需要更新客户端' },
+  UnsupportedServer: { status: '服务器不受支持', footer: '服务器不受支持' },
+  LocalCoreError: { status: '本地服务异常', footer: '本地服务异常' },
+};
+
+export function buildRuntimeLabels(client, connectionState) {
   const remote = client?.descriptor?.dataLocation === 'self-hosted-server';
   if (remote) {
+    const state = connectionState || client?.connection?.state || 'Initializing';
+    const meta = REMOTE_STATE_META[state] || { status: state, footer: state };
     return {
       dataLocation: 'self-hosted-server',
-      dataStatusLabel: '自托管服务器 · 已连接',
+      dataStatusLabel: `自托管服务器 · ${meta.status}`,
       bootCopy: '正在连接你的自托管服务器',
       searchEmptyTitle: '正在搜索服务器内容',
       searchEmptyHint: '内容仍保存在你的自托管服务器。',
@@ -157,7 +176,7 @@ export function buildRuntimeLabels(client) {
       noteSavedCopy: '学习笔记已保存到自托管服务器。',
       providerCopy: '你的内容由自托管服务器保存',
       offlineCopy: '暂时连接不到你的自托管服务器。当前版本不会在离线状态提交修改。',
-      dataFooter: '自托管服务器 · 在线',
+      dataFooter: `自托管服务器 · ${meta.footer}`,
       knowledgeHeadline: '原始资料留在自托管服务器，检索索引随时可以重建。',
       systemTitle: '服务器连接、能力开关与模型通道。',
       systemBadge: '服务器连接',

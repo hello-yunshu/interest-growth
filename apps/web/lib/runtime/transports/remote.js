@@ -10,6 +10,30 @@
 // Activation is explicit: the transport is only active in a desktop-remote
 // runtime that resolves to the native broker, so the UI never claims a remote
 // connection that cannot be proven.
+//
+// The connection state machine genuinely controls this transport (Gate D
+// §P12): mutations are blocked fail-closed in terminal states and real
+// request outcomes (network error / 401 / success) update the state, so the
+// UI is reactive and no mutation can slip through in an unproven state.
+import { CONNECTION_STATES } from '../contract.js';
+
+const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+// Gate D §P17 — upload bound matches the native broker / server product limit.
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_UPLOAD_MIB = MAX_UPLOAD_BYTES / (1024 * 1024);
+
+// Gate D §P15 — positive request header allowlist. A renderer may only set
+// scoping/caching hints; it can never set Authorization, Content-Type,
+// Cookie, Host, Origin, Referer, Proxy-Authorization, Connection,
+// Transfer-Encoding, Sec-* or any X-Forwarded-* header.
+const ALLOWED_REQUEST_HEADERS = new Set([
+  'accept',
+  'x-pg-interest-area',
+  'range',
+  'if-none-match',
+  'if-modified-since',
+]);
 
 function encodeBytesToBase64(bytes) {
   if (typeof btoa === 'function') {
@@ -42,12 +66,13 @@ function responseFromNative({ status, bodyBase64 = '', contentType = '' }, extra
   });
 }
 
-// Renderer-supplied headers may carry scoping hints (X-PG-Interest-Area) but
-// must never attempt to override the native Authorization/Content-Type.
+// Renderer-supplied headers are a positive allowlist (Gate D §P15): only
+// scoping/caching hints pass through. Authorization and Content-Type are
+// decided natively, and hop-by-hop / security headers are never forwarded.
 function sanitizeHeaders(headers = {}) {
   const clean = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (!/^authorization$/i.test(key) && !/^content-type$/i.test(key)) {
+    if (ALLOWED_REQUEST_HEADERS.has(String(key).toLowerCase())) {
       clean[key] = value;
     }
   }
@@ -110,22 +135,54 @@ export class RemoteTransport {
     if (!this.active) {
       throw new Error('remote transport is not active in this build');
     }
+    const method = String(options.method || 'GET').toUpperCase();
+    if (MUTATION_METHODS.has(method) && this.connection && !this.connection.mutationsAllowed) {
+      // Fail-closed at the transport layer: terminal states never mutate the
+      // canonical server, even if some UI control forgot to disable itself.
+      throw new Error(`mutations are blocked while the remote connection is ${this.connection.state}`);
+    }
     const body = options.body;
     if (typeof FormData !== 'undefined' && body instanceof FormData) {
       return this._upload(path, options);
     }
-    const method = String(options.method || 'GET').toUpperCase();
     const contentType =
       typeof body === 'string'
         ? options.headers?.['Content-Type'] || 'application/json'
         : undefined;
-    const native = await this.broker.apiRequest(path, {
-      method,
-      body: typeof body === 'string' ? body : undefined,
-      contentType,
-      headers: sanitizeHeaders(options.headers),
-    });
+    let native;
+    try {
+      native = await this.broker.apiRequest(path, {
+        method,
+        body: typeof body === 'string' ? body : undefined,
+        contentType,
+        headers: sanitizeHeaders(options.headers),
+      });
+    } catch (error) {
+      this._recordNetworkFailure();
+      throw error;
+    }
+    this._recordOutcome(native?.status);
     return responseFromNative(native);
+  }
+
+  // Gate D §P12 — a failed request moves the state toward Reconnecting/Offline
+  // unless the state is already terminal (those never auto-flip).
+  _recordNetworkFailure() {
+    if (this.connection && !this.connection.isTerminal) {
+      this.connection.handle('NETWORK_FAIL');
+    }
+  }
+
+  // Gate D §P12 — a final 401 means the native single-flight refresh already
+  // failed (LoginExpired); a success after a loss proves the connection again.
+  // Terminal states (IdentityChanged/UnsupportedServer/...) never auto-flip.
+  _recordOutcome(status) {
+    if (!this.connection || this.connection.isTerminal) return;
+    if (Number(status) === 401) {
+      this.connection.handle('REFRESH_FAIL');
+    } else if (this.connection.state !== 'Connected') {
+      this.connection.handle('RECONNECT_OK');
+    }
   }
 
   async _upload(path, options) {
@@ -142,19 +199,31 @@ export class RemoteTransport {
     if (!file) {
       throw new Error('remote upload requires a file field');
     }
+    // Gate D §P17 — bound the payload before materialising a base64 copy in
+    // memory (the native broker re-checks the encoded length and decoded size).
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw new Error(`file exceeds the ${MAX_UPLOAD_MIB} MiB upload limit`);
+    }
     const fileBytes = new Uint8Array(await file.arrayBuffer());
     const fields = {};
     for (const [key, value] of formData.entries()) {
       if (key === fileField) continue;
       if (typeof value === 'string') fields[key] = value;
     }
-    const native = await this.broker.apiUpload(path, {
-      fileField,
-      fileName: file.name || 'upload.bin',
-      fileBytesB64: encodeBytesToBase64(fileBytes),
-      fileContentType: file.type || 'application/octet-stream',
-      fields,
-    });
+    let native;
+    try {
+      native = await this.broker.apiUpload(path, {
+        fileField,
+        fileName: file.name || 'upload.bin',
+        fileBytesB64: encodeBytesToBase64(fileBytes),
+        fileContentType: file.type || 'application/octet-stream',
+        fields,
+      });
+    } catch (error) {
+      this._recordNetworkFailure();
+      throw error;
+    }
+    this._recordOutcome(native?.status);
     return responseFromNative(native);
   }
 }
