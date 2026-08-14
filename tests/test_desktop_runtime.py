@@ -56,8 +56,9 @@ def test_desktop_runtime_files_and_static_export_config_exist(project_root):
 
 def test_no_updater_private_key_in_repository(project_root):
     needles = ("TAURI_SIGNING_" + "PRIVATE_KEY=", "-----BEGIN " + "PRIVATE KEY-----")
+    local_tooling = {".git", ".venv", "venv", "node_modules", "__pycache__"}
     for path in project_root.rglob("*"):
-        if not path.is_file() or ".git" in path.parts:
+        if not path.is_file() or any(part in local_tooling for part in path.parts):
             continue
         if path.suffix.lower() not in {".md", ".json", ".toml", ".py", ".yml", ".yaml", ".js", ".rs", ".example"}:
             continue
