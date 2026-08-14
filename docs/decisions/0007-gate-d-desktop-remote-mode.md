@@ -81,14 +81,23 @@ belongs to a deliberate server-admin surface in a later milestone.
 
 ## Verification
 
-- ClientRuntime pure contract tests (Node built-in runner): 41 passed,
-  including remote-transport path validation and mutation-retry safety.
-- Rust runtime-mode + remote-transport tests: 12 passed (`cargo test --locked
-  --lib`) covering default desktop-local, desktop-remote never spawning the
-  sidecar, invalid-profile store isolation, enrollment-origin
-  normalization/validation and refresh-key namespace isolation.
+- ClientRuntime pure contract tests (Node built-in runner): 59 passed,
+  including remote-transport connection-state guards, positive header
+  allowlist, upload bounds, and Gate E mobile capability vocabulary +
+  desktop-only gate.
+- Rust runtime-mode + remote-transport + native broker integration tests: 39
+  passed (`cargo test --locked --lib`) covering runtime-mode decisions
+  (default/explicit desktop-local, desktop-remote never spawning the sidecar,
+  invalid-profile store isolation, active/pending runtime separation,
+  provider-admin gating), enrollment-origin normalization/validation,
+  refresh-key namespace isolation, and deterministic native broker tests
+  against an in-memory server: redirects never followed, compatibility
+  rejects, identity before credentials, single-flight refresh with
+  keyring-failure recovery, truthful logout revoke results, header positive
+  allowlist and bounded uploads.
 - Gate C/D desktop-local compatibility and CSP audits: PASS; no CSP relaxation
   to arbitrary HTTPS/`connect-src *`.
+- SOURCE_MANIFEST integrity: deterministic generation + CI check PASS.
 - Outstanding evidence (NOT RUN, not PASS): real public-TLS enrollment,
   packaged Windows/macOS local + remote regression, Android/APK, cross-device
   proof — tracked in `docs/roadmap/V0_7_SELF_HOSTED_CROSS_DEVICE_PLAN.md`.
