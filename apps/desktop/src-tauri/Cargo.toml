@@ -35,3 +35,8 @@ url = "2"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 base64 = "0.22"
+
+[dev-dependencies]
+# Deterministic local broker integration tests (Gate D §P24) spin up a raw
+# tokio TCP server so no public network / external service is required.
+tokio = { version = "1", features = ["net", "io-util"] }

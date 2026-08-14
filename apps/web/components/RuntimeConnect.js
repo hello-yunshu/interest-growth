@@ -9,7 +9,7 @@
 // app restart (Gate C §5.3 session immutable). All secrets stay native: the
 // renderer only submits owner passwords / relative API paths, and never
 // receives a refresh credential.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer, useState } from 'react';
 import {
   getDesktopRuntimeMode,
   setDesktopRuntimeMode,
@@ -26,6 +26,11 @@ import {
   getDesktopRuntime,
 } from '../lib/api';
 import { getClientRuntime } from '../lib/runtime/client-runtime.js';
+import {
+  initialRuntimeConnectState,
+  runtimeConnectReducer,
+  isRemoteActive,
+} from '../lib/runtime/runtime-connect-controller.js';
 import { StatusChip, RecordsTable } from './BeautifulUI';
 
 const CONNECTION_META = {
@@ -57,9 +62,10 @@ function formatSeen(value) {
 
 export default function RuntimeConnect({ onRuntimeChanged }) {
   const [desktop, setDesktop] = useState(false);
-  const [mode, setMode] = useState(null);
-  const [pendingMode, setPendingMode] = useState(null);
+  const [runtimeState, dispatch] = useReducer(runtimeConnectReducer, { activeRuntimeId: 'desktop-local' }, initialRuntimeConnectState);
   const [confirmTarget, setConfirmTarget] = useState(null);
+  // "稍后重启" only hides the reminder; the persisted pending switch stays.
+  const [dismissedRestart, setDismissedRestart] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState({ tone: 'success', text: '' });
 
@@ -77,7 +83,8 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
   const [revokeTarget, setRevokeTarget] = useState(null);
   const [revokePassword, setRevokePassword] = useState('');
 
-  const isRemote = mode?.runtimeId === 'desktop-remote';
+  const isRemote = isRemoteActive(runtimeState);
+  const needsRestart = runtimeState.restartRequired && !dismissedRestart;
 
   function flash(text, tone = 'success') {
     setMsg({ tone, text });
@@ -126,9 +133,15 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       } catch { /* not desktop */ }
       try {
         const modeInfo = await getDesktopRuntimeMode();
-        if (active) setMode(modeInfo);
+        // Gate D §P10 — native is the active source of truth: `active` is the
+        // process-lifetime mode, `pending` is the NEXT profile after restart.
+        if (active) dispatch({
+          type: 'MODE_LOADED',
+          activeRuntimeId: modeInfo?.activeRuntimeId,
+          pendingRuntimeId: modeInfo?.pendingRuntimeId,
+        });
       } catch {
-        if (active) setMode({ runtimeId: 'desktop-local', sessionImmutable: true });
+        if (active) dispatch({ type: 'MODE_LOADED', activeRuntimeId: 'desktop-local' });
       }
       try {
         const status = await remoteSessionStatus();
@@ -153,7 +166,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
   }, [isRemote, session, devicesLoaded]);
 
   async function chooseMode(target) {
-    if (busy || target === mode?.runtimeId) return;
+    if (busy || target === runtimeState.activeRuntimeId) return;
     setConfirmTarget(target);
   }
 
@@ -165,8 +178,13 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setMsg({ tone: 'success', text: '' });
     try {
       const info = await setDesktopRuntimeMode(target);
-      setPendingMode(info?.runtimeId || target);
-      setMode(info);
+      // Only the pending mode changes; the active mode stays immutable until a
+      // real restart applies it (Gate D §P10/P25).
+      dispatch({
+        type: 'SWITCH_PERSISTED',
+        pendingRuntimeId: info?.pendingRuntimeId || info?.activeRuntimeId || target,
+      });
+      setDismissedRestart(false);
       flash(`已保存运行时切换。切换将在应用重启后生效。`);
     } catch (error) {
       flash(error.message, 'error');
@@ -297,12 +315,21 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setBusy(true);
     setMsg({ tone: 'success', text: '' });
     try {
-      await remoteLogout(revoke);
+      // Gate D §P20 — the native result is truthful: a failed network revoke
+      // reports `revoked: false` and the UI must not claim the device was
+      // revoked. Local credentials are always removed either way.
+      const result = await remoteLogout(revoke);
       setSession(null);
       setDevices([]);
       setDevicesLoaded(false);
       setConnectionState('Initializing');
-      flash(revoke ? '已退出登录并撤销这台设备。' : '已退出登录。');
+      if (revoke && result && !result.revoked) {
+        flash('已从本机移除登录信息，但服务器端设备撤销未确认。', 'error');
+      } else if (revoke) {
+        flash('已退出登录并撤销这台设备。');
+      } else {
+        flash('已退出登录。');
+      }
       onRuntimeChanged?.();
     } catch (error) {
       flash(error.message, 'error');
@@ -355,8 +382,6 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     </section>;
   }
 
-  const needsRestart = pendingMode && pendingMode !== mode?.runtimeId;
-
   return <div className="stack">
     <section className="card">
       <div className="cardHeader">
@@ -365,7 +390,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
           <h3>数据保存在哪里</h3>
           <p className="muted">运行时模式决定数据源与安全边界。切换会保存为下一次启动的配置，并需要重启应用后生效。</p>
         </div>
-        {mode && <StatusChip tone={isRemote ? 'accent' : 'success'}>{isRemote ? '自托管服务器' : '本机'}</StatusChip>}
+        <StatusChip tone={isRemote ? 'accent' : 'success'}>{isRemote ? '自托管服务器' : '本机'}</StatusChip>
       </div>
       <div className="runtimeModeGrid">
         <button type="button" className={`runtimeModeCard ${!isRemote ? 'is-active' : ''}`} onClick={() => chooseMode('desktop-local')} disabled={busy}>
@@ -390,10 +415,10 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       )}
       {needsRestart && (
         <div className="notice">
-          <strong>需要重启应用才能进入 {pendingMode === 'desktop-remote' ? '自托管服务器' : '本机'} 模式。</strong>
+          <strong>需要重启应用才能进入 {runtimeState.pendingRuntimeId === 'desktop-remote' ? '自托管服务器' : '本机'} 模式。</strong>
           <span> 重启后当前会话将切换到所选数据源；本机数据与服务器数据保持分离，不会被自动合并。</span>
           <div className="row sectionTop">
-            <button className="secondary" onClick={() => setPendingMode(null)} disabled={busy}>稍后重启</button>
+            <button className="secondary" onClick={() => setDismissedRestart(true)} disabled={busy}>稍后重启</button>
             <button onClick={doRestart} disabled={busy}>{busy ? '正在重启…' : '立即重启'}</button>
           </div>
         </div>

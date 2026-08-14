@@ -127,11 +127,12 @@ test('android-remote never reaches a desktop/local path; mobile adapters are pla
   // Frozen contract §2 assigns the renewal credential to Android Keystore.
   assert.equal(android.capabilities.canUseNativeSecureStore, true);
   assert.equal(android.capabilities.canOpenExternalUrl, true);
-  // Mobile adapters are declared by the contract but planned, not yet built.
-  assert.equal(android.capabilities.canUseDocumentPicker, true);
-  assert.equal(android.capabilities.canUseShareSheet, true);
-  assert.equal(android.capabilities.supportsLifecycleSuspendResume, true);
-  assert.equal(android.capabilities.canUseBiometricUnlock, true);
+  // Gate D §P21 — mobile adapters are declared by the contract but planned,
+  // not yet built. The descriptor must NOT enable features that do not exist.
+  assert.equal(android.capabilities.canUseDocumentPicker, false);
+  assert.equal(android.capabilities.canUseShareSheet, false);
+  assert.equal(android.capabilities.supportsLifecycleSuspendResume, false);
+  assert.equal(android.capabilities.canUseBiometricUnlock, false);
 });
 
 test('browser-remote never reaches a desktop/local path either', () => {
@@ -486,4 +487,141 @@ test('remote transport uploads a file via the native broker with base64 bytes', 
   assert.equal(calls[0].opts.fileContentType, 'text/plain');
   assert.equal(calls[0].opts.fileBytesB64, Buffer.from('hello remote').toString('base64'));
   assert.deepEqual(calls[0].opts.fields, { topic_id: 't1' });
+});
+
+// ---- Gate D §P12 transport-driven connection state --------------------
+test('remote transport blocks mutations fail-closed in terminal states', async () => {
+  const calls = [];
+  const broker = {
+    apiRequest: async (path, opts) => {
+      calls.push(path);
+      return { status: 200, bodyBase64: '', contentType: '' };
+    },
+  };
+  const m = new ConnectionStateMachine({ initialState: 'Connected' });
+  m.handle('REFRESH_FAIL'); // -> LoginExpired (terminal)
+  const transport = new RemoteTransport({ broker, active: true, connection: m });
+  await assert.rejects(
+    transport.request('/api/questions', { method: 'POST', body: '{}' }),
+    /mutations are blocked/,
+  );
+  // Uploads are mutations too and must be blocked before reaching the broker.
+  const form = new FormData();
+  form.append('file', new File(['x'], 'x.txt'));
+  await assert.rejects(
+    transport.request('/api/knowledge/sources', { method: 'POST', body: form }),
+    /mutations are blocked/,
+  );
+  // Reads remain allowed in terminal states (no mutation occurs).
+  const response = await transport.request('/api/system/capabilities', { method: 'GET' });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+});
+
+test('identity-changed blocks mutations even while reads still work', async () => {
+  const broker = {
+    apiRequest: async () => ({ status: 200, bodyBase64: '', contentType: '' }),
+  };
+  const m = new ConnectionStateMachine({ initialState: 'Connected' });
+  m.handle('IDENTITY_MISMATCH'); // -> IdentityChanged (terminal)
+  const transport = new RemoteTransport({ broker, active: true, connection: m });
+  await assert.rejects(transport.request('/api/questions', { method: 'DELETE' }), /mutations are blocked/);
+  assert.equal(transport.connection.state, 'IdentityChanged'); // never auto-flips
+});
+
+test('remote transport records real outcomes into the state machine', async () => {
+  // A network failure moves Connected -> Reconnecting; a later success heals it.
+  let fail = true;
+  const broker = {
+    apiRequest: async () => {
+      if (fail) throw new Error('connection reset by peer');
+      return { status: 200, bodyBase64: '', contentType: '' };
+    },
+  };
+  const m = new ConnectionStateMachine({ initialState: 'Connected' });
+  const transport = new RemoteTransport({ broker, active: true, connection: m });
+  await assert.rejects(transport.request('/api/system/capabilities'), /connection reset/);
+  assert.equal(m.state, 'Reconnecting');
+  fail = false;
+  await transport.request('/api/system/capabilities');
+  assert.equal(m.state, 'Connected');
+});
+
+test('remote transport maps a final 401 to LoginExpired (single-flight already tried)', async () => {
+  const broker = {
+    apiRequest: async () => ({ status: 401, bodyBase64: '', contentType: '' }),
+  };
+  const m = new ConnectionStateMachine({ initialState: 'Connected' });
+  const transport = new RemoteTransport({ broker, active: true, connection: m });
+  await transport.request('/api/notes');
+  assert.equal(m.state, 'LoginExpired');
+  assert.equal(m.mutationsAllowed, false);
+});
+
+// ---- Gate D §P15 positive header allowlist ----------------------------
+test('remote transport strips dangerous renderer headers via positive allowlist', async () => {
+  const calls = [];
+  const broker = {
+    apiRequest: async (path, opts) => {
+      calls.push(opts.headers);
+      return { status: 200, bodyBase64: '', contentType: '' };
+    },
+  };
+  const transport = new RemoteTransport({ broker, active: true });
+  await transport.request('/api/notes', {
+    headers: {
+      'X-PG-Interest-Area': 'a1',
+      Accept: 'application/json',
+      Authorization: 'Bearer stolen',
+      Cookie: 'session=evil',
+      Host: 'evil.example.com',
+      'X-Forwarded-For': '1.2.3.4',
+      'Content-Type': 'application/xml',
+      'If-None-Match': '"v1"',
+      'X-Custom-Junk': 'nope',
+    },
+  });
+  const sent = calls[0];
+  assert.deepEqual(Object.keys(sent).sort(), ['Accept', 'If-None-Match', 'X-PG-Interest-Area']);
+  assert.equal(sent['X-PG-Interest-Area'], 'a1');
+  assert.equal(sent.Authorization, undefined);
+  assert.equal(sent.Cookie, undefined);
+  assert.equal(sent.Host, undefined);
+  assert.equal(sent['X-Forwarded-For'], undefined);
+  assert.equal(sent['Content-Type'], undefined);
+  assert.equal(sent['X-Custom-Junk'], undefined);
+});
+
+// ---- Gate D §P17 client-side upload bound -----------------------------
+test('remote transport rejects oversized uploads before touching the broker', async () => {
+  let calls = 0;
+  const broker = {
+    apiUpload: async () => {
+      calls += 1;
+      return { status: 200, bodyBase64: '', contentType: '' };
+    },
+  };
+  const transport = new RemoteTransport({ broker, active: true });
+  const overLimit = new Uint8Array(100 * 1024 * 1024 + 1);
+  const form = new FormData();
+  // Blob size is enforced client-side without allocating an extra ArrayBuffer.
+  form.append('file', new Blob([overLimit.buffer], { type: 'application/pdf' }));
+  await assert.rejects(transport.request('/api/knowledge/sources', { method: 'POST', body: form }), /upload limit/);
+  assert.equal(calls, 0);
+});
+
+test('remote transport accepts an in-limit upload and bounds the encoded copy', async () => {
+  const calls = [];
+  const broker = {
+    apiUpload: async (path, opts) => {
+      calls.push(opts);
+      return { status: 200, bodyBase64: '', contentType: '' };
+    },
+  };
+  const transport = new RemoteTransport({ broker, active: true });
+  const form = new FormData();
+  form.append('file', new File([new Uint8Array(1024)], 'medium.pdf', { type: 'application/pdf' }));
+  await transport.request('/api/knowledge/sources', { method: 'POST', body: form });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].fileName, 'medium.pdf');
 });

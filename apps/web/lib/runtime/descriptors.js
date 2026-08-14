@@ -31,6 +31,12 @@ function nativeCapabilities(platform) {
 // no window chrome) and adds mobile-specific adapters that are PLANNED, not
 // yet implemented. `canUseNativeSecureStore` is true because the frozen
 // contract (§2) assigns the renewal credential to Android Keystore.
+//
+// Gate D §P21 — all planned-but-not-implemented mobile adapters are set to
+// false. The frozen contract declares them as "supported by contract", but
+// the runtime descriptor reports what is actually available so the UI never
+// enables a feature that does not exist (no document picker, no share sheet,
+// no lifecycle suspend/resume, no biometric unlock until Gate E hardware).
 function mobileCapabilities() {
   return {
     canLaunchSidecar: false,
@@ -42,10 +48,10 @@ function mobileCapabilities() {
     canCheckDesktopUpdater: false,
     canAdminLocalProviderSecret: false,
     supportsWindowControls: false,
-    canUseDocumentPicker: true, // planned Gate E adapter
-    canUseShareSheet: true, // planned Gate E adapter
-    supportsLifecycleSuspendResume: true, // planned Gate E lifecycle contract
-    canUseBiometricUnlock: true, // planned Gate E optional local unlock gate
+    canUseDocumentPicker: false, // Gate E planned; not available in v0.7
+    canUseShareSheet: false, // Gate E planned; not available in v0.7
+    supportsLifecycleSuspendResume: false, // Gate E planned; not available in v0.7
+    canUseBiometricUnlock: false, // Gate E planned; not available in v0.7
   };
 }
 
