@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Gate E §6.7 — Android network security is fail-closed.
+
+  The Android remote runtime only ever talks to a self-hosted HTTPS server
+  (public / LAN / VPN enrollment). Cleartext HTTP is NOT permitted for any
+  destination, including loopback: the Android shell never uses a local
+  loopback HTTP origin (unlike the desktop dev server). Therefore the base
+  config denies all cleartext and there is no certificate-validation bypass.
+
+  Build-type-specific loosening (if any) must live in a debug-only overlay,
+  never here. This file deliberately has no cleartextTrafficPermitted=true
+  and no trust-anchor override.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

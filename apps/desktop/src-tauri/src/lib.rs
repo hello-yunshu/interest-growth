@@ -20,7 +20,11 @@ use uuid::Uuid;
 mod remote;
 mod runtime_mode;
 
-use remote::{KeyringStore, RemoteBroker};
+use remote::RemoteBroker;
+#[cfg(not(target_os = "android"))]
+use remote::KeyringStore;
+#[cfg(target_os = "android")]
+use remote::AndroidKeystoreStore;
 use runtime_mode::{parse_runtime_mode, should_spawn_sidecar, RuntimeMode, RuntimeProfile};
 
 const KEYRING_SERVICE: &str = "app.psychologygrowth.desktop";
@@ -170,6 +174,8 @@ fn save_runtime_profile(app_data: &Path, profile: &RuntimeProfile) -> Result<(),
     std::fs::rename(&temp, &path).map_err(|error| error.to_string())
 }
 
+// Desktop-only: the Android shell always uses android_remote_mode() instead.
+#[cfg(not(target_os = "android"))]
 fn resolve_runtime_mode(app_data: &Path) -> RuntimeMode {
     parse_runtime_mode(load_runtime_profile(app_data).as_ref())
 }
@@ -607,7 +613,7 @@ fn runtime_remote(app: &AppHandle, mode: RuntimeMode) -> RuntimeInfo {
         runtime_id: mode.as_str().into(),
         endpoint: String::new(),
         token: String::new(),
-        status: "mode:desktop-remote:sidecar-disabled".into(),
+        status: format!("mode:{}:sidecar-disabled", mode.as_str()),
         data_dir: app
             .path()
             .app_data_dir()
@@ -639,34 +645,63 @@ fn restart_desktop_core(
     }
 }
 
+// Gate E — the mobile entry point macro generates the Android JNI entry that
+// the runtime uses to drive the app on-device. Without it the built .so lacks
+// the required `Java_app_tauri_plugin_PluginManager_handlePluginResponse`
+// symbol and the Gradle `rustBuild*` task fails the library validation step.
+// On desktop this cfg is false and `run()` is a plain function.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let child_slot: Arc<Mutex<Option<CommandChild>>> = Arc::new(Mutex::new(None));
     let slot_for_setup = child_slot.clone();
-    let slot_for_exit = child_slot.clone();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+    // Gate E §6.3 — single-instance and window-state are desktop-only plugins.
+    // The Android host has no OS-level single-instance and no desktop window to
+    // persist state for, so they are compiled out.
+    #[cfg(not(target_os = "android"))]
+    let slot_for_exit = child_slot.clone();
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }))
+            .plugin(tauri_plugin_window_state::Builder::default().build());
+    }
+
+    builder = builder
         .setup(move |app| {
-            let app_data = app.path().app_data_dir().unwrap_or_default();
-            let mode = resolve_runtime_mode(&app_data);
+            // Gate E §6.3 — the Android shell is always android-remote and
+            // never spawns a local Core. Desktop keeps its profile-driven mode.
+            #[cfg(target_os = "android")]
+            let mode = runtime_mode::android_remote_mode();
+            #[cfg(not(target_os = "android"))]
+            let mode = resolve_runtime_mode(&app.path().app_data_dir().unwrap_or_default());
             let runtime = if should_spawn_sidecar(mode) {
                 spawn_core(app.handle(), slot_for_setup.clone(), mode)
                     .unwrap_or_else(|error| runtime_error(app.handle(), &error, mode))
             } else {
                 runtime_remote(app.handle(), mode)
             };
+            // Gate E §6.4 — on Android the OS-backed Android Keystore is the
+            // credential store; on desktop the platform keyring is used.
+            #[cfg(target_os = "android")]
+            let broker = RemoteBroker::new(
+                AndroidKeystoreStore::new()
+                    .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
+            )
+            .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
+            #[cfg(not(target_os = "android"))]
             let broker = RemoteBroker::new(Arc::new(KeyringStore))
                 .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
             app.manage(DesktopState {
@@ -701,12 +736,19 @@ pub fn run() {
             remote::remote_session_status,
             remote::remote_verify_identity,
             remote::remote_logout,
-        ])
-        .on_window_event(move |_window, event| {
+        ]);
+    // Gate E §6.3 — the desktop window-lifecycle hook only exists on desktop.
+    // The Android host stops the (never-spawned) Core on nothing.
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder.on_window_event(move |_window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 stop_core(&slot_for_exit);
             }
-        })
+        });
+    }
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running Interest Growth desktop");
 }
