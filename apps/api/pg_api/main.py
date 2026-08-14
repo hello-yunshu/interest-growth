@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import init_db
 from .desktop_security import desktop_token_middleware
 from .area_context import interest_area_context_middleware
+from pg_shared.settings import get_settings, validate_settings
 from .remote_auth import (
     API_VERSION,
     MIN_CLIENT_VERSION,
@@ -26,6 +27,9 @@ from .routes import areas, career, content, cowriter, growth, knowledge, learnin
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Gate C/D §4.2 — fail-closed: a `remote` environment must not start with
+    # its remote API unauthenticated. Refuse to boot on a dangerous config.
+    validate_settings(get_settings())
     install_area_scoping_hooks()
     init_db()
     seed_domain_packs_and_default_area()

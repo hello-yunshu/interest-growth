@@ -159,6 +159,21 @@ The global connection state must distinguish:
 Remote error text must never claim that canonical data is stored on the
 current device.
 
+Two distinct identity notions are intentionally kept separate (Gate C/D §4.9):
+
+```text
+TLS certificate / PKI           = endpoint cryptographic identity
+server_instance_id              = application instance continuity identity
+```
+
+The `server_instance_id` probe (migration 15) is an application-instance
+continuity check: it confirms the same application instance is behind the URL
+across a fresh metadata GET and the subsequent login POST. It is NOT a
+substitute for TLS certificate validation and does not claim to eliminate
+every theoretical time-of-check/time-of-use between those two independent HTTP
+requests. Endpoint cryptographic identity is provided only by the TLS
+certificate/PKI validated by the OS/transport on HTTPS.
+
 ## 7. Backup/restore unit (frozen)
 
 The server persistent unit is one consistency unit:
