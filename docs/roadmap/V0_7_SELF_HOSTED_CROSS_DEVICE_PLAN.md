@@ -50,13 +50,13 @@ Gate C starts after the security/data-consistency items above are closed or expl
 - [x] Add secure native credential storage; do not use `localStorage` for renewal credentials.
 - [x] Give CSP/capabilities the minimum platform-specific remote origin and permissions.
 
-### Gate C verification (2026-08-13)
+### Gate C verification (2026-08-13, refreshed 2026-08-14)
 
-- [x] ClientRuntime pure contract tests (Node built-in runner): 41 passed (descriptors, compatibility, SemVer, URL normalization, connection state machine, storage namespace, credential store, retry safety, remote transport).
-- [x] Rust runtime-mode + remote-transport source tests: 12 passed (`cargo test --locked --lib`), covering default desktop-local, explicit desktop-local, desktop-remote never spawns sidecar, invalid profile never switches store, id validation, enrollment-origin normalization/validation and refresh-key namespace isolation.
+- [x] ClientRuntime pure contract tests (Node built-in runner): 59 passed (descriptors, compatibility, SemVer, URL normalization, connection state machine, storage namespace, credential store, retry safety, remote transport with connection-state guards, positive header allowlist, upload bounds, Gate E mobile capability vocabulary + desktop-only gate).
+- [x] Rust runtime-mode + remote-transport + native broker integration tests: 39 passed (`cargo test --locked --lib`), covering default desktop-local, explicit desktop-local, desktop-remote never spawns sidecar, invalid profile never switches store, active/pending runtime separation, provider-admin gating, id validation, enrollment-origin normalization/validation, refresh-key namespace isolation, plus deterministic broker tests (redirects never followed, compatibility rejects, identity before credentials, single-flight refresh with keyring-failure recovery, truthful logout revoke, header positive allowlist, bounded uploads).
 - [x] Server instance identity: 6 tests passed (fresh single identity, restart unchanged, second server distinct, migration 15 upgrade once, singleton index, display-name env).
 - [x] Main Python suite: 244 passed, including Gate B security/concurrency regressions; Native Execution Core standalone: 98 passed.
-- [x] Web ESLint and static production build: passed; Host verify, Native Core mirror sync, self-audit and strict Host cutover audit: passed.
+- [x] Web ESLint and static production build: passed; Host verify, Native Core mirror sync, self-audit and strict Host cutover audit: passed; SOURCE_MANIFEST integrity check: PASS.
 - [x] Desktop-local compatibility: existing install defaults to desktop-local; sidecar behavior, App Data, DB, keyring and provider settings unchanged.
 - [x] Desktop-remote decision: explicit runtime mode never spawns the sidecar; no silent fallback to a local store; remote failure maps to Offline/LoginExpired/IdentityChanged with mutations disabled.
 - [x] Browser remote stays honest: cookie auth not implemented, so `browser-remote` remains a planned/not-release-proven adapter skeleton; no refresh token in `localStorage`.

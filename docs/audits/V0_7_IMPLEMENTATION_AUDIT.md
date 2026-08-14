@@ -22,6 +22,17 @@ The four concurrency/recovery boundaries that previously blocked Gate B are
 now closed (see §4): atomic refresh-token rotation, database-enforced owner
 singleton, cross-component backup consistency, and rollback-safe restore.
 
+On 2026-08-14 the Gate C/D runtime loop was closed end-to-end (see §2 "Gate
+C/D security closure"): identity/compatibility/credential/connection-state
+now sit in the real credential-bearing native broker path, backed by 59
+ClientRuntime JS tests and 39 Rust runtime-mode + deterministic broker
+integration tests, with remote CI green. Gate C and Gate D remain HOLD only
+for real-runtime evidence (public-TLS enrollment and packaged Windows/macOS
+regression), not for missing source/test security closure. Gate E
+(Android) remains NOT READY for engineering entry: the mobile capability
+contract is vocabulary only and no Android toolchain/hardware exists on the
+build machine.
+
 ## 2. Implemented in source
 
 - Single-owner bootstrap/login and named device records.
@@ -98,6 +109,47 @@ singleton, cross-component backup consistency, and rollback-safe restore.
   credentials never enter the renderer and no `localStorage` refresh path
   exists.
 
+### Gate C/D security closure (2026-08-14, this round)
+
+The runtime loop was closed end-to-end so the security contracts actually sit
+in the credential-bearing product path:
+
+- **Active/pending runtime separation** (`runtime-connect-controller.js` pure
+  reducer): the current runtime is immutable per session, a mode switch
+  persists the NEXT profile, and the data-location label reflects only the
+  active runtime. Tests cover persist-pending-keeps-active + restart-applies.
+- **Connection state machine drives the transport** (`remote.js`): mutations
+  fail closed in terminal states (Offline/LoginExpired/IdentityChanged/
+  UpdateRequired/UnsupportedServer/LocalCoreError); identity-changed blocks
+  mutations even while reads still work; a final 401 after single-flight
+  refresh maps to LoginExpired. No silent fallback to a local store exists.
+- **Native remote broker hardening** (`remote.rs`, deterministic integration
+  tests against an in-memory server): `redirect::Policy::none()` so
+  login/refresh/bootstrap secrets never reach a redirect target; a positive
+  header allowlist strips renderer-supplied dangerous headers such as
+  `Authorization`; uploads are bounded before and after base64 decode;
+  refresh is single-flighted so concurrent callers share exactly one refresh,
+  and a rotated token is staged in memory when keyring persistence fails so
+  the only valid credential is not lost; identity is verified before any
+  credential is sent (mismatched `server_instance_id` blocks); logout reports
+  the truthful revoke result (local removed vs server revoke confirmed).
+- **SOURCE_MANIFEST identity closure**: `scripts/generate_source_manifest.py`
+  deterministically renders the product manifest (376 tracked files,
+  excluding the standalone Native Core subtree) and `scripts/verify.py`
+  fails the Host gate when the committed manifest drifts from the tracked
+  tree, replacing the previous "existing but untrusted" manifest.
+- **Truthful capability vocabulary** (Gate E contract only): capability
+  descriptors distinguish `supportedByContract` from `implemented`; every
+  non-desktop runtime keeps `canLaunchSidecar`/`canUseDesktopToken`/
+  `canAdminLocalProviderSecret`/`canUseDesktopUpdater`/
+  `supportsWindowControls` false so no UI can enable a non-existent mobile
+  surface.
+- **Honest boundaries retained**: `browser-remote` secure-cookie session is
+  `NOT IMPLEMENTED` (no refresh/access token in `localStorage`); remote
+  WebSocket transport remains contract-only/inactive (no active application
+  WebSocket route exists); no CSP relaxation to arbitrary HTTPS was
+  introduced.
+
 ### Gate E — Android mobile contract (source vocabulary only)
 
 - Frozen `PLATFORM_CAPABILITIES` vocabulary and a `DESKTOP_ONLY_CAPABILITIES`
@@ -115,15 +167,22 @@ singleton, cross-component backup consistency, and rollback-safe restore.
   concurrency regression tests and the Gate C client-runtime/server-identity
   tests).
 - Native Execution Core standalone package: 98 passed.
-- ClientRuntime pure contract tests (Node built-in runner): 45 passed
+- ClientRuntime pure contract tests (Node built-in runner): 59 passed
   (descriptors, compatibility, SemVer, URL normalization, connection state
   machine, storage namespace, credential store, retry safety, remote
-  transport, Gate E mobile capability vocabulary + desktop-only gate).
-- Rust runtime-mode + remote-transport source tests: 12 passed
-  (`cargo test --locked --lib`), covering default desktop-local, explicit
-  desktop-local, desktop-remote never spawns sidecar, invalid profile never
-  switches store, id validation, enrollment-origin normalization/validation
-  and refresh-key namespace isolation.
+  transport with connection-state guards, positive header allowlist, upload
+  bounds, Gate E mobile capability vocabulary + desktop-only gate).
+- Rust runtime-mode + remote-transport + native broker integration tests: 39
+  passed (`cargo test --locked --lib`) — runtime-mode decisions (default and
+  explicit desktop-local, desktop-remote never spawns sidecar, invalid
+  profile never switches store, active/pending separation, provider-admin
+  gating) plus deterministic native broker tests against an in-memory server:
+  redirects never followed (login/refresh/bootstrap secrets stay local),
+  compatibility rejects (wrong product/API version/min-client/runtime
+  mode/auth), identity before credentials (mismatched instance id blocks
+  before any secret is sent), single-flight refresh (exactly one refresh
+  under concurrency) with keyring-failure rotation recovery, truthful logout
+  revoke results, header positive allowlist and bounded uploads.
 - Server instance identity: 6 passed (fresh single identity, restart
   unchanged, second server distinct, migration 15 upgrade once, singleton
   index, display-name env).
@@ -150,13 +209,15 @@ verification. The real external hostname/certificate path was not exercised.
 
 ### 2026-08-14 full regression and toolchain boundary (Gates C–E source, F/G)
 
-- Web: `npm run lint` passed; ClientRuntime contract tests 45 passed; static
+- Web: `npm run lint` passed; ClientRuntime contract tests 59 passed; static
   production build passed.
-- Rust: `cargo test --locked --lib` 12 passed (compile of the lib doubles as
+- Rust: `cargo test --locked --lib` 39 passed, including the deterministic
+  native remote-broker integration tests (compile of the lib doubles as
   `cargo check --locked --lib`).
 - Main Python suite: 244 passed. Native Execution Core standalone verify: PASS.
 - Host gates: `scripts/verify.py` PASS (version check synced from 0.6.0 to
-  0.7.0, matching the v0.7 project version), `verify_native_core_sync.py`
+  0.7.0, matching the v0.7 project version; SOURCE_MANIFEST integrity check
+  PASS), `verify_native_core_sync.py`
   IN SYNC, `self_audit.py` PASS, `audit_public_repo.py` PASS (432 tracked
   paths), strict `audit_host_v050.py . --strict` PASS
   (`ready_for_native_cutover: true`).
@@ -203,8 +264,10 @@ failure) leaves the original live state recoverable.
 ## 5. Verified boundaries, not completion claims
 
 - Gate D UX is implemented at source level and the native remote broker is
-  covered by Rust unit tests, but no real public-TLS server session and no
-  real packaged Windows/macOS regression has exercised it.
+  covered by deterministic Rust integration tests (redirect, compatibility,
+  identity, single-flight refresh, logout truthfulness, header allowlist,
+  upload bounds), but no real public-TLS server session and no real packaged
+  Windows/macOS regression has exercised it.
 - No active application WebSocket route exists; `websocket_device_auth` is a
   helper with a unit test, not runtime WebSocket authentication proof.
 - The desktop Rust source compiles, but the local DMG attempt failed in
