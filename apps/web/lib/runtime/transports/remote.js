@@ -54,16 +54,70 @@ function decodeBase64ToBytes(base64) {
   return Uint8Array.from(Buffer.from(String(base64 || ''), 'base64'));
 }
 
-function responseFromNative({ status, bodyBase64 = '', contentType = '' }, extraHeaders = {}) {
+function responseFromNative({ status, bodyBase64 = '', contentType = '', responseHeaders = {} }, extraHeaders = {}) {
   const bytes = decodeBase64ToBytes(bodyBase64);
   const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
   return new Response(blob, {
     status: Number(status) || 200,
     headers: {
       ...(contentType ? { 'content-type': contentType } : {}),
+      // Gate D §P32 (MEDIUM) — the native broker surfaces its safe response
+      // metadata allowlist; ETag/Last-Modified reach the renderer so caching
+      // behaves like a normal HTTP client.
+      ...responseHeaders,
       ...extraHeaders,
     },
   });
+}
+
+// Gate D §P26/P11 — stable remote error codes. The native broker rejects with
+// `{"code": "...", "message": "..."}` JSON; the renderer must NEVER guess
+// state from fuzzy message text. Codes that are not part of the frozen
+// taxonomy are treated as transport failures.
+export const REMOTE_ERROR_CODES = Object.freeze({
+  NETWORK_UNAVAILABLE: 'NETWORK_UNAVAILABLE',
+  LOGIN_EXPIRED: 'LOGIN_EXPIRED',
+  IDENTITY_CHANGED: 'IDENTITY_CHANGED',
+  UPDATE_REQUIRED: 'UPDATE_REQUIRED',
+  UNSUPPORTED_SERVER: 'UNSUPPORTED_SERVER',
+  CREDENTIAL_PERSISTENCE_FAILURE: 'CREDENTIAL_PERSISTENCE_FAILURE',
+  PROTOCOL_ERROR: 'PROTOCOL_ERROR',
+  RUNTIME_MODE_DENIED: 'RUNTIME_MODE_DENIED',
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+});
+
+export function parseRemoteErrorCode(error) {
+  const message = String(error?.message ?? error ?? '');
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed && typeof parsed.code === 'string') return parsed.code;
+  } catch {
+    // Not a coded payload: leave it unclassified (transport failure).
+  }
+  return null;
+}
+
+// Map a native rejection to the connection event it honestly represents.
+// Terminal classifications only fire for server-side verdicts; anything
+// ambiguous stays NETWORK_FAIL so the machine can retry with bounds.
+export function remoteErrorEvent(error) {
+  switch (parseRemoteErrorCode(error)) {
+    case REMOTE_ERROR_CODES.LOGIN_EXPIRED:
+      return 'REFRESH_FAIL';
+    case REMOTE_ERROR_CODES.IDENTITY_CHANGED:
+      return 'IDENTITY_MISMATCH';
+    case REMOTE_ERROR_CODES.UPDATE_REQUIRED:
+      return 'INCOMPATIBLE';
+    case REMOTE_ERROR_CODES.UNSUPPORTED_SERVER:
+    case REMOTE_ERROR_CODES.PROTOCOL_ERROR:
+      return 'UNSUPPORTED_SERVER';
+    case REMOTE_ERROR_CODES.NETWORK_UNAVAILABLE:
+    case REMOTE_ERROR_CODES.CREDENTIAL_PERSISTENCE_FAILURE:
+    case REMOTE_ERROR_CODES.RUNTIME_MODE_DENIED:
+    case REMOTE_ERROR_CODES.INTERNAL_ERROR:
+    default:
+      return 'NETWORK_FAIL';
+  }
 }
 
 // Renderer-supplied headers are a positive allowlist (Gate D §P15): only
@@ -158,18 +212,20 @@ export class RemoteTransport {
         headers: sanitizeHeaders(options.headers),
       });
     } catch (error) {
-      this._recordNetworkFailure();
+      this._recordFailure(error);
       throw error;
     }
     this._recordOutcome(native?.status);
     return responseFromNative(native);
   }
 
-  // Gate D §P12 — a failed request moves the state toward Reconnecting/Offline
-  // unless the state is already terminal (those never auto-flip).
-  _recordNetworkFailure() {
+  // Gate D §P12/P26 — a failed request moves the state machine according to
+  // the frozen error taxonomy: server verdicts become terminal states, real
+  // transport failures move toward Reconnecting/Offline (never auto-flip out
+  // of terminal states).
+  _recordFailure(error) {
     if (this.connection && !this.connection.isTerminal) {
-      this.connection.handle('NETWORK_FAIL');
+      this.connection.handle(remoteErrorEvent(error));
     }
   }
 
@@ -220,7 +276,7 @@ export class RemoteTransport {
         fields,
       });
     } catch (error) {
-      this._recordNetworkFailure();
+      this._recordFailure(error);
       throw error;
     }
     this._recordOutcome(native?.status);

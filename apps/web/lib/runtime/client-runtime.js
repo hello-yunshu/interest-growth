@@ -16,7 +16,7 @@ import {
   resolveDesktopLocalRuntime,
   localAuthHeader,
 } from './transports/desktop-local.js';
-import { RemoteTransport } from './transports/remote.js';
+import { RemoteTransport, remoteErrorEvent } from './transports/remote.js';
 import * as tauriDesktop from './platforms/tauri-desktop.js';
 import * as browser from './platforms/browser.js';
 
@@ -67,9 +67,26 @@ async function resolveDesktopRemote(platform, runtime) {
     descriptor.storageNamespace = status.serverInstanceId
       ? `desktop-remote:${status.serverInstanceId}`
       : null;
-    if (status.connected) connection.handle('BOOTSTRAP_OK');
-    else if (status.authExpired) connection.handle('REFRESH_FAIL');
-    else connection.handle('NETWORK_FAIL');
+    if (status.connected) {
+      connection.handle('BOOTSTRAP_OK');
+    } else if (status.authExpired) {
+      // The server itself denied the refresh credential; do not retry here.
+      connection.handle('REFRESH_FAIL');
+    } else {
+      // HIGH-2: "enrolled + refresh stored + not connected" is a NORMAL restart
+      // state, never LoginExpired. Recover through the native broker instead of
+      // guessing. The broker single-flights this against any other caller.
+      try {
+        const refreshed = await tauriDesktop.remoteRefreshNow();
+        if (refreshed?.connected) connection.handle('BOOTSTRAP_OK');
+        else if (refreshed?.authExpired) connection.handle('REFRESH_FAIL');
+        else connection.handle('NETWORK_FAIL');
+      } catch (error) {
+        // The coded error taxonomy decides: a real server verdict becomes its
+        // honest state, anything ambiguous is a bounded network retry.
+        connection.handle(remoteErrorEvent(error));
+      }
+    }
   }
   return { descriptor, runtime, connection, transport };
 }

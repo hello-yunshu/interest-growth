@@ -32,7 +32,7 @@ import { ConnectionStateMachine } from '../connection-state.js';
 import { runtimeNamespaceKey, uiCacheKey, currentAreaKey } from '../storage-namespace.js';
 import { CredentialStore, MemoryCredentialStore, credentialNamespace, enrolledServerIdentity } from '../credential-store.js';
 import { RetryPolicy, isIdempotentMethod } from '../retry-policy.js';
-import { RemoteTransport } from '../transports/remote.js';
+import { RemoteTransport, parseRemoteErrorCode, remoteErrorEvent, REMOTE_ERROR_CODES } from '../transports/remote.js';
 
 // ---- §21.2 / §4.4 runtime descriptors --------------------------------
 test('frozen runtime ids are the only valid identities', () => {
@@ -624,4 +624,100 @@ test('remote transport accepts an in-limit upload and bounds the encoded copy', 
   await transport.request('/api/knowledge/sources', { method: 'POST', body: form });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].fileName, 'medium.pdf');
+});
+
+// ---- Gate D §P30/P31 connection state is a single, recoverable source ----
+
+test('Offline is recoverable: a later success flips it back to Connected', () => {
+  const m = new ConnectionStateMachine({ initialState: 'Connected', maxReconnectAttempts: 1 });
+  assert.equal(m.handle('NETWORK_FAIL'), 'Reconnecting');
+  assert.equal(m.handle('NETWORK_FAIL'), 'Offline'); // bounded retry rest
+  assert.equal(m.isTerminal, false); // Offline is NOT terminal
+  assert.equal(m.mutationsAllowed, false); // but never mutates
+  // The whole point of the MEDIUM-4 fix: a success recovers Offline.
+  assert.equal(m.handle('RECONNECT_OK'), 'Connected');
+  assert.equal(m.isConnected, true);
+  assert.equal(m.mutationsAllowed, true);
+  const m2 = new ConnectionStateMachine({ initialState: 'Offline' });
+  assert.equal(m2.handle('BOOTSTRAP_OK'), 'Connected');
+});
+
+test('machine exposes subscribe(): listeners see every transition', () => {
+  const m = new ConnectionStateMachine({ initialState: 'Initializing' });
+  const seen = [];
+  const unsubscribe = m.subscribe((next) => seen.push(next));
+  m.handle('BOOTSTRAP_OK');
+  m.handle('NETWORK_FAIL');
+  assert.deepEqual(seen, ['Connected', 'Reconnecting']);
+  unsubscribe();
+  m.handle('RECONNECT_OK');
+  assert.deepEqual(seen, ['Connected', 'Reconnecting']); // no more notifications
+  assert.throws(() => m.subscribe('not-a-function'), /listener function/);
+  // A throwing listener never breaks the machine.
+  m.subscribe(() => { throw new Error('boom'); });
+  assert.equal(m.handle('RESET'), 'Initializing');
+});
+
+// ---- Gate D §P32 (MEDIUM) response headers reach the renderer -----------
+
+test('remote transport surfaces the native response metadata allowlist', async () => {
+  const broker = {
+    apiRequest: async () => ({
+      status: 200,
+      bodyBase64: Buffer.from('{}').toString('base64'),
+      contentType: 'application/json',
+      responseHeaders: { etag: '"v1"', 'last-modified': 'Thu, 14 Aug 2026 00:00:00 GMT' },
+    }),
+  };
+  const transport = new RemoteTransport({ broker, active: true });
+  const response = await transport.request('/api/system/capabilities');
+  assert.equal(response.headers.get('etag'), '"v1"');
+  assert.equal(response.headers.get('last-modified'), 'Thu, 14 Aug 2026 00:00:00 GMT');
+  assert.equal(response.headers.get('content-type'), 'application/json');
+});
+
+// ---- Gate D §P26 (P11) stable error-code taxonomy -----------------------
+
+test('coded native errors parse into the frozen taxonomy', () => {
+  assert.equal(parseRemoteErrorCode('{"code":"LOGIN_EXPIRED","message":"x"}'), 'LOGIN_EXPIRED');
+  assert.equal(parseRemoteErrorCode(new Error('{"code":"NETWORK_UNAVAILABLE","message":"x"}')), 'NETWORK_UNAVAILABLE');
+  assert.equal(parseRemoteErrorCode('{"message":"no code here"}'), null);
+  assert.equal(parseRemoteErrorCode('plain transport error'), null);
+  assert.equal(parseRemoteErrorCode(undefined), null);
+});
+
+test('remote error events: server verdicts become their honest states', () => {
+  assert.equal(remoteErrorEvent('{"code":"LOGIN_EXPIRED","message":"x"}'), 'REFRESH_FAIL');
+  assert.equal(remoteErrorEvent('{"code":"IDENTITY_CHANGED","message":"x"}'), 'IDENTITY_MISMATCH');
+  assert.equal(remoteErrorEvent('{"code":"UPDATE_REQUIRED","message":"x"}'), 'INCOMPATIBLE');
+  assert.equal(remoteErrorEvent('{"code":"UNSUPPORTED_SERVER","message":"x"}'), 'UNSUPPORTED_SERVER');
+  assert.equal(remoteErrorEvent('{"code":"PROTOCOL_ERROR","message":"x"}'), 'UNSUPPORTED_SERVER');
+  assert.equal(remoteErrorEvent('{"code":"NETWORK_UNAVAILABLE","message":"x"}'), 'NETWORK_FAIL');
+  // Ambiguous / unknown / non-coded failures are NEVER terminal verdicts.
+  assert.equal(remoteErrorEvent('{"code":"NONSENSE","message":"x"}'), 'NETWORK_FAIL');
+  assert.equal(remoteErrorEvent('connection reset by peer'), 'NETWORK_FAIL');
+  assert.equal(REMOTE_ERROR_CODES.CREDENTIAL_PERSISTENCE_FAILURE, 'CREDENTIAL_PERSISTENCE_FAILURE');
+});
+
+test('transport records coded verdicts into the machine (single source)', async () => {
+  const m = new ConnectionStateMachine({ initialState: 'Connected' });
+  const broker = { apiRequest: async () => { throw new Error('{"code":"LOGIN_EXPIRED","message":"denied"}'); } };
+  const transport = new RemoteTransport({ broker, active: true, connection: m });
+  await assert.rejects(transport.request('/api/notes'), /denied/);
+  assert.equal(m.state, 'LoginExpired'); // server verdict, not a guess
+
+  const m2 = new ConnectionStateMachine({ initialState: 'Connected' });
+  const broker2 = { apiRequest: async () => { throw new Error('{"code":"NETWORK_UNAVAILABLE","message":"offline"}'); } };
+  const transport2 = new RemoteTransport({ broker: broker2, active: true, connection: m2 });
+  await assert.rejects(transport2.request('/api/notes'), /offline/);
+  assert.equal(m2.state, 'Reconnecting'); // transport failure stays recoverable
+});
+
+test('identity-changed verdict blocks mutations through the transport', async () => {
+  const broker = { apiRequest: async () => { throw new Error('{"code":"IDENTITY_CHANGED","message":"replaced"}'); } };
+  const m = new ConnectionStateMachine({ initialState: 'Connected' });
+  const transport = new RemoteTransport({ broker, active: true, connection: m });
+  await assert.rejects(transport.request('/api/notes'), /replaced/);
+  assert.equal(m.state, 'IdentityChanged');
+  await assert.rejects(transport.request('/api/notes', { method: 'POST', body: '{}' }), /mutations are blocked/);
 });

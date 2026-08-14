@@ -3,10 +3,17 @@
 // A single "ready/error" boolean is not allowed. Every transition is guarded:
 // remote states never silently fall back to local data, and reconnect is
 // bounded so there is no infinite retry.
+//
+// Gate D §P30 (MEDIUM) — Offline is NOT terminal: it is the bounded-retry
+// resting state and a later success (RECONNECT_OK / BOOTSTRAP_OK) must be able
+// to recover it. Only states that require a user decision or an app restart
+// are terminal.
+//
+// The machine is the SINGLE source of truth for connection state (Gate D
+// §P31/HIGH). Consumers subscribe instead of keeping their own copies.
 import { CONNECTION_STATES } from './contract.js';
 
 const TERMINAL_STATES = new Set([
-  'Offline',
   'LoginExpired',
   'IdentityChanged',
   'UpdateRequired',
@@ -22,6 +29,17 @@ export class ConnectionStateMachine {
     this.state = initialState;
     this.maxReconnectAttempts = maxReconnectAttempts;
     this.reconnectAttempts = 0;
+    this._listeners = new Set();
+  }
+
+  // Subscribe to every transition. Returns an unsubscribe function. This is
+  // how UI keeps in sync with the ONE canonical connection state.
+  subscribe(listener) {
+    if (typeof listener !== 'function') throw new Error('subscribe requires a listener function');
+    this._listeners.add(listener);
+    return () => {
+      this._listeners.delete(listener);
+    };
   }
 
   get isConnected() {
@@ -34,6 +52,7 @@ export class ConnectionStateMachine {
   }
 
   // Mutations are only allowed when the connection is honestly Connected.
+  // Offline/Reconnecting never mutate even though they are recoverable.
   get mutationsAllowed() {
     return this.state === 'Connected';
   }
@@ -41,6 +60,13 @@ export class ConnectionStateMachine {
   _set(next) {
     if (!CONNECTION_STATES.includes(next)) throw new Error(`unknown connection state: ${next}`);
     this.state = next;
+    for (const listener of this._listeners) {
+      try {
+        listener(next);
+      } catch {
+        // A broken listener must never break the state machine.
+      }
+    }
     return next;
   }
 
