@@ -16,9 +16,19 @@ FORBIDDEN_TABLES={
     "native_mastery","native_practice","native_note","native_book","native_writing",
     "native_claim","native_evidence","native_growth_memory",
 }
+from generate_source_manifest import MANIFEST_NAME, compute_manifest_entries, render
+def check_source_manifest(root):
+    """Return an error message if the current-product source manifest is stale."""
+    manifest=root/MANIFEST_NAME
+    if not manifest.exists():return f"missing {MANIFEST_NAME}"
+    if manifest.read_text("utf-8")!=render(compute_manifest_entries(root)):
+        return f"{MANIFEST_NAME} out of date (run scripts/generate_source_manifest.py and commit it)"
+    return None
 def fail(msg):
     print("VERIFY FAIL:",msg);return 1
 def main():
+    problem=check_source_manifest(ROOT)
+    if problem:return fail(problem)
     for path in (PKG,ROOT/"scripts",ROOT/"tests"):
         if not compileall.compile_dir(str(path),quiet=1):return fail(f"compileall: {path}")
     for p in PKG.rglob("*.py"):
