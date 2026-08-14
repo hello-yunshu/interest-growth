@@ -26,7 +26,7 @@ import {
   getDesktopRuntime,
 } from '../lib/api';
 import { getClientRuntime } from '../lib/runtime/client-runtime.js';
-import { remoteErrorEvent } from '../lib/runtime/transports/remote.js';
+import { parseRemoteErrorCode, remoteErrorEvent } from '../lib/runtime/transports/remote.js';
 import {
   initialRuntimeConnectState,
   runtimeConnectReducer,
@@ -95,6 +95,22 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setMsg({ tone, text });
   }
 
+  // Gate C/D §4.6 — every direct remote action funnels its native coded errors
+  // through the ONE ConnectionStateMachine. A coded native error (LOGIN_EXPIRED,
+  // NETWORK_UNAVAILABLE, RATE_LIMITED, ...) is a real connection verdict and
+  // drives the machine; a plain local message (e.g. field validation) is a
+  // user-input error and must NOT move the connection state.
+  async function runRemoteAction(action) {
+    try {
+      return { ok: true, result: await action() };
+    } catch (error) {
+      if (parseRemoteErrorCode(error)) {
+        machineRef.current?.handle(remoteErrorEvent(error));
+      }
+      throw error;
+    }
+  }
+
   async function loadSession() {
     const status = await remoteSessionStatus();
     setSession(status);
@@ -129,7 +145,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
 
   async function loadDevices() {
     try {
-      const result = await remoteDeviceList();
+      const { result } = await runRemoteAction(() => remoteDeviceList());
       setDevices(result?.devices || []);
     } catch (error) {
       setDevices([]);
@@ -260,14 +276,14 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setMsg({ tone: 'success', text: '' });
     try {
       const runtime = await getDesktopRuntime();
-      await remoteLogin({
+      await runRemoteAction(() => remoteLogin({
         origin,
         ownerPassword,
         deviceName: deviceName || (runtime?.platform === 'windows' ? '这台电脑' : '这台 Mac'),
         platform: runtime?.platform || 'macos',
         appVersion: runtime?.version || '0.7.0',
         expectedServerInstanceId: probe?.server?.serverInstanceId || session?.serverInstanceId || '',
-      });
+      }));
       setOwnerPassword('');
       setDeviceName('');
       setProbe(null);
@@ -306,7 +322,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setBusy(true);
     setMsg({ tone: 'success', text: '' });
     try {
-      const result = await remoteVerifyIdentity();
+      const { result } = await runRemoteAction(() => remoteVerifyIdentity());
       if (result?.identityChanged) {
         machineRef.current?.handle('IDENTITY_MISMATCH');
         flash('检测到服务器身份变化：同一地址后面的服务器实例已被替换。请重新验证后再接入。', 'error');
@@ -328,7 +344,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       // Gate D §P20 — the native result is truthful: a failed network revoke
       // reports `revoked: false` and the UI must not claim the device was
       // revoked. Local credentials are always removed either way.
-      const result = await remoteLogout(revoke);
+      const { result } = await runRemoteAction(() => remoteLogout(revoke));
       setSession(null);
       setDevices([]);
       setDevicesLoaded(false);
@@ -365,7 +381,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setBusy(true);
     setMsg({ tone: 'success', text: '' });
     try {
-      await remoteRevokeDevice(target.id, revokePassword);
+      await runRemoteAction(() => remoteRevokeDevice(target.id, revokePassword));
       flash(`设备“${target.name}”已撤销，其本地凭据将失效。`);
       await loadDevices();
     } catch (error) {

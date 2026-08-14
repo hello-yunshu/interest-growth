@@ -531,3 +531,43 @@ def test_schema_13_upgrade_is_additive_and_preserves_product_data(client):
         assert 13 in set(db.scalars(select(SchemaMigration.version)).all())
         assert db.scalar(select(func.count()).select_from(ArtifactModel)) == before_artifacts
         assert db.scalar(select(func.count()).select_from(OwnerModel)) == 0
+
+
+# ------------------------------------------------- Gate C/D §4.2 fail-closed config
+
+
+def test_remote_env_requires_remote_auth_enabled_fail_closed(monkeypatch):
+    """APP_ENV=remote + PG_REMOTE_AUTH_ENABLED=false must refuse to start."""
+    from pg_shared.settings import ConfigError, get_settings, validate_settings
+
+    monkeypatch.setenv("APP_ENV", "remote")
+    monkeypatch.setenv("PG_REMOTE_AUTH_ENABLED", "false")
+    with pytest.raises(ConfigError):
+        validate_settings(get_settings())
+
+
+def test_remote_env_with_auth_enabled_passes(monkeypatch):
+    """APP_ENV=remote + PG_REMOTE_AUTH_ENABLED=true is a valid config."""
+    from pg_shared.settings import get_settings, validate_settings
+
+    monkeypatch.setenv("APP_ENV", "remote")
+    monkeypatch.setenv("PG_REMOTE_AUTH_ENABLED", "true")
+    validate_settings(get_settings())  # must not raise
+
+
+def test_development_env_does_not_require_remote_auth(monkeypatch):
+    """development may run without remote auth."""
+    from pg_shared.settings import get_settings, validate_settings
+
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PG_REMOTE_AUTH_ENABLED", "false")
+    validate_settings(get_settings())  # must not raise
+
+
+def test_desktop_env_not_subject_to_remote_fail_closed(monkeypatch):
+    """desktop (local sidecar) must not be broken by the remote-only invariant."""
+    from pg_shared.settings import get_settings, validate_settings
+
+    monkeypatch.setenv("APP_ENV", "desktop")
+    monkeypatch.setenv("PG_REMOTE_AUTH_ENABLED", "false")
+    validate_settings(get_settings())  # must not raise

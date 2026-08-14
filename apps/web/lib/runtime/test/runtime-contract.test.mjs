@@ -693,10 +693,15 @@ test('remote error events: server verdicts become their honest states', () => {
   assert.equal(remoteErrorEvent('{"code":"UNSUPPORTED_SERVER","message":"x"}'), 'UNSUPPORTED_SERVER');
   assert.equal(remoteErrorEvent('{"code":"PROTOCOL_ERROR","message":"x"}'), 'UNSUPPORTED_SERVER');
   assert.equal(remoteErrorEvent('{"code":"NETWORK_UNAVAILABLE","message":"x"}'), 'NETWORK_FAIL');
+  // Gate C/D §4.1 — rate-limit and 5xx are transient, never LoginExpired.
+  assert.equal(remoteErrorEvent('{"code":"RATE_LIMITED","message":"busy"}'), 'NETWORK_FAIL');
+  assert.equal(remoteErrorEvent('{"code":"SERVER_UNAVAILABLE","message":"busy"}'), 'NETWORK_FAIL');
   // Ambiguous / unknown / non-coded failures are NEVER terminal verdicts.
   assert.equal(remoteErrorEvent('{"code":"NONSENSE","message":"x"}'), 'NETWORK_FAIL');
   assert.equal(remoteErrorEvent('connection reset by peer'), 'NETWORK_FAIL');
   assert.equal(REMOTE_ERROR_CODES.CREDENTIAL_PERSISTENCE_FAILURE, 'CREDENTIAL_PERSISTENCE_FAILURE');
+  assert.equal(REMOTE_ERROR_CODES.RATE_LIMITED, 'RATE_LIMITED');
+  assert.equal(REMOTE_ERROR_CODES.SERVER_UNAVAILABLE, 'SERVER_UNAVAILABLE');
 });
 
 test('transport records coded verdicts into the machine (single source)', async () => {
