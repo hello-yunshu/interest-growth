@@ -28,15 +28,15 @@ function nativeCapabilities(platform) {
 
 // Gate E — mobile adaptation contract. Android reuses the remote server
 // surface (no sidecar, no desktop token, no local vaults, no desktop updater,
-// no window chrome) and adds mobile-specific adapters that are PLANNED, not
-// yet implemented. `canUseNativeSecureStore` is true because the frozen
-// contract (§2) assigns the renewal credential to Android Keystore.
+// no window chrome) and adds mobile-specific adapters. `canUseNativeSecureStore`
+// is true because the frozen contract (§2) assigns the renewal credential to
+// Android Keystore.
 //
-// Gate D §P21 — all planned-but-not-implemented mobile adapters are set to
-// false. The frozen contract declares them as "supported by contract", but
-// the runtime descriptor reports what is actually available so the UI never
-// enables a feature that does not exist (no document picker, no share sheet,
-// no lifecycle suspend/resume, no biometric unlock until Gate E hardware).
+// Gate R0.4 — the SAF document picker is REAL in v0.7 (selectDocument /
+// uploadByUri / downloadArtifact), so `canUseDocumentPicker` is true. The
+// remaining mobile adapters (share sheet, lifecycle suspend/resume, biometric
+// unlock) stay PLANNED and false, so the UI never enables a feature that does
+// not exist.
 function mobileCapabilities() {
   return {
     canLaunchSidecar: false,
@@ -48,10 +48,10 @@ function mobileCapabilities() {
     canCheckDesktopUpdater: false,
     canAdminLocalProviderSecret: false,
     supportsWindowControls: false,
-    canUseDocumentPicker: false, // Gate E planned; not available in v0.7
-    canUseShareSheet: false, // Gate E planned; not available in v0.7
-    supportsLifecycleSuspendResume: false, // Gate E planned; not available in v0.7
-    canUseBiometricUnlock: false, // Gate E planned; not available in v0.7
+    canUseDocumentPicker: true, // Gate R0.4 — SAF document picker implemented
+    canUseShareSheet: false, // planned; not available in v0.7
+    supportsLifecycleSuspendResume: false, // planned; not available in v0.7
+    canUseBiometricUnlock: false, // planned; not available in v0.7
   };
 }
 

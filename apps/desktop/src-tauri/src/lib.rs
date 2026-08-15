@@ -17,6 +17,7 @@ use tauri_plugin_shell::{
 use url::Url;
 use uuid::Uuid;
 
+mod android_bridge;
 mod remote;
 mod runtime_mode;
 
@@ -660,7 +661,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
+        // Android (no-op plugin on desktop). The SAF bridge lets the native
+        // layer read/write file bytes without a renderer base64 copy.
+        .plugin(android_bridge::init());
     // Gate E §6.3 — single-instance and window-state are desktop-only plugins.
     // The Android host has no OS-level single-instance and no desktop window to
     // persist state for, so they are compiled out.
@@ -735,6 +740,9 @@ pub fn run() {
             remote::remote_login,
             remote::remote_api_request,
             remote::remote_api_upload,
+            remote::remote_api_upload_by_uri,
+            remote::remote_pick_document,
+            remote::remote_save_export,
             remote::remote_refresh_now,
             remote::remote_session_status,
             remote::remote_verify_identity,

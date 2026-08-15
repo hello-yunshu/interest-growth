@@ -1,9 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "Minimal capability set for the Interest Growth main desktop window.",
+  "description": "Minimal capability set for the Interest Growth main desktop window. Explicitly scoped to desktop platforms (Gate R0.7) so window state, desktop shell controls, desktop filesystem and dialog permissions never leak into the Android build; the Android runtime has its own minimal capability (android.json).",
   "windows": [
     "main"
+  ],
+  "platforms": [
+    "macOS",
+    "windows",
+    "linux"
   ],
   "permissions": [
     "core:default",

@@ -20,7 +20,7 @@ import { RUNTIME_IDS } from '../contract.js';
 // Mirrors the exact surface of apps/web/lib/runtime/platforms/tauri-android.js
 // (remoteSessionStatus / remoteRefreshNow / remoteApiRequest / remoteApiUpload)
 // so the shared resolver is exercised with the Android broker contract.
-function androidAdapter({ status, refreshResult, requestImpl, uploadImpl } = {}) {
+function androidAdapter({ status, refreshResult, requestImpl, uploadImpl, selectDocument, uploadByUri, downloadArtifact } = {}) {
   let refreshCalls = 0;
   let sessionCalls = 0;
   return {
@@ -51,6 +51,10 @@ function androidAdapter({ status, refreshResult, requestImpl, uploadImpl } = {})
     async remoteVerifyIdentity() { throw new Error('unused'); },
     async remoteLogout() { throw new Error('unused'); },
     async openExternal() { return true; },
+    // Gate R0.4/R0.5/R0.6 — SAF adapter surface (mirrors tauri-android.js).
+    ...(selectDocument ? { selectDocument } : {}),
+    ...(uploadByUri ? { uploadByUri } : {}),
+    ...(downloadArtifact ? { downloadArtifact } : {}),
   };
 }
 
@@ -323,8 +327,40 @@ test('android-remote is a frozen runtime id and never claims desktop-only surfac
   // URL opening is the system browser — both real this round.
   assert.equal(descriptor.capabilities.canUseNativeSecureStore, true);
   assert.equal(descriptor.capabilities.canOpenExternalUrl, true);
-  // Planned mobile adapters are honestly disabled until implemented.
-  for (const key of ['canUseDocumentPicker', 'canUseShareSheet', 'supportsLifecycleSuspendResume', 'canUseBiometricUnlock']) {
+  // Gate R0.4 — the SAF document picker is real (selectDocument / uploadByUri /
+  // downloadArtifact); the remaining mobile adapters stay honestly disabled.
+  assert.equal(descriptor.capabilities.canUseDocumentPicker, true);
+  for (const key of ['canUseShareSheet', 'supportsLifecycleSuspendResume', 'canUseBiometricUnlock']) {
     assert.equal(descriptor.capabilities[key], false, `${key} must be false (planned adapter)`);
   }
+});
+
+// ---- §6 Gate R0.4/R0.5/R0.6 — SAF adapter surface & native export routing ---
+// The Android-shaped adapter mirrors the tauri-android.js broker contract used
+// by api.js: document selection returns only a content URI + metadata, uploads
+// go by URI, and export downloads natively (no renderer blob).
+test('android SAF adapter surface is present on the resolved android runtime', async () => {
+  const adapter = androidAdapter({
+    status: enrolledStatus(),
+    selectDocument: async (mimeType) => ({ uri: 'content://x', name: 'note.pdf', size: 12, mimeType }),
+    uploadByUri: async (opts) => ({ status: 200, bodyBase64: '', contentType: '' }),
+    downloadArtifact: async (artifactId) => ({ uri: 'content://y', size: 12, name: `${artifactId}.zip` }),
+  });
+  const { descriptor } = await resolveNativeRemote(
+    'android-remote',
+    'android',
+    {},
+    adapter,
+  );
+  assert.equal(descriptor.capabilities.canUseDocumentPicker, true);
+  assert.equal(descriptor.capabilities.canUseSaveDialog, false);
+  // api.js routes downloadArtifact through the adapter when it exists.
+  assert.equal(typeof adapter.downloadArtifact, 'function');
+  assert.equal(typeof adapter.selectDocument, 'function');
+  assert.equal(typeof adapter.uploadByUri, 'function');
+  const picked = await adapter.selectDocument('application/pdf');
+  assert.equal(picked.uri, 'content://x');
+  assert.equal(picked.name, 'note.pdf');
+  const exported = await adapter.downloadArtifact('art-1');
+  assert.equal(exported.name, 'art-1.zip');
 });

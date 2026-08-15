@@ -120,8 +120,15 @@ export async function apiForm(path, formData, options = {}) {
 
 // Gate C §16 — fetching artifact bytes and saving them on the platform are
 // separated. The save action always uses the platform adapter.
+//
+// Gate R0.6 — Android downloads and saves natively (native broker → SAF), so
+// the artifact bytes never materialise in the renderer. Other runtimes keep
+// the transport blob → saveExport path below.
 export async function downloadArtifact(artifactId) {
   const client = await getClientRuntime();
+  if (typeof client.adapter.downloadArtifact === 'function') {
+    return client.adapter.downloadArtifact(artifactId);
+  }
   const response = await client.transport.request(`/artifacts/${artifactId}/export`, {
     headers: await requestHeaders({}, true), cache: 'no-store'
   });
@@ -135,6 +142,29 @@ export async function downloadArtifact(artifactId) {
   const match = disposition.match(/filename="?([^";]+)"?/i);
   const filename = match?.[1] || `interest-growth-${artifactId}.zip`;
   return client.adapter.saveExport(blob, filename);
+}
+
+// Gate R0.5 — Android source upload. The SAF picker returns only a content URI
+// plus metadata; the native broker reads and streams the bytes, so a 100 MiB
+// file never becomes a renderer base64 copy. Non-Android runtimes return null
+// from pickSourceFile and keep the FormData file-input path (apiForm).
+export async function pickSourceFile(mimeType) {
+  const client = await getClientRuntime();
+  if (typeof client.adapter.selectDocument !== 'function') return null;
+  return client.adapter.selectDocument(mimeType);
+}
+
+export async function uploadSourceByUri({ path, uri, fileName, fileContentType, fields }) {
+  const client = await getClientRuntime();
+  if (typeof client.adapter.uploadByUri !== 'function') {
+    throw new Error('SAF 上传仅支持 Android 运行时。');
+  }
+  return client.adapter.uploadByUri({ path, uri, fileName, fileContentType, fields });
+}
+
+export async function supportsDocumentPicker() {
+  const client = await getClientRuntime();
+  return client.descriptor.capabilities.canUseDocumentPicker === true;
 }
 
 // Gate C §17 — loopback token may ride in the query for local transport only.

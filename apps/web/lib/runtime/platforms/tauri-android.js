@@ -6,10 +6,11 @@
 // no local vaults), so this adapter only carries the native remote broker
 // surface plus the small set of Android host actions that are real this round.
 //
-// NOT IMPLEMENTED this round (documented, capabilities stay false, UI stays
-// disabled): system document picker, share sheet, biometric unlock and the
-// suspend/resume lifecycle adapter. The frozen contract declares them as
-// supported-by-contract/planned; the descriptor must not claim they exist.
+// Gate R0.4 — the SAF document picker and native upload/export ARE real now
+// (`canUseDocumentPicker` is true). Still NOT IMPLEMENTED (documented,
+// capabilities stay false, UI stays disabled): share sheet, biometric unlock
+// and the suspend/resume lifecycle adapter. The frozen contract declares them
+// as supported-by-contract/planned; the descriptor must not claim they exist.
 import { invoke } from '@tauri-apps/api/core';
 
 export const PLATFORM_ID = 'tauri-android';
@@ -93,11 +94,59 @@ export async function openExternal(url) {
   return true;
 }
 
-// ---- Planned Android adapters (NOT IMPLEMENTED this round) ----
+// ---- Gate R0.4/R0.5 — SAF document selection & upload --------------------
+// The system document picker (ACTION_OPEN_DOCUMENT) is driven natively; the
+// renderer only receives a content URI plus metadata (name/size/MIME) and
+// never the file bytes (Gate R0.5). Uploads go through the same native broker
+// as every remote mutation, so the transport-level mutation gate applies.
+
+// Select a document through SAF. `mimeType` narrows the picker when provided
+// (e.g. "application/pdf"); omit it for any file type.
+export async function selectDocument(mimeType) {
+  return invoke('remote_pick_document', { mimeType });
+}
+
+// Upload by SAF content URI. The native broker reads the bytes through the
+// Kotlin plugin and streams the multipart upload, so a 100 MiB file never
+// materialises as a renderer base64 copy. The renderer only passes the URI,
+// filename, MIME and the extra multipart fields.
+export async function uploadByUri({
+  path,
+  uri,
+  fileName,
+  fileContentType,
+  fields,
+} = {}) {
+  return invoke('remote_api_upload_by_uri', {
+    path,
+    uri,
+    fileName,
+    fileContentType,
+    fields,
+  });
+}
+
+// ---- Gate R0.6 — native export -------------------------------------------
+// Artifact bytes are downloaded by the native broker and written through SAF
+// (ACTION_CREATE_DOCUMENT); the renderer never materialises the artifact.
+// api.js routes `downloadArtifact` here for Android, keeping the desktop /
+// browser blob path for the other runtimes.
+export async function downloadArtifact(artifactId) {
+  return invoke('remote_save_export', { path: `/artifacts/${artifactId}/export` });
+}
+
+// `saveExport(blob, filename)` is deliberately not a supported Android path:
+// export must go through the native broker + SAF above, never a renderer
+// materialised blob. The descriptor keeps `canUseSaveDialog: false`.
+export async function saveExport() {
+  throw new Error('Android 导出走原生 SAF 通道（downloadArtifact），不支持渲染层 Blob 落盘。');
+}
+
+// ---- Planned Android adapters (NOT IMPLEMENTED) --------------------------
 // Each returns an explicit not-implemented result instead of pretending to
 // work. The corresponding capability keys stay `false` and the UI keeps the
-// surface disabled, so no Android path claims a document picker / share sheet
-// / lifecycle hook that does not exist in v0.7.
+// surface disabled, so no Android path claims a share sheet / lifecycle hook
+// / biometric gate that does not exist.
 
 function notImplemented(name) {
   return async () => {
@@ -105,12 +154,7 @@ function notImplemented(name) {
   };
 }
 
-// System document picker / SAF selection (planned Gate E).
-export const selectDocument = notImplemented('selectDocument');
-// Upload by content URI / SAF stream (planned Gate E; today uploads go through
-// the bounded base64 native broker path).
-export const uploadByUri = notImplemented('uploadByUri');
-// Android share sheet (planned Gate E).
+// Android share sheet (planned).
 export const shareText = notImplemented('shareText');
 export const shareFile = notImplemented('shareFile');
 // Android Back handling (planned adapter; today the OS back-navigation falls
