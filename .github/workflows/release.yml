@@ -190,7 +190,7 @@ jobs:
             -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
             -e ANDROID_HOME=/opt/android-sdk \
             -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
-            interest-growth-android bash -c 'cd apps/desktop && npx tauri android build --apk --target x86_64 --debug'
+            interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target x86_64 --debug'
       - name: Stage release APK and run static verification
         id: signinfo
         run: |
