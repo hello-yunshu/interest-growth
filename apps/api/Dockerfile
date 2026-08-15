@@ -8,6 +8,10 @@ COPY adapters /app/adapters
 COPY plugins /app/plugins
 COPY scripts /app/scripts
 COPY domains /app/domains
-COPY data /app/data
+# The data volume mounts over /app/data; never bake repo-local dev data into
+# the image (data/ is gitignored and absent in a fresh CI checkout, so a
+# `COPY data /app/data` would fail the build). Create the empty mountpoint so
+# the app can seed it (init_db + vault storage) on first boot.
+RUN mkdir -p /app/data
 ENV PYTHONPATH=/app/apps/api:/app/packages/domain:/app/packages/plugin-runtime:/app/packages/engine-contracts:/app/packages/event-bus:/app/packages/artifacts:/app/packages/shared:/app/packages/native-execution-core:/app/adapters/deepseek
 CMD ["uvicorn", "pg_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
