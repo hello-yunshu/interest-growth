@@ -78,6 +78,25 @@ Remote Actions evidence at head `f52cfff`:
 
 Normative execution status and next order live in `docs/audits/V0_7_IMPLEMENTATION_AUDIT.md` and `docs/roadmap/V0_7_SELF_HOSTED_CROSS_DEVICE_PLAN.md`.
 
+## v1.0 — Gate R2 (Release Hardening) execution (2026-08-16)
+
+Source + remote Actions closure for the R2 release gates, at branch tip `f197079` (PR #6 → main):
+
+- **§9.1–§9.5 Data/Migration hardening**: frozen migration fixtures + idempotency, downgrade policy, clean create→destroy→clean→restore→migrate→verify→smoke backup/restore (`scripts/ci/verify_docker_integration.sh` + `tests/security/test_backup_restore.py`), and fail-closed corruption/failure paths — committed `d89f061` (supply-chain/APK gates), `5631b9c`, `ccb6fee`, `1d6a448`.
+- **§16 Provider contract over a deterministic mock server**: `tests/contracts/test_provider_mock_server_contract.py` (13 tests) covers chat/completion, streaming, timeout, rate limit, auth, malformed and structured output across both `OpenAICompatibleClient` and `DeepSeekProvider` transports, so CI never depends on a live LLM service — committed `b9fcd83`.
+- **§17 API/Schema freeze**: `scripts/verify_version_consistency.py` enforces a single version source (pyproject 0.7.0) across server/client/API/backup-format and is wired into `verify.py`; normative `docs/releases/V1_0_RELEASE_CRITERIA.md` + `docs/roadmap/V1_0_PLAN.md` committed `b9fcd83`.
+- **§15 Observability/error recovery**: `apps/web/lib/runtime/test/error-code-taxonomy.test.mjs` freezes the 10 user-facing error codes from the release criteria and their stable connection-event (retry) mapping; INTERNAL_ERROR stays a non-terminal catch-all; unknown/fuzzy payloads stay retryable transport failures — committed `2c9eedc`. Server security events already assert never-storing credentials (`test_security_events_never_store_credentials`).
+- **§14 Reliability soak**: `tests/security/test_remote_auth_soak.py` — 40-round atomic refresh rotations (single live credential per device), sequential revokes never leaking into survivors, repeated engine-reset restarts preserving owner/devices/live tokens, and three backup→destroy→restore cycles with stable server identity — committed `38fd534`.
+- SOURCE_MANIFEST regenerated (`f197079`).
+
+### Remote GitHub Actions evidence (branch tip `f197079`)
+
+- **CI** — run `31913347228`: **success** (includes version-consistency check + full pytest + new §14/§16 suites).
+- **Build Artifacts** — run `31913347170`: **success** (Windows x64 + macOS arm64 packages, sidecar smoke).
+- **Web E2E (UX closure)** — run `31913347230`: **success**.
+
+**R2 exit criteria**: §14–§17 committed and green in clean remote Actions on the branch. Full release matrix (docker-integration, Android emulator, cross-device, APK audit) runs at the RC/Stable tag via `release.yml`.
+
 ## Verified source/runtime facts
 
 - frozen v0.5 Host archive: exact SHA-256 verified, **246 files**, original **104 tests PASS**;
