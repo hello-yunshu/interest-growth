@@ -2,10 +2,18 @@
 // `InterestGrowthPlugin` (Kotlin).
 //
 // The renderer only passes a content URI, filename, MIME type and size; the
-// actual file bytes are read (upload) and written (export) in the native
-// layer, so a 100 MiB file never becomes a renderer base64 copy (Gate R0.5)
-// and an exported artifact is streamed through the native broker into SAF
-// (Gate R0.6).
+// actual file BYTES never cross the renderer. Gate R0.5/R0.6 make the native
+// path genuinely bounded/streaming by staging through a bounded app-private
+// temp file instead of a full base64 String:
+//
+//   * upload  — Kotlin streams the SAF content URI into a bounded app-private
+//               cache file (enforcing the product limit during the copy),
+//               Rust streams that file as the multipart body, then the temp
+//               file is cleaned up. The whole file never exists as a Kotlin
+//               ByteArray + base64 String + Rust Vec simultaneously.
+//   * export  — Rust streams the HTTP response into a bounded app-private temp
+//               file, Kotlin copies that file into the SAF ACTION_CREATE_DOCUMENT
+//               output stream, then the temp file is cleaned up.
 //
 // The Kotlin plugin is registered from Rust via `register_android_plugin`
 // during app setup and its handle is kept in Tauri state. Every command is
@@ -17,12 +25,12 @@ use tauri::{AppHandle, Runtime};
 #[cfg(target_os = "android")]
 use tauri::{plugin::PluginHandle, Manager};
 
-/// Bytes read from a SAF content URI (base64 so it crosses the JNI boundary
-/// as a string), plus the metadata the renderer is allowed to see.
+/// A bounded app-private temp file staged from a SAF content URI. Only the
+/// path + metadata reach Rust; the bytes live on disk, not in memory.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ContentUriPayload {
-    pub base64: String,
+pub struct StagedUpload {
+    pub path: String,
     pub name: String,
     pub size: i64,
     pub mime_type: String,
@@ -94,11 +102,21 @@ async fn invoke_android<T: serde::de::DeserializeOwned>(
         .map_err(|error| format!("android {command} failed: {error}"))
 }
 
-/// Read a SAF content URI natively (Kotlin → base64 → Rust). The renderer
-/// only ever supplies the URI string (Gate R0.5).
+/// Stage a SAF content URI into a bounded app-private cache file (Kotlin).
+/// The copy is aborted if `max_bytes` is exceeded, so the file is never read
+/// into memory unbounded. Returns the staged file path + metadata (Gate R0.5).
 #[cfg(target_os = "android")]
-pub async fn read_content_uri(app: &AppHandle, uri: &str) -> Result<ContentUriPayload, String> {
-    invoke_android(app, "readContentUri", serde_json::json!({ "uri": uri })).await
+pub async fn stage_upload(
+    app: &AppHandle,
+    uri: &str,
+    max_bytes: u64,
+) -> Result<StagedUpload, String> {
+    invoke_android(
+        app,
+        "stageContentUri",
+        serde_json::json!({ "uri": uri, "maxBytes": max_bytes }),
+    )
+    .await
 }
 
 /// Open the SAF ACTION_OPEN_DOCUMENT picker and return the selected content
@@ -111,20 +129,22 @@ pub async fn pick_document(
     invoke_android(app, "pickDocument", serde_json::json!({ "mimeType": mime_type })).await
 }
 
-/// Open the SAF ACTION_CREATE_DOCUMENT picker and write the base64 content to
-/// the user-selected location (Gate R0.6).
+/// Open the SAF ACTION_CREATE_DOCUMENT picker and copy a bounded app-private
+/// temp file into the user-selected location (Gate R0.6). The source file is
+/// read in bounded chunks and written to the output stream; it is never
+/// materialised as a base64 payload on the plugin.
 #[cfg(target_os = "android")]
-pub async fn save_document(
+pub async fn save_document_from_file(
     app: &AppHandle,
+    source_path: &str,
     filename: &str,
     mime_type: &str,
-    content_base64: &str,
 ) -> Result<SavedDocument, String> {
     invoke_android(
         app,
-        "saveDocument",
+        "saveDocumentFromFile",
         serde_json::json!({
-            "contentBase64": content_base64,
+            "sourcePath": source_path,
             "filename": filename,
             "mimeType": mime_type,
         }),
@@ -137,8 +157,12 @@ pub async fn save_document(
 // cleanly instead of pretending to exist on desktop, which keeps the desktop
 // export path (native save dialog) the only desktop export surface.
 #[cfg(not(target_os = "android"))]
-pub async fn read_content_uri(_app: &AppHandle, _uri: &str) -> Result<ContentUriPayload, String> {
-    Err("SAF content URI reads are only available on the Android build".into())
+pub async fn stage_upload(
+    _app: &AppHandle,
+    _uri: &str,
+    _max_bytes: u64,
+) -> Result<StagedUpload, String> {
+    Err("SAF content URI staging is only available on the Android build".into())
 }
 
 #[cfg(not(target_os = "android"))]
@@ -150,11 +174,11 @@ pub async fn pick_document(
 }
 
 #[cfg(not(target_os = "android"))]
-pub async fn save_document(
+pub async fn save_document_from_file(
     _app: &AppHandle,
+    _source_path: &str,
     _filename: &str,
     _mime_type: &str,
-    _content_base64: &str,
 ) -> Result<SavedDocument, String> {
     Err("SAF document writes are only available on the Android build".into())
 }
