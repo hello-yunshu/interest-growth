@@ -180,7 +180,7 @@ jobs:
             -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
             -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
             -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
-            interest-growth-android bash -c 'cd apps/desktop && npx tauri android build --apk --target aarch64'
+            interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target aarch64'
       - name: Build emulator x86_64 verify APK (debug, no signing secrets)
         # The emulator runs x86_64, so it installs the x86_64 debug APK (not
         # the arm64 release APK). Debug build needs no signing material.

@@ -61,14 +61,14 @@ jobs:
       - name: Build Android verify APK (debug, unsigned-release-not-claimed)
         # Debug APK needs no signing secrets. The release buildType is NOT used
         # here (no signing material) so this artifact is a verify APK only.
+        # The CLI is driven through the local @tauri-apps/cli (npm run tauri)
+        # after npm ci, matching the desktop workflows, so the generated Gradle
+        # android-studio-script resolves the CLI correctly in a clean checkout.
         run: |
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
             -e ANDROID_HOME=/opt/android-sdk \
             -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
-            # Use the local @tauri-apps/cli via npm run so the CLI's self-detection
-            # generates the correct android-studio-script invocation (npm run tauri)
-            # instead of a bare `node tauri` that cannot resolve in a clean checkout.
             interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target aarch64 --debug'
       - name: Locate verify APK
         id: apk
