@@ -141,7 +141,7 @@ jobs:
         # Process/runtime-health evidence is the accepted bar on headless CI.
         shell: bash
         run: |
-          EXE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/Interest Growth.exe"
+          EXE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/interest-growth-desktop.exe"
           SIDE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/binaries/psychology-growth-core-x86_64-pc-windows-msvc.exe"
           test -f "$EXE" || { echo "no packaged exe: $EXE" >&2; exit 1; }
           test -f "$SIDE" || { echo "no sidecar: $SIDE" >&2; exit 1; }
@@ -200,7 +200,7 @@ jobs:
         # the accepted bar on headless CI.
         run: |
           APP="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Interest Growth.app"
-          BIN="$APP/Contents/MacOS/Interest Growth"
+          BIN="$APP/Contents/MacOS/interest-growth-desktop"
           test -d "$APP" || { echo "no .app bundle: $APP" >&2; exit 1; }
           test -x "$BIN" || { echo "no app binary: $BIN" >&2; exit 1; }
           bash scripts/ci/verify_packaged_startup.sh "$BIN" --mac
