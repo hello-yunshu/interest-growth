@@ -107,6 +107,15 @@ export function isRuntimeId(value) {
   return RUNTIME_IDS.includes(value);
 }
 
+// Gate E / R0.2 — a remote runtime always shares the self-hosted-server data
+// location and the native broker transport. Feature pages and controllers
+// must use this helper instead of branching on the literal "desktop-remote"
+// string, so android-remote (and the planned browser-remote) are never
+// misclassified as local.
+export function isRemoteRuntime(runtimeId) {
+  return runtimeId === 'desktop-remote' || runtimeId === 'android-remote' || runtimeId === 'browser-remote';
+}
+
 export function isPlatformId(value) {
   return PLATFORM_IDS.includes(value);
 }

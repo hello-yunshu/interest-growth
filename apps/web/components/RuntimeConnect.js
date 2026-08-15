@@ -31,6 +31,8 @@ import {
   initialRuntimeConnectState,
   runtimeConnectReducer,
   isRemoteActive,
+  isRemoteRuntime,
+  RUNTIME_ANDROID_REMOTE,
 } from '../lib/runtime/runtime-connect-controller.js';
 import { StatusChip, RecordsTable } from './BeautifulUI';
 
@@ -63,6 +65,7 @@ function formatSeen(value) {
 
 export default function RuntimeConnect({ onRuntimeChanged }) {
   const [desktop, setDesktop] = useState(false);
+  const [platform, setPlatform] = useState(null);
   const [runtimeState, dispatch] = useReducer(runtimeConnectReducer, { activeRuntimeId: 'desktop-local' }, initialRuntimeConnectState);
   const [confirmTarget, setConfirmTarget] = useState(null);
   // "稍后重启" only hides the reminder; the persisted pending switch stays.
@@ -88,7 +91,12 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
   const [revokeTarget, setRevokeTarget] = useState(null);
   const [revokePassword, setRevokePassword] = useState('');
 
-  const isRemote = isRemoteActive(runtimeState);
+  // Gate E / R0.1 — Android is always android-remote: no local/remote switch,
+  // no "restart to switch", only the server connection surface. The reducer
+  // resolves android-remote natively; until MODE_LOADED lands, the platform
+  // already tells us the shell is remote-only so no desktop switch flashes.
+  const isAndroid = platform === 'android' || runtimeState.activeRuntimeId === RUNTIME_ANDROID_REMOTE;
+  const isRemote = isRemoteActive(runtimeState) || isAndroid;
   const needsRestart = runtimeState.restartRequired && !dismissedRestart;
 
   function flash(text, tone = 'success') {
@@ -160,7 +168,10 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     (async () => {
       try {
         const runtime = await getDesktopRuntime();
-        if (active) setDesktop(Boolean(runtime?.desktop));
+        if (active) {
+          setDesktop(Boolean(runtime?.desktop));
+          setPlatform(runtime?.platform || null);
+        }
       } catch { /* not desktop */ }
       try {
         const modeInfo = await getDesktopRuntimeMode();
@@ -279,7 +290,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       await runRemoteAction(() => remoteLogin({
         origin,
         ownerPassword,
-        deviceName: deviceName || (runtime?.platform === 'windows' ? '这台电脑' : '这台 Mac'),
+        deviceName: deviceName || (runtime?.platform === 'windows' ? '这台电脑' : runtime?.platform === 'android' ? '这台 Android 设备' : '这台 Mac'),
         platform: runtime?.platform || 'macos',
         appVersion: runtime?.version || '0.7.0',
         expectedServerInstanceId: probe?.server?.serverInstanceId || session?.serverInstanceId || '',
@@ -409,6 +420,20 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
   }
 
   return <div className="stack">
+    {isAndroid && (
+      <section className="card">
+        <div className="cardHeader">
+          <div>
+            <div className="eyebrow">运行时模式</div>
+            <h3>Android 客户端</h3>
+            <p className="muted">Android 版始终通过自托管服务器接入，没有本机数据模式：数据保存在你的服务器，本机不复制、不同步离线数据。</p>
+          </div>
+          <StatusChip tone="accent">自托管服务器</StatusChip>
+        </div>
+      </section>
+    )}
+
+    {!isAndroid && (
     <section className="card">
       <div className="cardHeader">
         <div>
@@ -450,6 +475,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
         </div>
       )}
     </section>
+    )}
 
     {msg.text && <p className={`notice ${msg.tone === 'error' ? 'error' : 'success'}`}>{msg.text}</p>}
 

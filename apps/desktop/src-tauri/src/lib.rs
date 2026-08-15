@@ -695,14 +695,17 @@ pub fn run() {
             };
             // Gate E §6.4 — on Android the OS-backed Android Keystore is the
             // credential store; on desktop the platform keyring is used.
+            // Gate R0.3 — the broker's expected runtime is the ACTIVE mode, so
+            // a server must advertise exactly android-remote / desktop-remote.
             #[cfg(target_os = "android")]
-            let broker = RemoteBroker::new(
+            let broker = RemoteBroker::with_expected_runtime(
                 AndroidKeystoreStore::new()
                     .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
+                mode.as_str(),
             )
             .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
             #[cfg(not(target_os = "android"))]
-            let broker = RemoteBroker::new(Arc::new(KeyringStore))
+            let broker = RemoteBroker::with_expected_runtime(Arc::new(KeyringStore), mode.as_str())
                 .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
             app.manage(DesktopState {
                 runtime: Mutex::new(runtime),

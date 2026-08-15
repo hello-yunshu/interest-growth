@@ -79,8 +79,10 @@ export async function restartApp() {
 
 // Gate D §D3/D4 — native remote credential broker + HTTP transport. These
 // wrap the Rust commands; the renderer only ever submits relative API paths.
+// Gate R0.3 — the desktop probe checks desktop-remote exactly; the native
+// broker also requires the active mode when a runtime id is omitted.
 export async function remoteProbeServer(origin) {
-  return invoke('remote_probe_server', { origin });
+  return invoke('remote_probe_server', { origin, runtimeId: 'desktop-remote' });
 }
 
 export async function remoteBootstrapOwner(origin, ownerPassword, bootstrapToken) {

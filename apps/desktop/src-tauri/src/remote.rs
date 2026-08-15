@@ -53,7 +53,19 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const API_PRODUCT: &str = "interest-growth";
 const SUPPORTED_API_VERSION: &str = "1";
 const RUNTIME_DESKTOP_REMOTE: &str = "desktop-remote";
+// Gate R0.3 — the Android shell is its own remote runtime: it must NOT borrow
+// desktop-remote to "coincidentally pass" compatibility. A server must
+// advertise the exact runtime the client actually runs.
+const RUNTIME_ANDROID_REMOTE: &str = "android-remote";
 const AUTH_MODE_SINGLE_OWNER_DEVICES: &str = "single_owner_devices";
+
+/// Gate R0.3 — the shipped native remote runtimes. Both require the same
+/// frozen auth/transport contract (auth enabled, single-owner-devices,
+/// online-first, no offline sync). browser-remote is not a shipped native
+/// runtime in this binary.
+fn is_remote_runtime_id(runtime_id: &str) -> bool {
+    runtime_id == RUNTIME_DESKTOP_REMOTE || runtime_id == RUNTIME_ANDROID_REMOTE
+}
 
 // Gate D §P17 — upload bound matches the server product limit (100 MiB).
 const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
@@ -613,6 +625,12 @@ pub struct RemoteBroker {
     pub client: reqwest::Client,
     pub store: Arc<dyn CredentialStore>,
     pub state: Arc<RemoteBrokerState>,
+    // Gate R0.3 — the exact remote runtime this process runs
+    // (desktop-remote / android-remote). Credential-bearing flows only accept a
+    // server that advertises this runtime; the Android shell must not borrow
+    // desktop-remote. Set from the ACTIVE mode at setup; the probe command
+    // independently selects the expected runtime.
+    expected_runtime_id: Arc<tokio::sync::Mutex<String>>,
 }
 
 // ------------------------------------------------------------- helpers
@@ -813,13 +831,47 @@ fn http_client() -> Result<reqwest::Client, String> {
 
 impl RemoteBroker {
     pub fn new(store: Arc<dyn CredentialStore>) -> Result<Self, String> {
+        // Default expected runtime is desktop-remote (legacy desktop behavior).
+        // lib.rs overrides this with the ACTIVE mode at setup; tests may switch
+        // it explicitly (Gate R0.3).
+        Self::with_expected_runtime(store, RUNTIME_DESKTOP_REMOTE)
+    }
+
+    pub fn with_expected_runtime(
+        store: Arc<dyn CredentialStore>,
+        runtime_id: &str,
+    ) -> Result<Self, String> {
+        if !is_remote_runtime_id(runtime_id) {
+            return Err(remote_error(
+                ERR_INTERNAL,
+                format!("expected runtime must be a remote runtime, got: {runtime_id}"),
+            ));
+        }
         Ok(Self {
             client: http_client().map_err(|error| {
                 remote_error(ERR_INTERNAL, format!("cannot build HTTP client: {error}"))
             })?,
             store,
             state: Arc::new(RemoteBrokerState::new()),
+            expected_runtime_id: Arc::new(tokio::sync::Mutex::new(runtime_id.to_string())),
         })
+    }
+
+    /// Gate R0.3 — the runtime this broker requires for credential-bearing
+    /// flows. Callers that know the ACTIVE mode (e.g. the probe command) can
+    /// select the exact runtime a server must advertise.
+    async fn expected_runtime(&self) -> String {
+        self.expected_runtime_id.lock().await.clone()
+    }
+
+    /// Gate R0.3 — switch the required runtime for the remainder of this
+    /// session. Session-immutable in production; used by tests to prove the
+    /// Android client does not borrow desktop-remote.
+    #[cfg(test)]
+    async fn set_expected_runtime(&self, runtime_id: &str) {
+        if is_remote_runtime_id(runtime_id) {
+            *self.expected_runtime_id.lock().await = runtime_id.to_string();
+        }
     }
 
     // -------------------------------------------------- session primitives
@@ -974,8 +1026,26 @@ impl RemoteBroker {
     /// native compatibility gate so an incompatible server can never produce a
     /// pending enrollment or receive a credential.
     pub async fn probe_desktop_remote(&self, origin: &str) -> Result<RemoteProbeResult, String> {
+        self.probe_for_runtime(origin, RUNTIME_DESKTOP_REMOTE).await
+    }
+
+    /// Gate R0.3 — probe a server for an explicitly requested remote runtime
+    /// (desktop-remote or android-remote). The Android shell probes for
+    /// android-remote and must never "coincidentally pass" via a server that
+    /// only advertises desktop-remote.
+    pub async fn probe_for_runtime(
+        &self,
+        origin: &str,
+        runtime_id: &str,
+    ) -> Result<RemoteProbeResult, String> {
+        if !is_remote_runtime_id(runtime_id) {
+            return Err(remote_error(
+                ERR_UNSUPPORTED_SERVER,
+                format!("unsupported remote runtime for probe: {runtime_id}"),
+            ));
+        }
         let result = self.probe(origin).await?;
-        self.check_compatibility(&result.server, RUNTIME_DESKTOP_REMOTE)?;
+        self.check_compatibility(&result.server, runtime_id)?;
         Ok(result)
     }
 
@@ -1021,7 +1091,9 @@ impl RemoteBroker {
                 format!("server does not support runtime {runtime_id}"),
             ));
         }
-        if runtime_id == RUNTIME_DESKTOP_REMOTE {
+        // Gate R0.3 — every shipped remote runtime (desktop-remote,
+        // android-remote) requires the same frozen auth/transport contract.
+        if is_remote_runtime_id(runtime_id) {
             if !server.auth_enabled {
                 return Err(remote_error(
                     ERR_UNSUPPORTED_SERVER,
@@ -1060,8 +1132,9 @@ impl RemoteBroker {
     /// closure). The renderer-facing probe result remains a UI display cache
     /// and is never an authorization cache.
     async fn fresh_verified_server(&self, origin: &str) -> Result<RemoteServerInfo, String> {
+        let runtime_id = self.expected_runtime().await;
         let result = self.probe(origin).await?;
-        self.check_compatibility(&result.server, RUNTIME_DESKTOP_REMOTE)?;
+        self.check_compatibility(&result.server, &runtime_id)?;
         Ok(result.server)
     }
 
@@ -1069,8 +1142,9 @@ impl RemoteBroker {
     /// identity preflight. A replaced server behind the same URL blocks before
     /// the refresh credential is read or sent.
     async fn identity_preflight(&self, enrollment: &RemoteEnrollment) -> Result<(), String> {
+        let runtime_id = self.expected_runtime().await;
         let probe = self.probe(&enrollment.normalized_origin).await?;
-        self.check_compatibility(&probe.server, RUNTIME_DESKTOP_REMOTE)?;
+        self.check_compatibility(&probe.server, &runtime_id)?;
         if probe.server.server_instance_id != enrollment.server_instance_id {
             return Err(remote_error(
                 ERR_IDENTITY_CHANGED,
@@ -2177,11 +2251,25 @@ fn parse_server_info(payload: &serde_json::Value) -> Result<AuthServerInfoRespon
 /// DISPLAY the compatibility gate before enrollment. No probe result is ever
 /// cached or reused as a credential-send authorization (Gate D §P6): login and
 /// bootstrap always re-probe natively within the same call.
+///
+/// Gate R0.3 — the probe checks the EXACT runtime the client runs. The
+/// renderer submits a `runtime_id` (desktop-remote on desktop, android-remote
+/// on Android); when absent, it falls back to the ACTIVE mode's runtime id so
+/// a credential-bearing flow can never accidentally probe for a different
+/// runtime than the one being used.
 #[tauri::command]
-pub async fn remote_probe_server(app: AppHandle, origin: String) -> Result<RemoteProbeResult, String> {
+pub async fn remote_probe_server(
+    app: AppHandle,
+    origin: String,
+    runtime_id: Option<String>,
+) -> Result<RemoteProbeResult, String> {
     let normalized = normalize_enrollment_origin(&origin)?;
     let broker = app.state::<DesktopState>().broker.clone();
-    broker.probe_desktop_remote(&normalized).await
+    let runtime_id = match runtime_id {
+        Some(runtime_id) => runtime_id,
+        None => app.state::<DesktopState>().mode.as_str().to_string(),
+    };
+    broker.probe_for_runtime(&normalized, &runtime_id).await
 }
 
 /// Gate D §P28 (HIGH) — the native remote broker is only reachable while the
@@ -2719,6 +2807,25 @@ mod tests {
         value.to_string()
     }
 
+    // Gate R0.3 — capabilities with an explicit runtime_modes array (the
+    // generic caps_with override would replace the array with a JSON string).
+    fn caps_with_modes(modes_json: &str) -> String {
+        let mut value = serde_json::json!({
+            "product": "interest-growth",
+            "server_version": "0.7.0",
+            "api_version": "1",
+            "min_client_version": "0.7.0",
+            "server_instance_id": "instance-A",
+            "server_display_name": "Test Server",
+            "auth": { "mode": "single_owner_devices", "enabled": true, "owner_configured": true },
+            "online_first": true,
+            "offline_sync": false,
+            "tls": false
+        });
+        value["runtime_modes"] = serde_json::from_str::<serde_json::Value>(modes_json).unwrap();
+        value.to_string()
+    }
+
     fn compatible_handler() -> impl Fn(&RecordedRequest) -> TestResponse + Send + Sync + 'static {
         |request: &RecordedRequest| match request.path.as_str() {
             "/api/system/capabilities" => TestResponse::json(200, CAPS),
@@ -3087,6 +3194,148 @@ mod tests {
         .await;
         let error = broker.probe_desktop_remote(server.url()).await.unwrap_err();
         assert!(error.contains("runtime"));
+    }
+
+    // ------------------------------------------- Gate R0.3 expected runtime
+
+    #[tokio::test]
+    async fn android_probe_accepts_server_advertising_only_android_remote() {
+        // Directed R0.3 case 1: server supports ONLY android-remote and the
+        // Android client probes for android-remote → PASS.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let caps = caps_with_modes(r#"["android-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let result = broker
+            .probe_for_runtime(server.url(), RUNTIME_ANDROID_REMOTE)
+            .await;
+        assert!(result.is_ok(), "android probe must pass: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn android_probe_rejects_server_advertising_only_desktop_remote() {
+        // Directed R0.3 case 2: server supports ONLY desktop-remote and the
+        // Android client probes for android-remote → UNSUPPORTED_SERVER, so it
+        // can never "coincidentally pass" via desktop-remote.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let caps = caps_with_modes(r#"["desktop-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker
+            .probe_for_runtime(server.url(), RUNTIME_ANDROID_REMOTE)
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_UNSUPPORTED_SERVER), "got: {error}");
+        assert!(error.contains("runtime"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn desktop_probe_rejects_server_advertising_only_android_remote() {
+        // Directed R0.3 case 3: server supports ONLY android-remote and a
+        // desktop-remote client probes → reject.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let caps = caps_with_modes(r#"["android-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker
+            .probe_for_runtime(server.url(), RUNTIME_DESKTOP_REMOTE)
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_UNSUPPORTED_SERVER), "got: {error}");
+        assert!(error.contains("runtime"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn probe_for_runtime_rejects_non_remote_runtime_id() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|_request: &RecordedRequest| TestResponse::json(200, CAPS))
+            .await;
+        let error = broker
+            .probe_for_runtime(server.url(), "desktop-local")
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_UNSUPPORTED_SERVER), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn android_login_requires_android_remote_advertised() {
+        // Directed R0.3 credential path: an Android broker (expected runtime =
+        // android-remote) must refuse login to a server that only advertises
+        // desktop-remote, BEFORE any credential is sent or persisted.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        broker.set_expected_runtime(RUNTIME_ANDROID_REMOTE).await;
+        let caps = caps_with_modes(r#"["desktop-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => TestResponse::json(201, LOGIN_OK),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("android-login-incompat");
+        let result = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "android", "0.7.0")
+            .await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains(ERR_UNSUPPORTED_SERVER),
+            "login must be refused as unsupported before sending credentials"
+        );
+        // No credential was persisted and the owner password never reached the
+        // login endpoint (probe fails before any credential-bearing request).
+        assert!(!app_data.0.join(ENROLLMENT_FILE).exists());
+        assert!(store.read_refresh("instance-A", "device-1").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn android_login_accepts_server_advertising_only_android_remote() {
+        // Directed R0.3 credential path: an Android broker (expected runtime =
+        // android-remote) logs into a server that advertises android-remote.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        broker.set_expected_runtime(RUNTIME_ANDROID_REMOTE).await;
+        let caps = caps_with_modes(r#"["android-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => TestResponse::json(201, LOGIN_OK),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("android-login-ok");
+        let result = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "android", "0.7.0")
+            .await;
+        assert!(result.is_ok(), "android login must succeed: {:?}", result.err());
+        // The refresh credential was persisted to the OS-backed store.
+        assert!(store.read_refresh("instance-A", "device-1").unwrap().is_some());
     }
 
     #[tokio::test]

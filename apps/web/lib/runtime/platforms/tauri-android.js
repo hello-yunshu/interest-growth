@@ -17,8 +17,13 @@ export const PLATFORM_ID = 'tauri-android';
 // Native remote broker invocation — identical Tauri commands as the desktop
 // adapter, so the renderer only ever submits relative API paths and never
 // sees the refresh credential (Gate D §D3/D4 reused for Android).
+//
+// Gate R0.3 — the Android shell probes for android-remote specifically. It
+// must never "coincidentally pass" a server that only advertises
+// desktop-remote, and a server that only advertises android-remote must be
+// accepted.
 export async function remoteProbeServer(origin) {
-  return invoke('remote_probe_server', { origin });
+  return invoke('remote_probe_server', { origin, runtimeId: 'android-remote' });
 }
 
 export async function remoteBootstrapOwner(origin, ownerPassword, bootstrapToken) {
