@@ -71,7 +71,9 @@ check_contents() {
     fail "desktop updater payload must not be packaged: ${apk}"
   fi
   # network_security_config must be present (Gate E §6.7 fail-closed TLS).
-  if ! grep -qE 'res/.*/xml/network_security_config\.xml|networkSecurityConfig' <<<"${listing}"; then
+  # AAPT2 stores XML resources directly under res/xml/ (no intermediate
+  # segment), so match the leaf filename rather than a res/<x>/xml/ shape.
+  if ! grep -qE 'network_security_config\.xml|networkSecurityConfig' <<<"${listing}"; then
     fail "network_security_config.xml is missing: ${apk}"
   fi
 
