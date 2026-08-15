@@ -30,6 +30,10 @@ from pg_shared import get_settings
 MANIFEST_NAME = "manifest.json"
 DB_FILE_NAME = "psychology_growth.db"
 DIRS_TO_COPY = ("sources", "artifacts")
+# Gate R2 §43: the on-disk bundle layout/manifest contract is frozen at v1.
+# Restore refuses any bundle whose format_version is newer than this build
+# (a future server could change the layout; fail closed, never guess).
+BACKUP_FORMAT_VERSION = 1
 
 
 def _sha256_file(path: Path) -> str:
@@ -182,6 +186,7 @@ def create_backup(
         except sqlalchemy.exc.OperationalError:
             server_instance_id = None
         manifest = {
+            "format_version": BACKUP_FORMAT_VERSION,
             "product": "interest-growth",
             "server_version": SERVER_VERSION,
             "schema_version": _schema_version(),
@@ -206,6 +211,18 @@ def verify_bundle(bundle_dir: str) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise ValueError(f"backup bundle missing manifest: {bundle_dir}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # Gate R2 §43: refuse a bundle from a future (incompatible) backup format or
+    # from a different product — fail closed before any staged verification.
+    bundle_format = manifest.get("format_version", 1)  # pre-1.0 bundles predate the field
+    if not isinstance(bundle_format, int) or bundle_format > BACKUP_FORMAT_VERSION:
+        raise ValueError(
+            f"backup bundle format_version {bundle_format} is newer than this build "
+            f"supports ({BACKUP_FORMAT_VERSION}); restore a compatible backup"
+        )
+    if manifest.get("product") != "interest-growth":
+        raise ValueError(
+            f"backup bundle is not an interest-growth backup: {manifest.get('product')!r}"
+        )
     db_file = bundle / DB_FILE_NAME
     if not db_file.is_file():
         raise ValueError("backup bundle missing database snapshot")

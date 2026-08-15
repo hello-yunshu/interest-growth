@@ -19,13 +19,26 @@
 # Usage:
 #   scripts/ci/verify_android_apk.sh <apk> [<apk> ...]
 #   e.g. scripts/ci/verify_android_apk.sh apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+#   Add --require-aapt to fail (not skip) when aapt/aapt2 is not on PATH —
+#   used by release jobs so a missing metadata tool can never become a pass
+#   (Gate R2 §13.1).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
-if [ "$#" -eq 0 ]; then
-  echo "usage: $0 <apk> [<apk> ...]" >&2
+REQUIRE_AAPT=0
+APKS=()
+for arg in "$@"; do
+  if [ "${arg}" = "--require-aapt" ]; then
+    REQUIRE_AAPT=1
+  else
+    APKS+=("${arg}")
+  fi
+done
+
+if [ "${#APKS[@]}" -eq 0 ]; then
+  echo "usage: $0 [--require-aapt] <apk> [<apk> ...]" >&2
   exit 2
 fi
 
@@ -43,6 +56,10 @@ for cand in aapt aapt2; do
     break
   fi
 done
+if [ -z "${AAPT}" ] && [ "${REQUIRE_AAPT}" -eq 1 ]; then
+  echo "FAIL: aapt/aapt2 not on PATH but --require-aapt was set (Gate R2 §13.1)" >&2
+  exit 1
+fi
 
 # ---- content checks (unzip -l, host-agnostic) --------------------------------
 check_contents() {
@@ -142,7 +159,7 @@ check_metadata() {
   fi
 }
 
-for apk in "$@"; do
+for apk in "${APKS[@]}"; do
   if [ ! -f "${apk}" ]; then
     echo "missing APK: ${apk}" >&2
     exit 2
