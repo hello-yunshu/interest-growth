@@ -44,22 +44,18 @@ The plan below is the normative R2 checklist. Each row records the artifact and 
 | 12.5 | Provenance | attest-build-provenance | run at release |
 | 13.1 | Android APK audit (aapt required, fail-closed) | `scripts/ci/verify_android_apk.sh --require-aapt` | run |
 | 13.4 | Server bundle (compose, env example, backup/restore tools) | release assets | run at release |
-| 14.1 | Reliability soak (refresh/revoke loop, repeated restart, backup/restore repeat) | `tests/security/test_remote_auth_soak.py` (new) | committed, CI host gate |
+| 14.1 | Reliability soak (refresh/revoke loop, repeated restart, backup/restore repeat) | `tests/security/test_remote_auth_soak.py` | committed `38fd534` |
 | 14.2 | Concurrency (single-flight refresh, owner singleton, backup lock) | existing + soak | committed |
 | 14.4 | Android upload: no full base64 copy | android_bridge.rs + test | committed |
-| 15 | Observability: structured server logs, no credential logging, frozen error codes, user-facing stable code + retry guidance | error-code taxonomy test (new) + remote.js | committed, CI host gate |
-| 16 | Provider contract over deterministic mock server (chat/stream/timeout/rate-limit/malformed/unavailable) | `tests/contracts/test_provider_mock_server_contract.py` | committed, CI host gate |
-| 17 | API/Schema freeze: version single-source consistency + `V1_0_RELEASE_CRITERIA.md` + `V1_0_PLAN.md` | `scripts/verify_version_consistency.py` + this doc | committed, CI host gate |
+| 15 | Observability: structured server logs, no credential logging, frozen error codes, user-facing stable code + retry guidance | `apps/web/lib/runtime/test/error-code-taxonomy.test.mjs` + remote.js | committed `2c9eedc`, CI host gate |
+| 16 | Provider contract over deterministic mock server (chat/stream/timeout/rate-limit/malformed/unavailable) | `tests/contracts/test_provider_mock_server_contract.py` | committed `b9fcd83`, CI host gate |
+| 17 | API/Schema freeze: version single-source consistency + `V1_0_RELEASE_CRITERIA.md` + `V1_0_PLAN.md` | `scripts/verify_version_consistency.py` + this doc | committed `b9fcd83`, CI host gate |
 
 ## Remaining work queue (current, in order)
 
-1. Commit §16 provider-contract test (skip the .md prompt files — never commit the prompt).
-2. §17: version-consistency check wired into `verify.py`; release docs (this pair).
-3. §15: error-code taxonomy frozen regression test (10 required codes + no-credential-leak) and structured-logging no-secret assertion.
-4. §14: soak tests — multi-round refresh/revoke, backup/restore repeat, restart recovery.
-5. Push → remote CI + docker-integration + build-artifacts.
-6. Main PR → merge → v1.0.0-rc.1 tag → full RC Actions → independent audit.
-7. v1.0.0 tag → full Stable Actions → sign/verify → release-gate → publish.
+1. Push → remote CI + docker-integration + build-artifacts.
+2. Main PR → merge → v1.0.0-rc.1 tag → full RC Actions → independent audit.
+3. v1.0.0 tag → full Stable Actions → sign/verify → release-gate → publish.
 
 ## Definition of done (summary)
 
