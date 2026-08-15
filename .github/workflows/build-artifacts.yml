@@ -134,6 +134,19 @@ jobs:
         run: npm --prefix apps/web run build
       - name: Build Windows bundle (unsigned test artifact)
         run: npm --prefix apps/desktop run build -- --target x86_64-pc-windows-msvc
+      - name: Packaged desktop-local startup smoke (Windows)
+        # R0 §4 — launch the packaged app, assert setup survives (the known
+        # desktop-local startup BLOCKER regression) and the local Core sidecar
+        # is spawned. Place the built sidecar next to the exe as in a bundle.
+        # Process/runtime-health evidence is the accepted bar on headless CI.
+        shell: bash
+        run: |
+          EXE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/Interest Growth.exe"
+          SIDE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/binaries/psychology-growth-core-x86_64-pc-windows-msvc.exe"
+          test -f "$EXE" || { echo "no packaged exe: $EXE" >&2; exit 1; }
+          test -f "$SIDE" || { echo "no sidecar: $SIDE" >&2; exit 1; }
+          cp "$SIDE" "$(dirname "$EXE")/psychology-growth-core.exe"
+          bash scripts/ci/verify_packaged_startup.sh "$EXE" --win
       - name: Upload unsigned Windows artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -181,6 +194,16 @@ jobs:
         run: npm --prefix apps/web run build
       - name: Build macOS bundle (ad-hoc test artifact)
         run: npm --prefix apps/desktop run build -- --target aarch64-apple-darwin
+      - name: Packaged desktop-local startup smoke (macOS)
+        # R0 §4 — launch the packaged .app binary, assert setup survives and
+        # the local Core sidecar is spawned. Process/runtime-health evidence is
+        # the accepted bar on headless CI.
+        run: |
+          APP="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Interest Growth.app"
+          BIN="$APP/Contents/MacOS/Interest Growth"
+          test -d "$APP" || { echo "no .app bundle: $APP" >&2; exit 1; }
+          test -x "$BIN" || { echo "no app binary: $BIN" >&2; exit 1; }
+          bash scripts/ci/verify_packaged_startup.sh "$BIN" --mac
       - name: Upload ad-hoc macOS artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
