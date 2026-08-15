@@ -157,6 +157,17 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
             interest-growth-android bash -c 'cd apps/web && npm ci && NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run build'
+      - name: Create Android sidecar placeholders for tauri-build
+        # binaries/ is git-ignored; a clean checkout has no sidecar files.
+        # tauri-build's externalBin check requires them to exist even though
+        # the Android runtime is online-first (Native RemoteTransport) and
+        # never launches a local core. Zero-byte placeholders satisfy the
+        # build; the real PyInstaller sidecar is desktop-only.
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+            : > "apps/desktop/src-tauri/binaries/psychology-growth-core-${t}"
+          done
       - name: Build signed release APK (arm64-v8a, release signing required)
         run: |
           docker run --rm --platform linux/amd64 \
