@@ -1,10 +1,10 @@
 # Project Status
 
 **Product:** Interest Growth
-**Release candidate:** v0.6.0 — Native Execution Product
-**Next development target:** v0.7 — Self-hosted Cross-device + direct Android APK
+**Release branch:** `feat/v0.7-android-release-closure` → target **v1.0.0 Stable**
 **Default Domain Pack:** Psychology
 **Runtime:** Tauri 2 desktop shell + static Next.js/React + local Python/FastAPI Core
+**Execution order:** Gate R0 (v0.7 Closure) → R1 (Product Completion) → R2 (Release Hardening) → R3 (1.0 RC) → R4 (1.0 Stable). See `Interest_Growth_v1.0.0_远程Actions完整推进与正式发布_总执行提示词.md`.
 
 ## Source candidate status
 
@@ -47,6 +47,24 @@ v0.6 Host integration is implemented. Product packaging/runtime verification is 
 - Android toolchain + signed release APK (Gates E/F): established a persistent Docker Android build environment (JDK 17, Android SDK 36/NDK 27, Rust Android targets, cargo-ndk, Tauri CLI 2.11.4, Tencent/rsproxy mirrors, persisted Gradle/Cargo volumes). A **signed universal release APK** is produced (`app-universal-release.apk`, arm64-v8a, 25 MB, APK Signature Scheme v2, cert SHA-256 `66871e86…aa66f`, APK SHA-256 `01ce82e4…92024`); APK hygiene checked (no Python sidecar, no secrets, no bootstrap token, no desktop updater, single canonical `.so` per ABI).
 - Android emulator / physical device / upgrade-in-place / cross-device proof (Gates E–F–G): **NOT RUN** — no Android emulator image and no physical device are available in the current environment; these remain an explicit hardware boundary and must not be inferred as PASS. Real public-TLS-server enrollment and packaged desktop regression also remain to be exercised.
 - 2026-08-15 regression: 66 ClientRuntime JS tests (contract) + controller tests passed (`node --test lib/runtime/test/*.test.mjs`), 52 Rust host tests passed (`cargo test` — runtime-mode, remote broker, credential-store classification, version parser, connection state, Android namespace), `aarch64-linux-android` release build compiled and the signed APK passed `apksigner verify --verbose --print-certs` (v2).
+
+## v1.0 — Gate R0 (v0.7 Closure) execution (2026-08-16)
+
+Source closure for the R0 release gates, up to commit `cc1add3`:
+
+- **R0 §4 desktop-local startup regression fixed**: `remote.rs` resolves an appropriate remote broker runtime ID even for `desktop-local` (`broker_expected_runtime_id`), so Tauri setup survives while native remote commands remain gated by `ensure_remote_mode`. This closed the packaged desktop-local startup crash.
+- **R0.5/R0.6 Android streaming upload/export**: file/directory uploading and Artifact download/export moved from renderer base64 materialization to bounded file-backed streaming over SAF handles (`android_bridge.rs`), eliminating the 100 MiB renderer base64 path and keeping binary integrity for text/PDF/ZIP/image.
+- **R0 Android lifecycle + navigation**: real Android Back handling (WebView history) and foreground/background/resume with session re-evaluation on resume (`MainActivity.kt`).
+- **R0.7/R0.8 Android minimal capability scope**: minimized Android capabilities and app-owned FileProvider scope.
+- **R0 §4 packaged desktop-local startup smoke CI**: added `scripts/ci/verify_packaged_startup.sh` and wired it into `build-artifacts.yml` for both **Windows x64** and **macOS arm64** bundles (app process survives startup + `psychology-growth-core` sidecar spawned). Binary paths use the Cargo package name (`interest-growth-desktop`).
+- **Release hardening**: `release.yml` dropped the debug APK from release assets and added tag→SHA binding; `SOURCE_MANIFEST.sha256` regenerated.
+
+### Remote GitHub Actions evidence (head `cc1add3f94a3ccd4c97a3895ff58ed8001f41dd3`)
+
+- **CI** — run `31897145932`: **success**.
+- **Build Artifacts** — run `31897145902`: **success**, including `Packaged desktop-local startup smoke (Windows)` and `Packaged desktop-local startup smoke (macOS)` both **success** (sidecar health verified).
+
+**R0 exit criteria met**: packaged desktop-local startup is verified on Windows + macOS in clean remote Actions. Remaining to R1: emulator product-flow evidence (hardware/toolchain boundary, see Gate R1).
 
 Normative execution status and next order live in `docs/audits/V0_7_IMPLEMENTATION_AUDIT.md` and `docs/roadmap/V0_7_SELF_HOSTED_CROSS_DEVICE_PLAN.md`.
 
