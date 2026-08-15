@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 
@@ -22,7 +21,6 @@ from pg_api.db import (  # noqa: E402
     init_db,
     reset_engine_for_tests,
 )
-from pg_shared import get_settings  # noqa: E402
 
 # (file, schema_version before upgrade, product-era label)
 FIXTURES = [
@@ -33,9 +31,18 @@ FIXTURES = [
 ]
 
 
-def _env() -> None:
-    os.environ["APP_ENV"] = "test"
-    os.environ.setdefault("DEEPSEEK_API_KEY", "")
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    """Isolate env mutations per test so they never leak to other modules.
+
+    These tests point the engine at per-test temp databases; the APP_ENV /
+    APP_DATABASE_URL mutations must be restored (via monkeypatch) to avoid
+    contaminating other test modules that boot the real app on startup.
+    """
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    yield
+    reset_engine_for_tests()
 
 
 def _restore(fixture: str, tmp_path: Path) -> Path:
@@ -51,8 +58,8 @@ def _restore(fixture: str, tmp_path: Path) -> Path:
     return db_file
 
 
-def _point(database_url: str) -> None:
-    os.environ["APP_DATABASE_URL"] = database_url
+def _point(monkeypatch, database_url: str) -> None:
+    monkeypatch.setenv("APP_DATABASE_URL", database_url)
     reset_engine_for_tests()
 
 
@@ -74,98 +81,84 @@ def _table_counts(db_file: Path) -> dict[str, int]:
 
 
 @pytest.mark.parametrize("fixture,start,label", FIXTURES)
-def test_fixture_migrates_to_current(fixture, start, label, tmp_path):
+def test_fixture_migrates_to_current(fixture, start, label, tmp_path, monkeypatch):
     """Gate R2 §9.1: restore old DB -> run current migration -> schema/data intact."""
-    _env()
     db_file = _restore(fixture, tmp_path)
-    _point(f"sqlite:///{db_file}")
+    _point(monkeypatch, f"sqlite:///{db_file}")
     init_db()
-    try:
-        assert _schema_version() == CURRENT_SCHEMA_VERSION == 15
-        # Native execution tables present after upgrade (migration 11).
+    assert _schema_version() == CURRENT_SCHEMA_VERSION == 15
+    # Native execution tables present after upgrade (migration 11).
+    with get_session_factory()() as db:
+        db.info["skip_area_scope"] = True
+        assert db.scalar(select(QuestionModel).where(
+            QuestionModel.question == "黄金时刻法则为何有效？")).id
+        # Server identity backfilled exactly once (migration 15).
+        identity = db.scalar(select(ServerMetadataModel))
+        assert identity is not None and identity.server_instance_id
+        # Single-owner enforcement (migration 14): pre-auth eras have no owner;
+        # the v0.7 fixture's owner must survive the singleton index unchanged.
+        owners = db.scalars(select(OwnerModel)).all()
+        assert len(owners) == (1 if start >= 13 else 0)
+    # Interest area preserved (created in migration 8 seed for v10+ fixtures).
+    if start >= 10:
         with get_session_factory()() as db:
             db.info["skip_area_scope"] = True
-            assert db.scalar(select(QuestionModel).where(
-                QuestionModel.question == "黄金时刻法则为何有效？")).id
-            # Server identity backfilled exactly once (migration 15).
-            identity = db.scalar(select(ServerMetadataModel))
-            assert identity is not None and identity.server_instance_id
-            # Single-owner enforcement (migration 14): pre-auth eras have no owner;
-            # the v0.7 fixture's owner must survive the singleton index unchanged.
-            owners = db.scalars(select(OwnerModel)).all()
-            assert len(owners) == (1 if start >= 13 else 0)
-        # Interest area preserved (created in migration 8 seed for v10+ fixtures).
-        if start >= 10:
-            with get_session_factory()() as db:
-                db.info["skip_area_scope"] = True
-                area = db.scalar(select(InterestAreaModel).where(
-                    InterestAreaModel.slug == "photography"))
-                assert area is not None, "user interest area lost during upgrade"
-        # Native table set present for all fixtures after upgrade.
-        with get_session_factory()() as db:
-            db.info["skip_area_scope"] = True
-            assert db.scalar(select(DeviceModel).limit(1)) is not None or start < 13
-    finally:
-        reset_engine_for_tests()
+            area = db.scalar(select(InterestAreaModel).where(
+                InterestAreaModel.slug == "photography"))
+            assert area is not None, "user interest area lost during upgrade"
+    # Native table set present for all fixtures after upgrade.
+    with get_session_factory()() as db:
+        db.info["skip_area_scope"] = True
+        assert db.scalar(select(DeviceModel).limit(1)) is not None or start < 13
 
 
-def test_canonical_ownership_after_upgrade(tmp_path):
+def test_canonical_ownership_after_upgrade(tmp_path, monkeypatch):
     """Gate R2 §9.1: exactly one default area and one owner after upgrade."""
-    _env()
     db_file = _restore("schema_v13_v0_7.sql", tmp_path)
-    _point(f"sqlite:///{db_file}")
+    _point(monkeypatch, f"sqlite:///{db_file}")
     init_db()
-    try:
-        with get_session_factory()() as db:
-            db.info["skip_area_scope"] = True
-            defaults = db.scalars(select(InterestAreaModel).where(
-                InterestAreaModel.is_default.is_(True))).all()
-            assert len(defaults) == 1
-            assert len(db.scalars(select(OwnerModel)).all()) == 1
-            assert db.scalar(select(ServerMetadataModel)) is not None
-    finally:
-        reset_engine_for_tests()
+    with get_session_factory()() as db:
+        db.info["skip_area_scope"] = True
+        defaults = db.scalars(select(InterestAreaModel).where(
+            InterestAreaModel.is_default.is_(True))).all()
+        assert len(defaults) == 1
+        assert len(db.scalars(select(OwnerModel)).all()) == 1
+        assert db.scalar(select(ServerMetadataModel)) is not None
 
 
-def test_migration_idempotent(tmp_path):
+def test_migration_idempotent(tmp_path, monkeypatch):
     """Gate R2 §9.2: migrate once, migrate again -> no data churn/corruption."""
-    _env()
     db_file = _restore("schema_v10_v0_5_0.sql", tmp_path)
-    _point(f"sqlite:///{db_file}")
+    _point(monkeypatch, f"sqlite:///{db_file}")
     init_db()
     before = _table_counts(db_file)
     init_db()  # re-run the migration path
     after = _table_counts(db_file)
     assert before == after
     assert _schema_version() == CURRENT_SCHEMA_VERSION
-    reset_engine_for_tests()
 
 
-def test_full_fresh_migration_is_idempotent(tmp_path):
+def test_full_fresh_migration_is_idempotent(tmp_path, monkeypatch):
     """Gate R2 §9.2: a fresh install double-init is also stable."""
-    _env()
     db_file = tmp_path / "fresh.db"
-    _point(f"sqlite:///{db_file}")
+    _point(monkeypatch, f"sqlite:///{db_file}")
     init_db()
     counts1 = _table_counts(db_file)
     init_db()
     counts2 = _table_counts(db_file)
     assert counts1 == counts2
-    reset_engine_for_tests()
 
 
-def test_legacy_ledger_gap_fails_closed(tmp_path):
+def test_legacy_ledger_gap_fails_closed(tmp_path, monkeypatch):
     """Gate R2 §9.5: a corrupted/incomplete migration ledger must not silently pass."""
-    _env()
     db_file = _restore("schema_v10_v0_5_0.sql", tmp_path)
     conn = sqlite3.connect(db_file)
     conn.execute("DELETE FROM schema_migrations WHERE version = 7")
     conn.commit()
     conn.close()
-    _point(f"sqlite:///{db_file}")
+    _point(monkeypatch, f"sqlite:///{db_file}")
     with pytest.raises(RuntimeError, match="legacy migration ledger incomplete"):
         init_db()
-    reset_engine_for_tests()
 
 
 def test_fixture_generator_is_deterministic():
