@@ -36,8 +36,16 @@ keyring = { version = "4.1", features = ["v1"] }
 keyring-core = "1"
 
 url = "2"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs"] }
+# Gate R0.5/R0.6 — file-backed streaming. `tokio_util::io::ReaderStream`
+# turns a tokio File into a bounded byte Stream for a reqwest multipart body,
+# so a 100 MiB SAF upload/export is streamed from disk (a bounded app-private
+# temp file) instead of being materialised as a full base64/Rust Vec copy.
+# `futures_util::StreamExt` iterates the response byte stream for bounded
+# download-to-file on export.
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 base64 = "0.22"
 
 # Gate E §6.4 — on Android the OS-backed secure credential store is the Android

@@ -174,6 +174,18 @@ struct SentRequest {
     access_snapshot: TokenSnapshot,
 }
 
+/// Gate R0.6 — result of streaming an artifact download into a bounded
+/// app-private temp file. The bytes stay on disk (never a full base64 Vec);
+/// only status + metadata are surfaced and `access_snapshot` drives the single
+/// 401 refresh-recovery.
+#[derive(Clone, Debug)]
+pub(crate) struct DownloadedExport {
+    status: u16,
+    content_type: String,
+    response_headers: HashMap<String, String>,
+    access_snapshot: TokenSnapshot,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteServerInfo {
@@ -1638,6 +1650,126 @@ impl RemoteBroker {
         Ok(first)
     }
 
+    // Gate R0.5 — file-backed multipart upload. The file bytes are streamed
+    // from a bounded app-private temp file via `Part::stream(ReaderStream)`
+    // instead of `Part::bytes(full_vec)`, so a 100 MiB SAF upload is never
+    // materialised as a full Rust Vec in memory.
+    async fn send_multipart_file_once(
+        &self,
+        enrollment: &RemoteEnrollment,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_path: &Path,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<SentRequest, String> {
+        let access = self.get_session_token(enrollment).await?;
+        let snapshot = self.token_snapshot().await;
+        let url = format!("{}{}", enrollment.normalized_origin, path);
+        let mut form = reqwest::multipart::Form::new();
+        for (key, value) in fields {
+            form = form.text(key.clone(), value.clone());
+        }
+        let file = tokio::fs::File::open(file_path)
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("cannot open staged upload: {error}"),
+                )
+            })?;
+        let stream = tokio_util::io::ReaderStream::new(file);
+        // `ReaderStream` yields `Result<Bytes, io::Error>`; wrap it as a
+        // streaming Body so the multipart part is never materialised as a full
+        // Vec (Gate R0.5).
+        let body = reqwest::Body::wrap_stream(stream);
+        let part = reqwest::multipart::Part::stream(body)
+            .file_name(file_name.to_string())
+            .mime_str(file_content_type)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error.to_string()))?;
+        form = form.part(file_field.to_string(), part);
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&access)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_NETWORK_UNAVAILABLE,
+                    format!("remote upload failed: {error}"),
+                )
+            })?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let response_headers = Self::capture_response_headers(response.headers());
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| remote_error(ERR_NETWORK_UNAVAILABLE, error.to_string()))?
+            .to_vec();
+        Ok(SentRequest {
+            status,
+            bytes,
+            content_type,
+            response_headers,
+            access_snapshot: snapshot,
+        })
+    }
+
+    async fn send_multipart_file_with_auth(
+        &self,
+        enrollment: &RemoteEnrollment,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_path: &Path,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<SentRequest, String> {
+        let first = self
+            .send_multipart_file_once(
+                enrollment,
+                path,
+                file_field,
+                file_name,
+                file_path,
+                file_content_type,
+                fields,
+            )
+            .await?;
+        if first.status == 401 {
+            self.refresh_after_401(enrollment, &first.access_snapshot)
+                .await?;
+            let second = self
+                .send_multipart_file_once(
+                    enrollment,
+                    path,
+                    file_field,
+                    file_name,
+                    file_path,
+                    file_content_type,
+                    fields,
+                )
+                .await?;
+            if second.status == 401 {
+                return Err(remote_error(
+                    ERR_LOGIN_EXPIRED,
+                    "auth session expired; please log in again",
+                ));
+            }
+            return Ok(second);
+        }
+        Ok(first)
+    }
+
     // ------------------------------------------------------ public API
 
     pub async fn login(
@@ -1986,6 +2118,183 @@ impl RemoteBroker {
             body_base64: base64::engine::general_purpose::STANDARD.encode(sent.bytes),
             content_type: sent.content_type,
             response_headers: sent.response_headers,
+        })
+    }
+
+    /// Gate R0.5 — upload a bounded app-private temp file by STREAMING it as
+    /// the multipart body (never `Part::bytes` of a full Vec). The size was
+    /// already enforced while Kotlin staged the file; Rust re-checks cheaply so
+    /// the bound holds even if the staged file grows.
+    pub async fn api_upload_file(
+        &self,
+        app_data: &Path,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_path: &Path,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<RemoteApiResponse, String> {
+        let enrollment = load_enrollment(app_data)
+            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
+        assert_relative_path(path)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
+        let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
+        let size = tokio::fs::metadata(file_path)
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("cannot stat staged upload: {error}"),
+                )
+            })?
+            .len();
+        if size > MAX_UPLOAD_BYTES as u64 {
+            return Err(remote_error(
+                ERR_PROTOCOL,
+                format!("file exceeds the {limit_mib} MiB upload limit"),
+            ));
+        }
+        let sent = self
+            .send_multipart_file_with_auth(
+                &enrollment,
+                path,
+                file_field,
+                file_name,
+                file_path,
+                file_content_type,
+                fields,
+            )
+            .await?;
+        Ok(RemoteApiResponse {
+            status: sent.status,
+            body_base64: base64::engine::general_purpose::STANDARD.encode(sent.bytes),
+            content_type: sent.content_type,
+            response_headers: sent.response_headers,
+        })
+    }
+
+    /// Gate R0.6 — download an artifact into a bounded app-private temp file by
+    /// streaming the HTTP response body (never a full base64 Vec). Validates
+    /// `Content-Length` when trustworthy and enforces the bound while reading a
+    /// chunked/no-length body. Honors the single 401 refresh-recovery.
+    pub async fn download_to_file(
+        &self,
+        app_data: &Path,
+        path: &str,
+        dest: &Path,
+    ) -> Result<DownloadedExport, String> {
+        let enrollment = load_enrollment(app_data)
+            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
+        assert_relative_path(path)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
+        let first = self
+            .download_to_file_once(&enrollment, path, dest)
+            .await?;
+        if first.status == 401 {
+            self.refresh_after_401(&enrollment, &first.access_snapshot)
+                .await?;
+            let second = self.download_to_file_once(&enrollment, path, dest).await?;
+            if second.status == 401 {
+                return Err(remote_error(
+                    ERR_LOGIN_EXPIRED,
+                    "auth session expired; please log in again",
+                ));
+            }
+            return Ok(second);
+        }
+        Ok(first)
+    }
+
+    async fn download_to_file_once(
+        &self,
+        enrollment: &RemoteEnrollment,
+        path: &str,
+        dest: &Path,
+    ) -> Result<DownloadedExport, String> {
+        let access = self.get_session_token(enrollment).await?;
+        let snapshot = self.token_snapshot().await;
+        let url = format!("{}{}", enrollment.normalized_origin, path);
+        let response = self
+            .client
+            .get(&url)
+            .bearer_auth(&access)
+            .send()
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_NETWORK_UNAVAILABLE,
+                    format!("artifact download request failed: {error}"),
+                )
+            })?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let response_headers = Self::capture_response_headers(response.headers());
+        let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
+        // Precheck Content-Length when the server provides a trustworthy one.
+        if let Some(len) = response.content_length() {
+            if len > MAX_UPLOAD_BYTES as u64 {
+                return Err(remote_error(
+                    ERR_PROTOCOL,
+                    format!("export exceeds the {limit_mib} MiB native export limit"),
+                ));
+            }
+        }
+        // Stream the body to the temp file with a hard bound regardless of
+        // whether the server sent Content-Length.
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(dest)
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("cannot create export temp file: {error}"),
+                )
+            })?;
+        let mut total: u64 = 0;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| {
+                remote_error(
+                    ERR_NETWORK_UNAVAILABLE,
+                    format!("artifact download stream failed: {error}"),
+                )
+            })?;
+            total += chunk.len() as u64;
+            if total > MAX_UPLOAD_BYTES as u64 {
+                return Err(remote_error(
+                    ERR_PROTOCOL,
+                    format!("export exceeds the {limit_mib} MiB native export limit"),
+                ));
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| {
+                    remote_error(
+                        ERR_PROTOCOL,
+                        format!("failed writing export temp file: {error}"),
+                    )
+                })?;
+        }
+        file.flush()
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("failed flushing export temp file: {error}"),
+                )
+            })?;
+        Ok(DownloadedExport {
+            status,
+            content_type,
+            response_headers,
+            access_snapshot: snapshot,
         })
     }
 
@@ -2406,10 +2715,11 @@ pub async fn remote_api_upload(
 }
 
 /// Gate R0.5 — Android SAF upload. The renderer only passes a content URI,
-/// filename, MIME type and size; the native layer reads the bytes through the
-/// Kotlin plugin and streams the multipart upload. A 100 MiB file never
-/// becomes a renderer base64 copy (that base64 lives only inside the native
-/// process, bounded by the same product upload limit).
+/// filename, MIME type and size; the native layer stages the SAF content URI
+/// into a bounded app-private temp file (enforcing the product limit during
+/// the copy) and STREAMS that file as the multipart body. A 100 MiB file is
+/// never materialised as a renderer base64 copy, a Kotlin ByteArray, or a full
+/// Rust Vec simultaneously — it lives on disk until the upload completes.
 #[tauri::command]
 pub async fn remote_api_upload_by_uri(
     app: AppHandle,
@@ -2421,30 +2731,29 @@ pub async fn remote_api_upload_by_uri(
     fields: Option<HashMap<String, String>>,
 ) -> Result<RemoteApiResponse, String> {
     ensure_remote_mode(app.state::<DesktopState>().mode)?;
-    let content = crate::android_bridge::read_content_uri(&app, &uri).await?;
-    let file_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&content.base64)
-        .map_err(|error| {
-            remote_error(
-                ERR_PROTOCOL,
-                format!("invalid native file payload: {error}"),
-            )
-        })?;
+    // Stage the SAF content URI into a bounded app-private cache file. The
+    // Kotlin layer aborts the copy if it would exceed the product limit, so
+    // no unbounded buffer is ever built (Gate R0.5).
+    let staged =
+        crate::android_bridge::stage_upload(&app, &uri, MAX_UPLOAD_BYTES as u64).await?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let broker = app.state::<DesktopState>().broker.clone();
-    broker
-        .api_upload_raw(
+    let result = broker
+        .api_upload_file(
             &app_data,
             &path,
             &file_field.unwrap_or_else(|| "file".into()),
-            &file_name.filter(|name| !name.is_empty()).unwrap_or(content.name),
-            file_bytes,
+            &file_name.filter(|name| !name.is_empty()).unwrap_or(staged.name),
+            Path::new(&staged.path),
             &file_content_type
                 .filter(|mime| !mime.is_empty())
-                .unwrap_or(content.mime_type),
+                .unwrap_or(staged.mime_type),
             &fields.unwrap_or_default(),
         )
-        .await
+        .await;
+    // Always clean up the bounded temp file, regardless of upload outcome.
+    let _ = tokio::fs::remove_file(&staged.path).await;
+    result
 }
 
 /// Gate R0.5 — open the Android SAF document picker natively. Returns only a
@@ -2459,10 +2768,11 @@ pub async fn remote_pick_document(
     crate::android_bridge::pick_document(&app, mime_type).await
 }
 
-/// Gate R0.6 — Android export. The native broker downloads the artifact bytes
-/// from the enrolled server, then the native SAF layer writes them to the
-/// user-selected location. The renderer only passes the relative download path
-/// and a default filename; it never materialises the artifact bytes.
+/// Gate R0.6 — Android export. The native broker STREAMS the artifact bytes
+/// into a bounded app-private temp file (never a full base64 Vec), then the
+/// native SAF layer copies that file into the user-selected location. The
+/// renderer only passes the relative download path and a default filename; it
+/// never materialises the artifact bytes.
 #[tauri::command]
 pub async fn remote_save_export(
     app: AppHandle,
@@ -2473,20 +2783,17 @@ pub async fn remote_save_export(
     ensure_remote_mode(app.state::<DesktopState>().mode)?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let broker = app.state::<DesktopState>().broker.clone();
-    let downloaded = broker
-        .api_request(&app_data, &path, "GET", None, &HashMap::new())
-        .await?;
+    // Stream the HTTP response into a bounded app-private temp file (Gate
+    // R0.6). The body is written to disk in chunks with a hard bound, so an
+    // export is never materialised as a full base64/Rust Vec.
+    let cache_dir = app.path().app_cache_dir().map_err(|error| error.to_string())?;
+    let dest = cache_dir.join(format!("export-{}.tmp", uuid::Uuid::new_v4().simple()));
+    let downloaded = broker.download_to_file(&app_data, &path, &dest).await?;
     if downloaded.status >= 400 {
+        let _ = std::fs::remove_file(&dest);
         return Err(remote_error(
             ERR_SERVER_UNAVAILABLE,
             format!("artifact download failed with status {}", downloaded.status),
-        ));
-    }
-    let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
-    if downloaded.body_base64.len() > (MAX_UPLOAD_BYTES * 4) / 3 + 4 {
-        return Err(remote_error(
-            ERR_PROTOCOL,
-            format!("export exceeds the {limit_mib} MiB native export limit"),
         ));
     }
     // Prefer the server-provided Content-Disposition filename, then the
@@ -2506,9 +2813,15 @@ pub async fn remote_save_export(
                 downloaded.content_type
             }
         });
-    let saved =
-        crate::android_bridge::save_document(&app, &filename, &content_type, &downloaded.body_base64)
-            .await?;
+    let saved = crate::android_bridge::save_document_from_file(
+        &app,
+        &dest.to_string_lossy(),
+        &filename,
+        &content_type,
+    )
+    .await?;
+    // Always clean up the bounded temp file after the SAF copy completes.
+    let _ = std::fs::remove_file(&dest);
     Ok(serde_json::json!({
         "uri": saved.uri,
         "size": saved.size,
@@ -4174,6 +4487,98 @@ mod tests {
             .api_upload(&app_data.0, "/api/knowledge/sources", "file", "small.txt", &small, "text/plain", &HashMap::new())
             .await;
         assert_eq!(result.unwrap().status, 200);
+    }
+
+    // Gate R0.5 — the file-backed streaming upload path is bounded (rejects an
+    // over-limit source before any multipart body is streamed) and accepts a
+    // small file. Uses a sparse file so the over-limit case costs no heap.
+    #[tokio::test]
+    async fn api_upload_file_rejects_over_limit_and_streams_small() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => TestResponse::json(200, REFRESH_OK),
+                "/api/knowledge/sources" => TestResponse::json(200, r#"{"ok":true}"#),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("upload-file");
+        seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        // Over-limit sparse file: metadata length exceeds the bound, so the
+        // upload is rejected before any file bytes are streamed.
+        let big = app_data.0.join("huge.bin");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(MAX_UPLOAD_BYTES as u64 + 1).unwrap();
+        drop(file);
+        let result = broker
+            .api_upload_file(
+                &app_data.0,
+                "/api/knowledge/sources",
+                "file",
+                "huge.bin",
+                &big,
+                "application/octet-stream",
+                &HashMap::new(),
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("upload limit"));
+        // A small file is accepted and forwarded through the multipart stream.
+        let small = app_data.0.join("small.txt");
+        std::fs::write(&small, b"hello file").unwrap();
+        let result = broker
+            .api_upload_file(
+                &app_data.0,
+                "/api/knowledge/sources",
+                "file",
+                "small.txt",
+                &small,
+                "text/plain",
+                &HashMap::new(),
+            )
+            .await;
+        assert_eq!(result.unwrap().status, 200);
+    }
+
+    // Gate R0.6 — the streaming download path writes the HTTP body into the
+    // bounded dest file with correct bytes (never a full base64 Vec).
+    #[tokio::test]
+    async fn download_to_file_streams_into_bounded_dest() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => TestResponse::json(200, REFRESH_OK),
+                "/artifacts/9/export" => TestResponse {
+                    status: 200,
+                    content_type: "application/pdf",
+                    body: "PDFDATA-BYTES-123".to_string(),
+                    headers: vec![(
+                        "content-disposition".to_string(),
+                        "attachment; filename=\"report.pdf\"".to_string(),
+                    )],
+                },
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("download-file");
+        seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        let dest = app_data.0.join("out.bin");
+        let downloaded = broker
+            .download_to_file(&app_data.0, "/artifacts/9/export", &dest)
+            .await
+            .unwrap();
+        assert_eq!(downloaded.status, 200);
+        assert!(downloaded.content_type.contains("application/pdf"));
+        let bytes = std::fs::read(&dest).unwrap();
+        assert_eq!(bytes, b"PDFDATA-BYTES-123");
     }
 
     #[test]

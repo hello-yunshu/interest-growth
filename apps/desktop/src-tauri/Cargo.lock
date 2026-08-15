@@ -1954,6 +1954,7 @@ version = "0.7.0"
 dependencies = [
  "android-native-keyring-store",
  "base64 0.22.1",
+ "futures-util",
  "keyring",
  "keyring-core",
  "reqwest",
@@ -1969,6 +1970,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tokio",
+ "tokio-util",
  "url",
  "uuid",
 ]
