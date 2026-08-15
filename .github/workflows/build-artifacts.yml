@@ -31,7 +31,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca5145bd269ebc9623c8f9158bf2ad01e613dc # v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build Android toolchain image
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
         with:
@@ -101,7 +101,9 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with: { target: x86_64-pc-windows-msvc }
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
       - name: Install Python build dependencies
         run: python -m pip install -e ".[desktop]"
       - name: Install web dependencies
@@ -146,7 +148,9 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with: { target: aarch64-apple-darwin }
+        with:
+          toolchain: stable
+          target: aarch64-apple-darwin
       - name: Install Python build dependencies
         run: python -m pip install -e ".[desktop]"
       - name: Install web dependencies
