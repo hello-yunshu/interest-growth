@@ -114,7 +114,7 @@ b5626527d503417f0d8e5b1e08f338de7b31173bf0e122815f03e64932adbd88  apps/desktop/s
 38f4a52f3853a5cbbf678fcf5dcf0c89dca13606c30d64741b1dc78a1da5e9c5  apps/desktop/src-tauri/gen/android/app/src/main/res/xml/network_security_config.xml
 f8d6b8ac33de9acbe318595de7be4500fec1009f8ea0edc508fd998cc15294c5  apps/desktop/src-tauri/gen/android/build.gradle.kts
 11818be939b3aa44d691228f8666fba5efc796cdc1b4fb8072ab7c91bc056eb0  apps/desktop/src-tauri/gen/android/buildSrc/build.gradle.kts
-9888faa1e4864d188cc3c8b8c3ce739afe9372e549bb0fa8165c672977c188d3  apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/app/psychologygrowth/desktop/kotlin/BuildTask.kt
+c4178f029c2fd1be934d794e9a35f333ed0e2ac1c30f70bca9511b85e40e8cec  apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/app/psychologygrowth/desktop/kotlin/BuildTask.kt
 3488450f755ee6ed9eeaaad99e7adcc27de827f98f4657d9a4fb4af47c2f8663  apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/app/psychologygrowth/desktop/kotlin/RustPlugin.kt
 580de86208e48edae2206e167da024f17794269d296ad46a94d001c6809ba2cb  apps/desktop/src-tauri/gen/android/gradle.properties
 e996d452d2645e70c01c11143ca2d3742734a28da2bf61f25c82bdc288c9e637  apps/desktop/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar
