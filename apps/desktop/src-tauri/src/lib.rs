@@ -20,6 +20,10 @@ use uuid::Uuid;
 mod android_bridge;
 mod remote;
 mod runtime_mode;
+// Gate R2 §10.2 — debug-only Android-emulator real remote vertical slice. This
+// module is `cfg(debug_assertions)`-gated and inert in release builds.
+#[cfg(debug_assertions)]
+mod emulator_e2e;
 
 use remote::RemoteBroker;
 #[cfg(not(target_os = "android"))]
@@ -724,6 +728,18 @@ pub fn run() {
                 mode,
                 broker,
             });
+            // Gate R2 §10.2 — debug-only Android-emulator vertical slice. When a
+            // CI-emulator trigger config exists inside the app-private files dir,
+            // drive the REAL native remote broker against the emulator-host
+            // loopback server and record results for CI to poll. Inert otherwise.
+            #[cfg(debug_assertions)]
+            {
+                let e2e_broker = app.state::<DesktopState>().broker.clone();
+                let e2e_app_data = app.path().app_data_dir().unwrap_or_default();
+                tauri::async_runtime::spawn(async move {
+                    emulator_e2e::maybe_run_emulator_e2e(e2e_broker, e2e_app_data).await;
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

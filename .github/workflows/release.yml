@@ -255,7 +255,24 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "system-images;android-35;google_apis;x86_64" "platform-tools" "emulator" >/dev/null
           echo "no" | avdmanager create avd -n igtest -k "system-images;android-35;google_apis;x86_64" --force
-      - name: Boot emulator and cold-launch smoke
+      - name: Boot self-hosted API server (docker, current commit)
+        run: |
+          set -euo pipefail
+          docker compose -p ig-emulator build api
+          PG_REMOTE_AUTH_ENABLED=true \
+          PG_OWNER_BOOTSTRAP_TOKEN="ci-bootstrap-token-7a1f" \
+          docker compose -p ig-emulator up -d api
+          for i in $(seq 1 60); do
+            if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then
+              echo "server healthy on 127.0.0.1:8000"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "server failed to become healthy" >&2
+          docker compose -p ig-emulator logs api >&2 || true
+          exit 1
+      - name: Boot emulator and run real remote vertical slice
         uses: reactivecircus/android-emulator-runner@cad321644df6d8cf1985a42767272ff068adb9cb # v2.38.0
         with:
           api-level: 35
@@ -266,12 +283,40 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            set -euo pipefail
+            PKG=app.psychologygrowth.desktop
             adb install dist/android/interest-growth-android-x86_64-debug.apk
-            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
-            sleep 20
-            adb shell pidof app.psychologygrowth.desktop || (echo "FAIL: main process not running" && exit 1)
-            adb shell "dumpsys activity activities | grep -i mainactivity | head -3"
-            echo "emulator cold-launch smoke: PASS"
+            # Map the host self-hosted API server (port 8000) onto the emulator
+            # loopback at 127.0.0.1:18080 so the enrollment origin stays loopback.
+            adb reverse tcp:18080 tcp:8000
+            adb reverse --list
+            # Inject the debug-only vertical-slice trigger config into the app-private files dir.
+            cat > /tmp/ig_e2e.json <<'JSON'
+            {"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-ci"}
+            JSON
+            adb push /tmp/ig_e2e.json /data/local/tmp/ig_e2e.json
+            adb shell run-as ${PKG} sh -c 'mkdir -p files && cp /data/local/tmp/ig_e2e.json files/ig_e2e_config.json && chmod 600 files/ig_e2e_config.json'
+            # Launch the app; debug setup spawns the debug-only vertical slice.
+            adb shell am start -n ${PKG}/.MainActivity
+            # Poll the result file (up to ~90s) written by the in-app slice.
+            for i in $(seq 1 45); do
+              RESULT="$(adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true)"
+              if echo "$RESULT" | grep -q '"result": "PASS"'; then
+                echo "emulator real remote vertical slice: PASS"
+                echo "$RESULT"
+                adb shell pidof ${PKG} || true
+                exit 0
+              fi
+              if echo "$RESULT" | grep -q '"result": "FAIL"'; then
+                echo "emulator real remote vertical slice: FAIL"
+                echo "$RESULT"
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "FAIL: vertical slice did not complete in time" >&2
+            adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true
+            exit 1
 
   release-gate:
     name: Release aggregate gate
