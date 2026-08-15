@@ -127,10 +127,12 @@ test('android-remote never reaches a desktop/local path; mobile adapters are pla
   // Frozen contract §2 assigns the renewal credential to Android Keystore.
   assert.equal(android.capabilities.canUseNativeSecureStore, true);
   assert.equal(android.capabilities.canOpenExternalUrl, true);
-  // Gate R0.4 — the SAF document picker is real now; the rest stay planned.
+  // Gate R0.4 — the SAF document picker and the suspend/resume lifecycle
+  // adapter are real now (onSuspendResume re-evaluates the session on
+  // foreground return); the rest stay planned.
   assert.equal(android.capabilities.canUseDocumentPicker, true);
   assert.equal(android.capabilities.canUseShareSheet, false);
-  assert.equal(android.capabilities.supportsLifecycleSuspendResume, false);
+  assert.equal(android.capabilities.supportsLifecycleSuspendResume, true);
   assert.equal(android.capabilities.canUseBiometricUnlock, false);
 });
 

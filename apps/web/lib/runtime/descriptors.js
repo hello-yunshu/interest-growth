@@ -34,9 +34,10 @@ function nativeCapabilities(platform) {
 //
 // Gate R0.4 — the SAF document picker is REAL in v0.7 (selectDocument /
 // uploadByUri / downloadArtifact), so `canUseDocumentPicker` is true. The
-// remaining mobile adapters (share sheet, lifecycle suspend/resume, biometric
-// unlock) stay PLANNED and false, so the UI never enables a feature that does
-// not exist.
+// suspend/resume lifecycle adapter is also real (onSuspendResume re-evaluates
+// the session on foreground return), so `supportsLifecycleSuspendResume` is
+// true. The remaining mobile adapters (share sheet, biometric unlock) stay
+// PLANNED and false, so the UI never enables a feature that does not exist.
 function mobileCapabilities() {
   return {
     canLaunchSidecar: false,
@@ -50,7 +51,7 @@ function mobileCapabilities() {
     supportsWindowControls: false,
     canUseDocumentPicker: true, // Gate R0.4 — SAF document picker implemented
     canUseShareSheet: false, // planned; not available in v0.7
-    supportsLifecycleSuspendResume: false, // planned; not available in v0.7
+    supportsLifecycleSuspendResume: true, // Gate R0.4 — onSuspendResume implemented
     canUseBiometricUnlock: false, // planned; not available in v0.7
   };
 }

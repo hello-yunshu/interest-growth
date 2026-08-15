@@ -320,14 +320,38 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${PRE}" >> "$GITHUB_OUTPUT"
-      - name: Regenerate SHA256SUMS from actual release files
-        run: python3 scripts/ci/generate_release_checksums.py --out dist/android/SHA256SUMS.txt dist/android/interest-growth-android-arm64.apk dist/android/interest-growth-android-x86_64-debug.apk
+      - name: "Fail-closed: tag must resolve to the exact build SHA"
+        # §16 / R0 — a formal release must never attach artifacts built from a
+        # different commit than the tag. For tag pushes GITHUB_SHA is the tag
+        # commit by construction; for workflow_dispatch we must validate the
+        # user-supplied tag against the build SHA and fail closed on mismatch.
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "tag push: GITHUB_SHA is the tag commit (${GITHUB_SHA}) by construction"
+            exit 0
+          fi
+          TAG_REF="${{ steps.meta.outputs.tag }}"
+          git fetch --tags --force origin
+          TAG_SHA="$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || true)"
+          if [ -z "$TAG_SHA" ]; then
+            echo "FAIL: tag ${TAG_REF} does not exist — refusing to auto-create a release tag" >&2
+            exit 1
+          fi
+          echo "tag ${TAG_REF} resolves to ${TAG_SHA}"
+          echo "build SHA is ${GITHUB_SHA}"
+          if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+            echo "FAIL: tag SHA != build SHA — refusing to build A and publish it as tag B" >&2
+            exit 1
+          fi
+      - name: "Regenerate SHA256SUMS (release assets only, never the debug APK)"
+        # §16 — the x86_64 debug APK exists only as an internal emulator
+        # artifact; it must never appear in the formal release checksums.
+        run: python3 scripts/ci/generate_release_checksums.py --out dist/android/SHA256SUMS.txt dist/android/interest-growth-android-arm64.apk
       - name: Generate release verification report
         run: |
           python3 scripts/ci/generate_release_report.py \
             --out dist/android/V0_7_RELEASE_VERIFICATION.md \
             --asset dist/android/interest-growth-android-arm64.apk \
-            --asset dist/android/interest-growth-android-x86_64-debug.apk \
             --field "Node=22" --field "JDK=17" --field "Android SDK=36" --field "NDK=27.1" \
             --field "Android ABI (release)=arm64-v8a" --field "Android ABI (emulator)=x86_64" \
             --test-result "repo-integrity=${{ needs.release-gate.result }}" \
@@ -366,7 +390,6 @@ jobs:
             --notes-file "${{ steps.body.outputs.path }}" \
             --prerelease="${{ steps.meta.outputs.prerelease }}" \
             dist/android/interest-growth-android-arm64.apk \
-            dist/android/interest-growth-android-x86_64-debug.apk \
             dist/android/SHA256SUMS.txt \
             dist/android/V0_7_RELEASE_VERIFICATION.md
         env:

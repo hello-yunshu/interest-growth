@@ -24,6 +24,7 @@ import {
   remoteDeviceList,
   remoteRevokeDevice,
   getDesktopRuntime,
+  onSuspendResume,
 } from '../lib/api';
 import { getClientRuntime } from '../lib/runtime/client-runtime.js';
 import { parseRemoteErrorCode, remoteErrorEvent } from '../lib/runtime/transports/remote.js';
@@ -143,6 +144,51 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
         });
       } catch {
         if (active) setConnectionState('LocalCoreError');
+      }
+    })();
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  // Gate R0.4 §R0.4 — `resume != Connected`. On Android foreground return the
+  // session is re-evaluated through the native broker (refresh/recover) rather
+  // than flipped to Connected. The native coded error taxonomy drives the
+  // machine: a real server verdict becomes its honest state, anything ambiguous
+  // is a bounded network retry.
+  useEffect(() => {
+    let active = true;
+    let unsubscribe = null;
+    (async () => {
+      try {
+        const client = await getClientRuntime();
+        if (!active || !client?.adapter?.onSuspendResume) return;
+        unsubscribe = onSuspendResume(async () => {
+          if (!active) return;
+          const machine = machineRef.current;
+          if (!machine) return;
+          try {
+            const status = await remoteSessionStatus();
+            if (!active) return;
+            if (status?.enrolled && status?.connected) {
+              machine.handle('BOOTSTRAP_OK');
+            } else if (status?.enrolled) {
+              const refreshed = await remoteRefreshNow();
+              if (!active) return;
+              if (refreshed?.connected) machine.handle('BOOTSTRAP_OK');
+              else if (refreshed?.authExpired) machine.handle('REFRESH_FAIL');
+              else machine.handle('NETWORK_FAIL');
+            } else {
+              machine.handle('RESET');
+            }
+          } catch (error) {
+            if (!active) return;
+            machine.handle(remoteErrorEvent(error));
+          }
+        });
+      } catch {
+        // Not Android / no resume adapter configured — nothing to do.
       }
     })();
     return () => {
