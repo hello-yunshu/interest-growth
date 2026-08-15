@@ -357,7 +357,11 @@ Each Gate E §6 item:
   `android-studio-script` runs without the CLI server.
 - **§6.2 Tauri Android project + mobile entry point**: `src-tauri/gen/android`
   initialized; `lib.rs` uses `#[cfg_attr(mobile, tauri::mobile_entry_point)]`;
-  `tauri.conf.json`/capabilities apply to the mobile build.
+  `tauri.conf.json`/capabilities apply to the mobile build. The generated
+  project is **tracked in full** (ADR 0008, Option A — see below), so a clean
+  checkout is directly buildable with no generator re-run and no local
+  symlink/path. `SOURCE_MANIFEST` covers every `gen/android` file (no
+  exclusion added for it).
 - **§6.3 Android runtime is always `android-remote`**: `runtime_mode.rs`
   exposes `RUNTIME_ID_ANDROID_REMOTE` and `android_remote_mode()`
   (`cfg(target_os = "android")`); `AndroidRemote` never spawns a sidecar,
@@ -389,6 +393,58 @@ Each Gate E §6 item:
 Compile evidence: `aarch64-linux-android` release build succeeds
 (`tauri android build --apk --target aarch64`). Emulator and physical-device
 execution were not available in this environment and are NOT RUN.
+
+### 2026-08-15 GitHub Actions / unique-trusted-build closure round (source + tests)
+
+This round implements the "GitHub Actions unique trusted build" prompt
+(`Interest_Growth_v0.7_GitHub_Actions_...执行提示词.md`) at the source,
+script and workflow level. It does **not** claim remote-Actions evidence:
+nothing in this round is PASS beyond what the local source/tests prove. The
+distinction is kept explicit below.
+
+- **BLOCKER-1 closed (source)**: the non-self-contained tracked wrapper
+  `apps/desktop/src-tauri/tauri.js` (a copy of the CLI's `node_modules`
+  wrapper) was removed from Git tracking; Tauri CLI is invoked via the repo
+  package manager (`npx tauri`) everywhere. `scripts/audit_public_repo.py`
+  gained tracked-symlink/path integrity checks: broken symlink, absolute
+  target, target under `node_modules`, target escaping the repository and
+  target resolving under `$HOME` all fail. `git ls-files` in a clean checkout
+  must be fully readable. **Remote-clean-runner evidence NOT RUN.**
+- **ADR 0008 — Android generated source tracking policy (Option A)**: the
+  `gen/android` project is tracked in full; `SOURCE_MANIFEST` covers every
+  tracked `gen/android` file (no exclusion added); audit proves manifest entry
+  set == git tracked file set within scope, so `gen/android` cannot silently
+  drift in/out. **Source + local manifest check; remote Actions NOT RUN.**
+- **BLOCKER-2 closed (source)**: `android-remote` now resolves through the
+  shared `resolveNativeRemote(runtimeId, platform, runtime, adapter)` resolver
+  (extracted from the desktop-remote path) and activates a genuine native
+  `RemoteTransport` with the Android adapter broker — it no longer falls into
+  `inactiveRemoteTransport()`. Android never falls back to desktop-local and
+  never exposes a desktop token/local authHeader; its storage namespace is
+  `android-remote:<server_instance_id>` scoped. Covered by a new
+  `runtime-android.test.mjs` suite (15 cases: active transport, no local
+  fallback, no desktop token, storage namespace, native broker GET, mutation
+  blocked while disconnected, 401→native refresh→exactly one retry,
+  LoginExpired/IdentityChanged/UpdateRequired/UnsupportedServer mappings).
+  **Source + 15 local Node tests; remote Actions NOT RUN.**
+- **Android platform adapter** (`apps/web/lib/runtime/platforms/tauri-android.js`):
+  native remote broker invocation, `openExternal`, lifecycle/suspend-resume
+  notification hooks, and honest NOT IMPLEMENTED stubs for document selection,
+  upload-by-URI, share sheet, back handling and biometric unlock. Capabilities
+  stay `false` where unimplemented; nothing is claimed PASS on Android UX.
+- **FileProvider tightened (§4 / prompt §4)**: `file_paths.xml` exposes only
+  app-owned `cache-path export/` and `files-path share/`; no `external-path`,
+  no `path="."`, no storage root, no canonical/credential/DB paths.
+  `audit_public_repo.py` statically rejects any broadening.
+- **Unified CI scripts** (`scripts/ci/`): `verify_repo.sh` (audit +
+  manifest-scope gate) and `verify_android_apk.sh` (APK static
+  metadata/content verification) are the single verification entry points
+  reused by PR CI, main artifact builds and tag releases — there is no second,
+  laxer verification path.
+- **ci.yml updated**: added `repo-integrity` as a required leading gate,
+  added Android runtime tests to the Web job (`node --test
+  lib/runtime/test/*.test.mjs`), and added an `actionlint` job so the
+  workflows themselves are syntax/schema-checked. **Remote Actions NOT RUN.**
 
 ## 3. Verified in this audit
 
@@ -498,6 +554,51 @@ verification. The real external hostname/certificate path was not exercised.
 - **NOT RUN (hardware boundaries)**: emulator install/run, physical-device
   install/runtime, upgrade-in-place, cross-device proof, real public-TLS
   enrollment on Android.
+
+### 2026-08-15 Phase 6 — manifest regeneration + local verification + workflow closure
+
+Local verification re-run on the assembled branch (source-level only; remote
+Actions evidence still NOT RUN — nothing here claims a remote run).
+
+- **SOURCE_MANIFEST regenerated and verified**: `generate_source_manifest.py`
+  wrote **435 entries**; `--check` PASS. Regenerated *after* staging the new
+  workflow/script/ADR files so the manifest covers the full tracked set
+  (`git ls-files` scope).
+- **`verify_repo.sh` PASS**: `audit_public_repo.py` hygiene PASS (519 tracked
+  paths, symlink/path/credential/FileProvider/manifest-scope checks) and
+  `generate_source_manifest.py --check` PASS. The audit proves manifest entry
+  set == git tracked file set within scope.
+- **Web gate PASS**: `npm run lint` (0 warnings), ClientRuntime
+  `node --test lib/runtime/test/*.test.mjs` → **81 passed / 0 failed**
+  (includes the 15 `android-remote` native-transport tests), static
+  production `npm run build` PASS.
+- **Rust gate PASS**: `cargo test --locked --lib` → **52 passed / 0 failed**
+  (runtime-mode, native broker, credential store, refresh/rotation, error
+  taxonomy).
+- **Python host suite**: not runnable on this host (missing `fastapi`/dev
+  deps — no local venv); CI installs `.[dev]` in a clean runner. Local NOT
+  RUN, not claimed PASS.
+- **Docker integration gate**: script verified syntactically and structurally
+  against the auth contract; a local run was attempted but the base-image
+  pull failed on the configured mirror (`docker.mirrors.ustc.edu.cn` Bad
+  Gateway — host network, not a script defect). Local NOT VERIFIED; must be
+  exercised in Actions.
+- **Workflow YAML parse PASS**: all four `workflows/*.yml` parse cleanly.
+  Fixed two unquoted-colon YAML errors in `release.yml` (step names/runs
+  containing `: `) that would have broken the workflow.
+- **`release.yml` closure fixes**:
+  - `release-gate` now also `needs: android-emulator` (emulator is a required
+    release gate, prompt §31).
+  - `android-signed-build` now generates `SHA256SUMS.txt` from the actual
+    APKs and uploads it with the artifacts.
+  - `publish-release` downloads the artifacts, regenerates `SHA256SUMS.txt`,
+    and auto-generates `V0_7_RELEASE_VERIFICATION.md` via
+    `generate_release_report.py` from this run's real data (run identity,
+    toolchain, asset sizes/SHA-256, gate results, explicit NOT RUN items),
+    then uploads both as release assets — the release body no longer points
+    at checksums/report files that were never produced.
+  - Release assets now = signed arm64 APK + x86_64 debug emulator APK +
+    SHA256SUMS.txt + V0_7_RELEASE_VERIFICATION.md.
 
 ## 4. Gate B status (was "Open release blockers")
 
