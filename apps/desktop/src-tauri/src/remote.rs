@@ -63,7 +63,7 @@ const AUTH_MODE_SINGLE_OWNER_DEVICES: &str = "single_owner_devices";
 /// frozen auth/transport contract (auth enabled, single-owner-devices,
 /// online-first, no offline sync). browser-remote is not a shipped native
 /// runtime in this binary.
-fn is_remote_runtime_id(runtime_id: &str) -> bool {
+pub(crate) fn is_remote_runtime_id(runtime_id: &str) -> bool {
     runtime_id == RUNTIME_DESKTOP_REMOTE || runtime_id == RUNTIME_ANDROID_REMOTE
 }
 

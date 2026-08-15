@@ -26,7 +26,9 @@ use remote::RemoteBroker;
 use remote::KeyringStore;
 #[cfg(target_os = "android")]
 use remote::AndroidKeystoreStore;
-use runtime_mode::{parse_runtime_mode, should_spawn_sidecar, RuntimeMode, RuntimeProfile};
+use runtime_mode::{
+    broker_expected_runtime_id, parse_runtime_mode, should_spawn_sidecar, RuntimeMode, RuntimeProfile,
+};
 
 const KEYRING_SERVICE: &str = "app.psychologygrowth.desktop";
 const PROVIDER_SETTINGS_FILE: &str = "provider-settings.json";
@@ -700,18 +702,22 @@ pub fn run() {
             };
             // Gate E §6.4 — on Android the OS-backed Android Keystore is the
             // credential store; on desktop the platform keyring is used.
-            // Gate R0.3 — the broker's expected runtime is the ACTIVE mode, so
-            // a server must advertise exactly android-remote / desktop-remote.
+            // Gate R0.3 / R0 §4 — the broker's expected runtime is the ACTIVE
+            // mode's remote runtime id, so a server must advertise exactly
+            // android-remote / desktop-remote. desktop-local still owns a
+            // broker (never reachable while local mode is active) using the
+            // default remote runtime id.
             #[cfg(target_os = "android")]
             let broker = RemoteBroker::with_expected_runtime(
                 AndroidKeystoreStore::new()
                     .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
-                mode.as_str(),
+                broker_expected_runtime_id(mode),
             )
             .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
             #[cfg(not(target_os = "android"))]
-            let broker = RemoteBroker::with_expected_runtime(Arc::new(KeyringStore), mode.as_str())
-                .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
+            let broker =
+                RemoteBroker::with_expected_runtime(Arc::new(KeyringStore), broker_expected_runtime_id(mode))
+                    .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
             app.manage(DesktopState {
                 runtime: Mutex::new(runtime),
                 child: slot_for_setup.clone(),
