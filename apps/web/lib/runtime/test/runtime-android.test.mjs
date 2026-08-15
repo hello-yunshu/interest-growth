@@ -328,9 +328,11 @@ test('android-remote is a frozen runtime id and never claims desktop-only surfac
   assert.equal(descriptor.capabilities.canUseNativeSecureStore, true);
   assert.equal(descriptor.capabilities.canOpenExternalUrl, true);
   // Gate R0.4 — the SAF document picker is real (selectDocument / uploadByUri /
-  // downloadArtifact); the remaining mobile adapters stay honestly disabled.
+  // downloadArtifact), and the suspend/resume lifecycle adapter is real too.
+  // The share sheet and biometric unlock stay honestly disabled.
   assert.equal(descriptor.capabilities.canUseDocumentPicker, true);
-  for (const key of ['canUseShareSheet', 'supportsLifecycleSuspendResume', 'canUseBiometricUnlock']) {
+  assert.equal(descriptor.capabilities.supportsLifecycleSuspendResume, true);
+  for (const key of ['canUseShareSheet', 'canUseBiometricUnlock']) {
     assert.equal(descriptor.capabilities[key], false, `${key} must be false (planned adapter)`);
   }
 });

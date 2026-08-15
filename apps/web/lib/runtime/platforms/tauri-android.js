@@ -157,11 +157,36 @@ function notImplemented(name) {
 // Android share sheet (planned).
 export const shareText = notImplemented('shareText');
 export const shareFile = notImplemented('shareFile');
-// Android Back handling (planned adapter; today the OS back-navigation falls
-// back to the WebView history).
-export const handleBack = notImplemented('handleBack');
-// Suspend/resume lifecycle notifications (planned Gate E; the remote session
-// is recovered from Android Keystore on resume by the native host).
-export const onSuspendResume = notImplemented('onSuspendResume');
+
+// Gate R0.4 §R0.4 — system Back. The native host (MainActivity) enables
+// WebView-history Back navigation; this adapter provides the renderer-facing
+// hook used by the app to keep modal/history state consistent. It delegates to
+// history.back() when the WebView has history, matching the native handler.
+export async function handleBack() {
+  if (typeof window !== 'undefined' && window.history?.length > 1) {
+    window.history.back();
+    return true;
+  }
+  return false;
+}
+
+// Gate R0.4 §R0.4 — foreground/background + resume re-evaluation.
+//
+// `resume != Connected`. When the page returns to the foreground after a
+// background/suspend, this notifies the registered callback so the app
+// re-evaluates the session through the native broker (refresh/recover) instead
+// of blindly flipping to Connected. The callback is invoked on
+// `visibilitychange` back to visible, and the returned function unsubscribes.
+export function onSuspendResume(callback) {
+  if (typeof document === 'undefined' || typeof callback !== 'function') {
+    return () => {};
+  }
+  const handler = () => {
+    if (document.visibilityState === 'visible') callback();
+  };
+  document.addEventListener('visibilitychange', handler);
+  return () => document.removeEventListener('visibilitychange', handler);
+}
+
 // Biometric unlock gate (planned Gate E, optional).
 export const requestBiometricUnlock = notImplemented('requestBiometricUnlock');

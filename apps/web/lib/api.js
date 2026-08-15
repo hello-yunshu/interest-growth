@@ -292,6 +292,14 @@ export async function remoteVerifyIdentity() {
   return client.adapter.remoteVerifyIdentity();
 }
 
+// Gate R0.4 §R0.4 — subscribe to Android suspend/resume (foreground return).
+// The returned function unsubscribes. On resume the caller re-evaluates the
+// session through the native broker; `resume != Connected`.
+export async function onSuspendResume(callback) {
+  const client = await getClientRuntime();
+  return client.adapter.onSuspendResume(callback);
+}
+
 export async function remoteLogout(revoke = false) {
   const client = await getClientRuntime();
   resetClientRuntime();
