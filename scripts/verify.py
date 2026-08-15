@@ -49,6 +49,10 @@ def main():
     if set(spec["allowed_native_tables"])!={"native_tutor_checkpoint","native_run_event","native_aux_memory"}:return fail("allowed native tables drift")
     with (ROOT/"pyproject.toml").open("rb") as f:project=tomllib.load(f)
     if project["project"]["version"]!="0.7.0":return fail("version mismatch")
+    # Gate R2 §17 — all user-visible version sources and frozen API/backup
+    # contracts must agree with the canonical product version.
+    import verify_version_consistency
+    if verify_version_consistency.main():return 1
     migrate=(ROOT/"scripts/migrate_host_db_v11.py").read_text("utf-8")
     if ".executescript(" in migrate:return fail("production migration runner uses executescript")
     proc=subprocess.run([sys.executable,"-m","pytest","-q","-p","no:cacheprovider"],cwd=ROOT,text=True)
