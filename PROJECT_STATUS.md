@@ -66,6 +66,16 @@ Source closure for the R0 release gates, up to commit `cc1add3`:
 
 **R0 exit criteria met**: packaged desktop-local startup is verified on Windows + macOS in clean remote Actions. Remaining to R1: emulator product-flow evidence (hardware/toolchain boundary, see Gate R1).
 
+## v1.0 — Gate R1 (Product Completion + Web/UX) execution (2026-08-16)
+
+Remote Actions evidence at head `f52cfff`:
+
+- **CI** — run `31899835437`: **success**. `verify.py` runs pytest from the repo root, so the new R1 product-loop suite (`tests/integration/test_gate_r1_product_loops.py`, 10 tests) is collected and executed remotely: growth feedback (returned/claim.revised events, no streak metrics), weekly review narrative, unreviewed-retrieval-candidate cannot be evidence, invalidated-evidence downgrade, claim version/citation provenance, all curiosity energy modes, question-without-research promotion, Content Studio human-review gate (export blocked → approve → export OK), and a general photography journey across curiosity/research/learning/growth/content without Psychology entities.
+- **Web E2E (UX closure)** — run `31899835432`: **success**. Playwright over 8 core pages × 4 viewports (360×800 / 390×844 / 768×1024 / 1440×900): no horizontal overflow, axe-core (wcag2a/2aa/21a/21aa) no critical/serious violations, and network-unavailable error state renders without white screen / raw stack trace.
+- **Build Artifacts** — run `31899835417`: **success**.
+
+**R1 exit criteria met**: P0–P4 product-loop gaps closed and verified remotely; Web/UX closure gate (responsive + accessibility + error states) green in clean remote Actions. Per the master prompt, the Android emulator real vertical slice is a **Gate R2** item (see §10.2), not an R1 gate.
+
 Normative execution status and next order live in `docs/audits/V0_7_IMPLEMENTATION_AUDIT.md` and `docs/roadmap/V0_7_SELF_HOSTED_CROSS_DEVICE_PLAN.md`.
 
 ## Verified source/runtime facts
