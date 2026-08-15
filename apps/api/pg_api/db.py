@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
 import os
@@ -12,6 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from pg_shared import get_settings
+
+logger = logging.getLogger("pg_api.db")
 
 
 def now_utc() -> datetime:
@@ -947,7 +953,7 @@ CURRENT_SCHEMA_VERSION = 15
 LEGACY_BASELINE_VERSION = 7
 
 
-def init_db(database_url: str | None = None) -> None:
+def init_db(database_url: str | None = None, *, pre_upgrade_backup: bool = True) -> None:
     from .scoping import install_area_scoping_hooks
     install_area_scoping_hooks()
     engine = get_engine(database_url)
@@ -971,9 +977,29 @@ def init_db(database_url: str | None = None) -> None:
 
     with get_session_factory(database_url)() as db:
         versions = {int(v) for v in db.scalars(select(SchemaMigration.version)).all()}
+    # Gate R2 §9.3: downgrade is not supported. A database whose schema is newer
+    # than this build must never be silently opened by an older server — fail
+    # closed and point the operator at a compatible backup.
+    if versions and max(versions) > CURRENT_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"database schema version {max(versions)} is newer than this build "
+            f"supports ({CURRENT_SCHEMA_VERSION}); downgrade is not supported — "
+            f"restore a compatible backup or upgrade this server before opening it"
+        )
     missing_legacy = [v for v in range(1, LEGACY_BASELINE_VERSION + 1) if v not in versions]
     if missing_legacy:
         raise RuntimeError(f"database legacy migration ledger incomplete: {missing_legacy}")
+
+    missing = [
+        v for v in range(LEGACY_BASELINE_VERSION + 1, CURRENT_SCHEMA_VERSION + 1)
+        if v not in versions
+    ]
+    if missing and pre_upgrade_backup:
+        # Gate R2 §9.3: an upgrade must first snapshot the pre-upgrade state.
+        # Downgrade is not supported, so restoring this backup is the only
+        # supported rollback after an unwanted or failed upgrade. Fail closed:
+        # if the backup cannot be created, the upgrade is aborted.
+        _create_pre_upgrade_backup(database_url)
 
     for version in range(LEGACY_BASELINE_VERSION + 1, CURRENT_SCHEMA_VERSION + 1):
         with get_session_factory(database_url)() as db:
@@ -987,6 +1013,67 @@ def init_db(database_url: str | None = None) -> None:
             db.info["skip_area_scope"] = True
             _record_migration(db, version)
             db.commit()
+
+
+def _create_pre_upgrade_backup(database_url: str | None) -> None:
+    """Snapshot the pre-upgrade persistent state before migrating (Gate R2 §9.3).
+
+    Downgrade is not supported; restoring this backup is the only supported
+    rollback after an unwanted or failed upgrade. A complete bundle is written
+    to ``<data>/upgrade-backups`` next to the live database.
+
+    If the live vault is already torn (the DB references a vault file that is
+    not on disk), a DB-only safety snapshot is written instead so the schema
+    change stays reversible; the upgrade is aborted (fail closed) only when the
+    snapshot itself cannot be produced — e.g. disk failure or DB corruption.
+    """
+    from .backup_restore import create_backup  # local import: avoid module cycle
+
+    url = database_url or get_settings().database_url
+    db_path = Path(url[len("sqlite:///"):])
+    backups_root = db_path.parent / "upgrade-backups"
+    backups_root.mkdir(parents=True, exist_ok=True)
+    try:
+        create_backup(destination_dir=str(backups_root), database_url=url)
+    except ValueError as exc:
+        # Pre-existing torn vault: keep the schema upgrade reversible with a
+        # DB-only safety snapshot rather than bricking the deployment.
+        logger.warning(
+            "pre-upgrade full backup skipped (torn vault: %s); writing DB-only "
+            "safety snapshot to %s", exc, backups_root
+        )
+        _write_db_only_snapshot(url, backups_root)
+
+
+def _write_db_only_snapshot(database_url: str, backups_root: Path) -> None:
+    """Snapshot only the database (schema-reversibility net for a torn vault).
+
+    Migrations never touch the vault files, so the DB bytes plus a manifest are
+    enough to roll back an unwanted or failed schema upgrade.
+    """
+    from .backup_restore import _schema_version, _sha256_file, _snapshot_sqlite
+    from .remote_auth import SERVER_VERSION
+
+    bundle = backups_root / (
+        f"backup-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        f"-db-only-{uuid4().hex[:6]}"
+    )
+    bundle.mkdir(parents=True, exist_ok=False)
+    db_dest = bundle / "psychology_growth.db"
+    _snapshot_sqlite(database_url, db_dest)
+    manifest = {
+        "product": "interest-growth",
+        "kind": "pre-upgrade-db-only-safety-snapshot",
+        "server_version": SERVER_VERSION,
+        "schema_version": _schema_version(),
+        "current_schema_version": CURRENT_SCHEMA_VERSION,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "database": {"file": "psychology_growth.db", "sha256": _sha256_file(db_dest)},
+        "note": "DB-only: pre-upgrade vault was torn, so vault files were not captured.",
+    }
+    (bundle / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
 
 def reset_engine_for_tests() -> None:

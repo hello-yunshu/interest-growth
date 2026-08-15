@@ -174,12 +174,19 @@ def create_backup(
                 "backup bundle references files that were not captured: "
                 + ", ".join(missing)
             )
+        # The server identity only exists after migration 15; a pre-upgrade
+        # snapshot of an older schema has no server_metadata table yet, so the
+        # manifest records it as null (verify_bundle already tolerates that).
+        try:
+            server_instance_id = get_server_identity()["server_instance_id"]
+        except sqlalchemy.exc.OperationalError:
+            server_instance_id = None
         manifest = {
             "product": "interest-growth",
             "server_version": SERVER_VERSION,
             "schema_version": _schema_version(),
             "current_schema_version": CURRENT_SCHEMA_VERSION,
-            "server_instance_id": get_server_identity()["server_instance_id"],
+            "server_instance_id": server_instance_id,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "database": {"file": DB_FILE_NAME, "sha256": _sha256_file(db_dest)},
             "sources": {"sha256": _tree_sha256(bundle / "sources")},
@@ -305,7 +312,11 @@ def restore_backup(
                 previous[name] = backup_root
             target_root.mkdir(parents=True, exist_ok=True)
             _copy_dir(bundle / name, target_root, "")
-        init_db(database_url=database_url)
+        # The restore already retains the pre-restore state (as *.pre-restore-*)
+        # until post-checks pass, so migrating an older bundle must NOT spawn a
+        # pre-upgrade backup here: we are already inside the exclusive
+        # maintenance lock, and re-acquiring the same flock on a new fd deadlocks.
+        init_db(database_url=database_url, pre_upgrade_backup=False)
         result["restored"] = True
         result.update(_smoke_checks())
         if result["integrity"] != "ok" or result["foreign_key_violations"] or result["missing_source_files"] or result["missing_artifact_files"]:
@@ -331,7 +342,7 @@ def _stage_bundle(bundle: Path, staging: Path, database_url: str) -> dict[str, P
         dest.mkdir(parents=True, exist_ok=True)
         _copy_dir(bundle / name, dest, "")
         staged[name] = dest
-    init_db(database_url=f"sqlite:///{staged_db}")
+    init_db(database_url=f"sqlite:///{staged_db}", pre_upgrade_backup=False)
     return staged
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -159,6 +160,120 @@ def test_legacy_ledger_gap_fails_closed(tmp_path, monkeypatch):
     _point(monkeypatch, f"sqlite:///{db_file}")
     with pytest.raises(RuntimeError, match="legacy migration ledger incomplete"):
         init_db()
+
+
+# ------------------------------------------------------------- Gate R2 §9.3
+
+
+def test_upgrade_creates_pre_upgrade_backup(tmp_path, monkeypatch):
+    """Gate R2 §9.3: an upgrade snapshots the pre-upgrade state before migrating."""
+    from pg_artifacts import LocalFilesystemStorage
+    from pg_api.backup_restore import verify_bundle
+    import pg_api.content as content_module
+
+    db_file = _restore("schema_v10_v0_5_0.sql", tmp_path)
+    # The fixture DB references the golden-hour-card artifact; materialize the
+    # file in the live vault so the pre-upgrade backup is a complete bundle.
+    # The artifact vault is a module-level singleton, so patch it directly
+    # (the ARTIFACT_STORAGE_ROOT env is read only when the module first loads).
+    artifacts = tmp_path / "live_artifacts"
+    artifacts.mkdir(exist_ok=True)
+    (artifacts / "golden-hour-card").write_text(
+        "<p>golden hour card</p>", encoding="utf-8"
+    )
+    monkeypatch.setattr(content_module, "storage", LocalFilesystemStorage(artifacts))
+    monkeypatch.setenv("SOURCE_STORAGE_ROOT", str(tmp_path / "live_sources"))
+    _point(monkeypatch, f"sqlite:///{db_file}")
+    init_db()
+    assert _schema_version() == CURRENT_SCHEMA_VERSION
+    backups_root = db_file.parent / "upgrade-backups"
+    bundles = sorted(backups_root.glob("backup-*")) if backups_root.is_dir() else []
+    assert bundles, "upgrade must have written a pre-upgrade backup bundle"
+    # The backup captures the pre-upgrade schema (before migration 15 applied).
+    manifest = json.loads((bundles[-1] / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 10
+    # Server identity only exists after migration 15; the pre-upgrade v10
+    # snapshot has no server_metadata table, so the key must exist but is null.
+    assert "server_instance_id" in manifest
+    assert manifest["server_instance_id"] is None
+    verified = verify_bundle(str(bundles[-1]))
+    assert verified["integrity"] == "ok"
+    assert verified["checks"] == {"database": True, "sources": True, "artifacts": True}
+
+
+def test_upgrade_backup_failure_aborts_migration(tmp_path, monkeypatch):
+    """Gate R2 §9.3/§9.5: if the pre-upgrade backup cannot be created, upgrade fails closed."""
+    import pg_api.backup_restore as backup_module
+
+    db_file = _restore("schema_v10_v0_5_0.sql", tmp_path)
+    _point(monkeypatch, f"sqlite:///{db_file}")
+
+    def exploding_backup(**kwargs):
+        raise RuntimeError("simulated disk failure")
+
+    original = backup_module.create_backup
+    backup_module.create_backup = exploding_backup
+    try:
+        with pytest.raises(RuntimeError, match="simulated disk failure"):
+            init_db()
+    finally:
+        backup_module.create_backup = original
+    # The upgrade must not have applied: schema ledger unchanged.
+    assert _schema_version() == 10
+
+
+def test_upgrade_backup_handles_torn_vault_with_db_only_snapshot(tmp_path, monkeypatch):
+    """Gate R2 §9.3: a dangling vault reference must not brick the upgrade.
+
+    The pre-upgrade full bundle cannot capture a missing file, so a DB-only
+    safety snapshot is written and the schema upgrade proceeds reversibly.
+    """
+    db_file = _restore("schema_v10_v0_5_0.sql", tmp_path)
+    # Point the artifact vault somewhere empty: the fixture's artifact key has
+    # no backing file (torn state). Patch the module-level storage singleton
+    # deterministically so the test never depends on the default vault state.
+    from pg_artifacts import LocalFilesystemStorage
+    import pg_api.content as content_module
+
+    empty_artifacts = tmp_path / "empty_artifacts"
+    empty_artifacts.mkdir(exist_ok=True)
+    monkeypatch.setattr(
+        content_module, "storage", LocalFilesystemStorage(empty_artifacts)
+    )
+    monkeypatch.setenv("SOURCE_STORAGE_ROOT", str(tmp_path / "empty_sources"))
+    _point(monkeypatch, f"sqlite:///{db_file}")
+    init_db()
+    assert _schema_version() == CURRENT_SCHEMA_VERSION
+    backups_root = db_file.parent / "upgrade-backups"
+    db_only = sorted(backups_root.glob("backup-*-db-only-*")) if backups_root.is_dir() else []
+    assert db_only, "torn-vault upgrade must write a DB-only safety snapshot"
+    manifest = json.loads((db_only[-1] / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["kind"] == "pre-upgrade-db-only-safety-snapshot"
+    assert manifest["schema_version"] == 10
+    assert (db_only[-1] / "psychology_growth.db").is_file()
+
+
+def test_init_db_refuses_newer_schema(tmp_path, monkeypatch):
+    """Gate R2 §9.3: an older server must fail closed on a newer-schema DB (no silent open)."""
+    db_file = tmp_path / "newer.db"
+    _point(monkeypatch, f"sqlite:///{db_file}")
+    init_db()  # fresh v15
+    conn = sqlite3.connect(db_file)
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (16, '2026-08-16 00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+    _point(monkeypatch, f"sqlite:///{db_file}")
+    with pytest.raises(RuntimeError, match="newer than this build"):
+        init_db()
+    # The DB was not mutated by the failed attempt.
+    conn = sqlite3.connect(db_file)
+    try:
+        versions = {r[0] for r in conn.execute("SELECT version FROM schema_migrations")}
+    finally:
+        conn.close()
+    assert max(versions) == 16
 
 
 def test_fixture_generator_is_deterministic():
