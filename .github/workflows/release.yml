@@ -262,7 +262,7 @@ jobs:
           PG_REMOTE_AUTH_ENABLED=true \
           PG_OWNER_BOOTSTRAP_TOKEN="ci-bootstrap-token-7a1f" \
           docker compose -p ig-emulator up -d api
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then
               echo "server healthy on 127.0.0.1:8000"
               exit 0
@@ -299,7 +299,7 @@ jobs:
             # Launch the app; debug setup spawns the debug-only vertical slice.
             adb shell am start -n ${PKG}/.MainActivity
             # Poll the result file (up to ~90s) written by the in-app slice.
-            for i in $(seq 1 45); do
+            for _ in $(seq 1 45); do
               RESULT="$(adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true)"
               if echo "$RESULT" | grep -q '"result": "PASS"'; then
                 echo "emulator real remote vertical slice: PASS"
