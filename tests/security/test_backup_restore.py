@@ -60,6 +60,7 @@ def test_backup_creates_complete_consistent_bundle(seeded_client, tmp_path):
     bundle = create_backup(destination_dir=str(tmp_path / "backups"))
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["product"] == "interest-growth"
+    assert manifest["format_version"] == 1
     assert manifest["schema_version"] == 15
     assert manifest["server_instance_id"]
     assert manifest["database"]["sha256"]
@@ -313,6 +314,31 @@ def test_restore_aborts_staging_on_schema_migration_failure(seeded_client, tmp_p
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
     with pytest.raises(Exception):
+        restore_backup(bundle_dir=str(bundle))
+    _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
+    reset_engine_for_tests()
+
+
+def test_restore_fails_closed_on_future_backup_format(seeded_client, tmp_path):
+    """Gate R2 §43: a bundle whose manifest claims a future format_version is
+    rejected before any staged verification, leaving live state intact."""
+    from pg_api.backup_restore import create_backup, restore_backup
+
+    settings = get_settings()
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    db_before = Path(settings.database_url[len("sqlite:///"):]).read_bytes()
+    source_before = sorted(
+        p.relative_to(Path(settings.source_storage_root))
+        for p in Path(settings.source_storage_root).rglob("*")
+        if p.is_file()
+    )
+
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["format_version"] = 999
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="format_version 999 is newer"):
         restore_backup(bundle_dir=str(bundle))
     _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
     reset_engine_for_tests()

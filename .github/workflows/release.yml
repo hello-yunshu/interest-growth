@@ -198,7 +198,13 @@ jobs:
           APK="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | head -1)"
           if [ -z "${APK}" ]; then echo "no release APK produced" >&2; exit 1; fi
           cp "${APK}" dist/android/interest-growth-android-arm64.apk
-          bash scripts/ci/verify_android_apk.sh dist/android/interest-growth-android-arm64.apk
+          # Static verification runs inside the Android toolchain so aapt2 is
+          # on PATH; --require-aapt makes a missing metadata tool FAIL rather
+          # than skip (Gate R2 §13.1).
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c \
+              'bash scripts/ci/verify_android_apk.sh --require-aapt dist/android/interest-growth-android-arm64.apk'
           # Stage the x86_64 debug APK for the emulator job.
           X86="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
           if [ -z "${X86}" ]; then echo "no x86_64 debug APK produced" >&2; exit 1; fi
@@ -318,6 +324,54 @@ jobs:
             adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true
             exit 1
 
+  security-dependency:
+    name: Dependency security (pip / npm / cargo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Audit Python runtime dependencies
+        run: |
+          python -m pip install -e . pip-audit
+          pip-audit --skip-editable
+      - name: Audit optional RAG extras (documented dev-only advisory)
+        # PYSEC-2026-113: pyarrow 22.0.0 is forced by graphrag~=3.1 (graphrag
+        # pins pyarrow~=22.0). rag-graphrag is an optional dev/experimental
+        # extra, not part of the 1.0 runtime; a fix requires an upstream
+        # graphrag release that allows pyarrow>=23.0.1. Documented explicitly
+        # here so the ignore is auditable, never a silent drop.
+        run: |
+          python -m pip install -e ".[rag-graphrag]" pip-audit
+          pip-audit --skip-editable --ignore-vuln PYSEC-2026-113
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Audit production npm dependencies
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907
+        with:
+          tool: cargo-audit
+      - name: Audit Rust dependencies (high-confidence advisories)
+        working-directory: apps/desktop/src-tauri
+        run: cargo audit
+
   release-gate:
     name: Release aggregate gate
     runs-on: ubuntu-latest
@@ -327,6 +381,7 @@ jobs:
       - web
       - rust
       - docker-integration
+      - security-dependency
       - android-signed-build
       - android-emulator
     steps:
@@ -341,6 +396,8 @@ jobs:
     needs: release-gate
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     environment: release
     steps:
       - name: Check out source
@@ -392,6 +449,17 @@ jobs:
         # §16 — the x86_64 debug APK exists only as an internal emulator
         # artifact; it must never appear in the formal release checksums.
         run: python3 scripts/ci/generate_release_checksums.py --out dist/android/SHA256SUMS.txt dist/android/interest-growth-android-arm64.apk
+      - name: Generate SBOM for release artifact (SPDX) — §12.4
+        uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
+        with:
+          path: dist/android/interest-growth-android-arm64.apk
+          format: spdx-json
+          output-file: dist/android/interest-growth-android-arm64.spdx.json
+          artifact-name: interest-growth-sbom
+      - name: Attest build provenance for release artifact — §12.5
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: dist/android/interest-growth-android-arm64.apk
       - name: Generate release verification report
         run: |
           python3 scripts/ci/generate_release_report.py \
@@ -436,6 +504,7 @@ jobs:
             --prerelease="${{ steps.meta.outputs.prerelease }}" \
             dist/android/interest-growth-android-arm64.apk \
             dist/android/SHA256SUMS.txt \
+            dist/android/interest-growth-android-arm64.spdx.json \
             dist/android/V0_7_RELEASE_VERIFICATION.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
