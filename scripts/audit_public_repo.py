@@ -233,6 +233,83 @@ def android_fileprovider_findings(root: Path = ROOT) -> list[str]:
     return failures
 
 
+# Gate R0.7 — Android Tauri capabilities must stay minimal and fail-closed.
+# The Android runtime never inherits the desktop surface. The remote broker and
+# SAF operations (remote_*, remote_pick_document, remote_api_upload_by_uri,
+# remote_save_export) are custom commands that need no plugin capability, so the
+# only permitted plugin surface is opening external URLs. The desktop capability
+# is additionally required to be scoped away from Android so its window-state /
+# window-shell / fs / dialog / updater permissions cannot leak into the Android
+# build. This is enforced statically so a broad permission can never be
+# reintroduced in a later commit.
+ANDROID_CAPABILITY = Path("apps/desktop/src-tauri/capabilities/android.json")
+ANDROID_CAPABILITY_IDENTIFIER = "android-main-capability"
+# Allowlist — exactly these permissions may appear for the Android runtime. This
+# is the strongest form of a denylist: any permission beyond this minimal set
+# (window state, desktop shell/window controls, desktop filesystem breadth,
+# dialog save, desktop updater, provider-secret admin, and everything else)
+# fails the gate.
+ALLOWED_ANDROID_CAPABILITY_PERMISSIONS = {"core:default", "opener:allow-default-urls"}
+DESKTOP_CAPABILITY = Path("apps/desktop/src-tauri/capabilities/default.json")
+
+
+def _capability_permission_identifiers(permissions: list) -> list[str]:
+    identifiers: list[str] = []
+    for perm in permissions:
+        if isinstance(perm, str):
+            identifiers.append(perm)
+        elif isinstance(perm, dict) and isinstance(perm.get("identifier"), str):
+            identifiers.append(perm["identifier"])
+    return identifiers
+
+
+def android_capability_findings(root: Path = ROOT) -> list[str]:
+    failures: list[str] = []
+    target = root / ANDROID_CAPABILITY
+    if not target.exists():
+        return [f"missing Android capability (expected at {ANDROID_CAPABILITY})"]
+    try:
+        data = json.loads(target.read_text("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return [f"cannot parse Android capability {ANDROID_CAPABILITY}: {exc}"]
+    if data.get("identifier") != ANDROID_CAPABILITY_IDENTIFIER:
+        failures.append(
+            f"Android capability identifier must be {ANDROID_CAPABILITY_IDENTIFIER!r}, "
+            f"got {data.get('identifier')!r}"
+        )
+    platforms = data.get("platforms") or []
+    if platforms != ["android"]:
+        failures.append(f"Android capability must be scoped to exactly ['android'], got {platforms!r}")
+    perms = _capability_permission_identifiers(data.get("permissions") or [])
+    if "core:default" not in perms:
+        failures.append("Android capability must include core:default")
+    if set(perms) != ALLOWED_ANDROID_CAPABILITY_PERMISSIONS:
+        unexpected = sorted(set(perms) - ALLOWED_ANDROID_CAPABILITY_PERMISSIONS)
+        if unexpected:
+            failures.append(
+                f"Android capability grants non-minimal permissions (Gate R0.7 denylist): "
+                f"{unexpected}"
+            )
+    # The desktop capability must be explicitly scoped away from Android so its
+    # desktop-only permissions cannot be inherited by the Android runtime.
+    desktop = root / DESKTOP_CAPABILITY
+    if not desktop.exists():
+        failures.append(f"missing desktop capability (expected at {DESKTOP_CAPABILITY})")
+    else:
+        try:
+            desktop_data = json.loads(desktop.read_text("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"cannot parse desktop capability {DESKTOP_CAPABILITY}: {exc}")
+        else:
+            desktop_platforms = desktop_data.get("platforms") or []
+            if "android" in desktop_platforms or not desktop_platforms:
+                failures.append(
+                    "desktop capability must explicitly exclude android via 'platforms' "
+                    "(Gate R0.7 capability isolation)"
+                )
+    return failures
+
+
 def forbidden_path_reason(path: str) -> str | None:
     pure = PurePosixPath(path)
     lower = path.lower()
@@ -326,6 +403,7 @@ def audit(root: Path = ROOT) -> list[str]:
     failures.extend(credential_file_findings(paths))
     failures.extend(source_manifest_scope_findings(root))
     failures.extend(android_fileprovider_findings(root))
+    failures.extend(android_capability_findings(root))
     for path in paths:
         reason = forbidden_path_reason(path)
         if reason:

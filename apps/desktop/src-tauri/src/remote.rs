@@ -1923,10 +1923,6 @@ impl RemoteBroker {
         file_content_type: &str,
         fields: &HashMap<String, String>,
     ) -> Result<RemoteApiResponse, String> {
-        let enrollment = load_enrollment(app_data)
-            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
-        assert_relative_path(path)
-            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
         let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
         if file_bytes_b64.len() > (MAX_UPLOAD_BYTES * 4) / 3 + 4 {
             return Err(remote_error(
@@ -1937,6 +1933,37 @@ impl RemoteBroker {
         let file_bytes = base64::engine::general_purpose::STANDARD
             .decode(file_bytes_b64)
             .map_err(|error| remote_error(ERR_PROTOCOL, format!("invalid file payload: {error}")))?;
+        self.api_upload_raw(
+            app_data,
+            path,
+            file_field,
+            file_name,
+            file_bytes,
+            file_content_type,
+            fields,
+        )
+        .await
+    }
+
+    /// Gate R0.5 — upload already-materialised native bytes (e.g. read from a
+    /// SAF content URI by the Android bridge). Shares the product upload bound
+    /// and the enrollment/path checks with the base64 path so Android and
+    /// desktop observe identical limits.
+    pub async fn api_upload_raw(
+        &self,
+        app_data: &Path,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_bytes: Vec<u8>,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<RemoteApiResponse, String> {
+        let enrollment = load_enrollment(app_data)
+            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
+        assert_relative_path(path)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
+        let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
         if file_bytes.len() > MAX_UPLOAD_BYTES {
             return Err(remote_error(
                 ERR_PROTOCOL,
@@ -2376,6 +2403,140 @@ pub async fn remote_api_upload(
             &fields.unwrap_or_default(),
         )
         .await
+}
+
+/// Gate R0.5 — Android SAF upload. The renderer only passes a content URI,
+/// filename, MIME type and size; the native layer reads the bytes through the
+/// Kotlin plugin and streams the multipart upload. A 100 MiB file never
+/// becomes a renderer base64 copy (that base64 lives only inside the native
+/// process, bounded by the same product upload limit).
+#[tauri::command]
+pub async fn remote_api_upload_by_uri(
+    app: AppHandle,
+    path: String,
+    file_field: Option<String>,
+    uri: String,
+    file_name: Option<String>,
+    file_content_type: Option<String>,
+    fields: Option<HashMap<String, String>>,
+) -> Result<RemoteApiResponse, String> {
+    ensure_remote_mode(app.state::<DesktopState>().mode)?;
+    let content = crate::android_bridge::read_content_uri(&app, &uri).await?;
+    let file_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&content.base64)
+        .map_err(|error| {
+            remote_error(
+                ERR_PROTOCOL,
+                format!("invalid native file payload: {error}"),
+            )
+        })?;
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let broker = app.state::<DesktopState>().broker.clone();
+    broker
+        .api_upload_raw(
+            &app_data,
+            &path,
+            &file_field.unwrap_or_else(|| "file".into()),
+            &file_name.filter(|name| !name.is_empty()).unwrap_or(content.name),
+            file_bytes,
+            &file_content_type
+                .filter(|mime| !mime.is_empty())
+                .unwrap_or(content.mime_type),
+            &fields.unwrap_or_default(),
+        )
+        .await
+}
+
+/// Gate R0.5 — open the Android SAF document picker natively. Returns only a
+/// content URI plus metadata so the renderer passes the URI onward instead of
+/// ever reading the file bytes.
+#[tauri::command]
+pub async fn remote_pick_document(
+    app: AppHandle,
+    mime_type: Option<String>,
+) -> Result<crate::android_bridge::PickedDocument, String> {
+    ensure_remote_mode(app.state::<DesktopState>().mode)?;
+    crate::android_bridge::pick_document(&app, mime_type).await
+}
+
+/// Gate R0.6 — Android export. The native broker downloads the artifact bytes
+/// from the enrolled server, then the native SAF layer writes them to the
+/// user-selected location. The renderer only passes the relative download path
+/// and a default filename; it never materialises the artifact bytes.
+#[tauri::command]
+pub async fn remote_save_export(
+    app: AppHandle,
+    path: String,
+    file_name: Option<String>,
+    file_content_type: Option<String>,
+) -> Result<serde_json::Value, String> {
+    ensure_remote_mode(app.state::<DesktopState>().mode)?;
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let broker = app.state::<DesktopState>().broker.clone();
+    let downloaded = broker
+        .api_request(&app_data, &path, "GET", None, &HashMap::new())
+        .await?;
+    if downloaded.status >= 400 {
+        return Err(remote_error(
+            ERR_SERVER_UNAVAILABLE,
+            format!("artifact download failed with status {}", downloaded.status),
+        ));
+    }
+    let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
+    if downloaded.body_base64.len() > (MAX_UPLOAD_BYTES * 4) / 3 + 4 {
+        return Err(remote_error(
+            ERR_PROTOCOL,
+            format!("export exceeds the {limit_mib} MiB native export limit"),
+        ));
+    }
+    // Prefer the server-provided Content-Disposition filename, then the
+    // caller's default. The disposition is on the native response allowlist.
+    let filename = downloaded
+        .response_headers
+        .get("content-disposition")
+        .and_then(|value| extract_filename_from_disposition(value))
+        .or_else(|| file_name.filter(|name| !name.is_empty()))
+        .unwrap_or_else(|| "interest-growth-export.bin".into());
+    let content_type = file_content_type
+        .filter(|mime| !mime.is_empty())
+        .unwrap_or_else(|| {
+            if downloaded.content_type.is_empty() {
+                "application/octet-stream".into()
+            } else {
+                downloaded.content_type
+            }
+        });
+    let saved =
+        crate::android_bridge::save_document(&app, &filename, &content_type, &downloaded.body_base64)
+            .await?;
+    Ok(serde_json::json!({
+        "uri": saved.uri,
+        "size": saved.size,
+        "name": filename,
+    }))
+}
+
+/// Parse the filename from a `Content-Disposition` header value. Supports the
+/// plain `filename="x.zip"` form (the export endpoint's format) and the
+/// `filename*=UTF-8''x.zip` extended form.
+fn extract_filename_from_disposition(value: &str) -> Option<String> {
+    let value = value.trim();
+    let (_, rest) = value.split_once("filename*=")
+        .or_else(|| value.split_once("filename="))?;
+    let rest = rest.trim();
+    if let Some(stripped) = rest.strip_prefix('"') {
+        return stripped
+            .split('"')
+            .next()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned);
+    }
+    rest.split(';')
+        .next()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Explicitly refresh the session (used by the connection-status UX).

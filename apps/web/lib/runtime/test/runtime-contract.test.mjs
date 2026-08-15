@@ -127,9 +127,8 @@ test('android-remote never reaches a desktop/local path; mobile adapters are pla
   // Frozen contract §2 assigns the renewal credential to Android Keystore.
   assert.equal(android.capabilities.canUseNativeSecureStore, true);
   assert.equal(android.capabilities.canOpenExternalUrl, true);
-  // Gate D §P21 — mobile adapters are declared by the contract but planned,
-  // not yet built. The descriptor must NOT enable features that do not exist.
-  assert.equal(android.capabilities.canUseDocumentPicker, false);
+  // Gate R0.4 — the SAF document picker is real now; the rest stay planned.
+  assert.equal(android.capabilities.canUseDocumentPicker, true);
   assert.equal(android.capabilities.canUseShareSheet, false);
   assert.equal(android.capabilities.supportsLifecycleSuspendResume, false);
   assert.equal(android.capabilities.canUseBiometricUnlock, false);
