@@ -138,7 +138,7 @@ a7274a5a8c25fdf9207057b86febbe7b486e59daccc4b76e10974242f13dc7aa  apps/desktop/s
 0337f3d7ef2517829f4eebcfebe727feb9270752d371cbb4fc77c911f75bc5c5  apps/desktop/src-tauri/icons/icon.icns
 3a176c175631b359acc66104a001cbf16b5f0e71a3d560c3ba17f6a1a8e6e9ab  apps/desktop/src-tauri/icons/icon.ico
 d977268a3981ee3fc394bdb8e45997fdcf742859281e3245a05b9609a12cbba5  apps/desktop/src-tauri/icons/icon.png
-dbe28728203f408be2962667972fb065c71dfac7300801d8aa4564b4961a7d9e  apps/desktop/src-tauri/src/android_bridge.rs
+607294cd35ae1df29e0caf68b042cff8bff148e157c2e5ec093904ea011c01c7  apps/desktop/src-tauri/src/android_bridge.rs
 cb05a7a09dec14b48a45aa286758c71c3983067d1b9adac1462b64ef27890fc2  apps/desktop/src-tauri/src/lib.rs
 34eb08d2c5f7654d397ac3c5807512e191689a0a264429bb36f0454cf53514a4  apps/desktop/src-tauri/src/main.rs
 4fcd7b6d4d3a348042dcb84b616739f16d6db80ede8ef957d029fb0bdc0231c9  apps/desktop/src-tauri/src/remote.rs

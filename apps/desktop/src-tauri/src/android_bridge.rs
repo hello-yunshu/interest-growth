@@ -56,8 +56,13 @@ pub struct AndroidBridge(pub PluginHandle<tauri::Wry>);
 /// Registers the InterestGrowthPlugin on Android. On desktop this is a no-op
 /// plugin so the crate compiles everywhere while keeping the mobile entry
 /// point's plugin wiring identical.
+///
+/// Note: this is deliberately NOT generic on Android. `register_android_plugin`
+/// drives `run_on_android_context`, which only exists on the concrete Wry
+/// mobile runtime, so `R` is pinned to `tauri::Wry` and the returned plugin is
+/// `TauriPlugin<tauri::Wry>` — not the generic `TauriPlugin<R>`.
 #[cfg(target_os = "android")]
-pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("interest-growth-plugin")
         .setup(|app, api| {
             let handle = api.register_android_plugin(
