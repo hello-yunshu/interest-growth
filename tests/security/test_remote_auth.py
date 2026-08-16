@@ -69,7 +69,7 @@ def test_capabilities_contract_is_stable_and_public(remote_client):
     body = response.json()
     assert body["product"] == "interest-growth"
     assert body["api_version"] == "1"
-    assert body["min_client_version"] == "0.7.0"
+    assert body["min_client_version"] == "1.0.0"
     assert body["server_instance_id"]
     assert body["server_display_name"] == "Interest Growth Server"
     assert body["online_first"] is True
@@ -253,7 +253,7 @@ def test_owner_login_issues_device_and_token_pair(remote_client):
     response = _login(remote_client)
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["server"]["server_version"] == "0.7.0"
+    assert body["server"]["server_version"] == "1.0.0"
     tokens = body["tokens"]
     assert tokens["token_type"] == "Bearer"
     assert tokens["expires_in"] == 900

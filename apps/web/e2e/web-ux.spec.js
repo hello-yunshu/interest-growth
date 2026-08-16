@@ -48,11 +48,11 @@ function tauriInitScript({ areaId }) {
       const a = args || {};
       switch (cmd) {
         case 'desktop_runtime':
-          return { runtimeId: 'desktop-local', status: 'ok', version: '0.7.0', platform: 'linux', endpoint: '' };
+          return { runtimeId: 'desktop-local', status: 'ok', version: '1.0.0', platform: 'linux', endpoint: '' };
         case 'desktop_runtime_mode':
           return { runtimeId: 'desktop-local', sidecarLaunch: false, sessionImmutable: true };
         case 'restart_desktop_core':
-          return { status: 'ok', version: '0.7.0' };
+          return { status: 'ok', version: '1.0.0' };
         case 'restart_desktop_app':
           return {};
         default:

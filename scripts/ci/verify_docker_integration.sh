@@ -120,7 +120,7 @@ if [ "${code}" = "201" ]; then PASS=$((PASS + 1)); else fail "bootstrap (got ${c
 
 # 6. login
 step "owner login"
-code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-b\",\"platform\":\"android\",\"app_version\":\"0.7.0\"}")"
+code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-b\",\"platform\":\"android\",\"app_version\":\"1.0.0\"}")"
 if [ "${code}" = "201" ]; then
   PASS=$((PASS + 1))
   DEVICE_ID="$(json_get "['device']['id']")"
@@ -304,7 +304,7 @@ PY
   if [ "${code}" = "200" ]; then PASS=$((PASS + 1)); else fail "post-restore health (got ${code})"; fi
 
   step "product smoke (owner login + dashboard + restored data)"
-  code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-recover\",\"platform\":\"android\",\"app_version\":\"0.7.0\"}")"
+  code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-recover\",\"platform\":\"android\",\"app_version\":\"1.0.0\"}")"
   if [ "${code}" = "201" ]; then
     PASS=$((PASS + 1))
     ACCESS_TOKEN="$(json_get "['tokens']['access_token']")"

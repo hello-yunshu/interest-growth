@@ -35,7 +35,7 @@ export default function SystemPage(){
   const remote=isRemoteRuntime(desktop?.runtimeId);
   const isAndroid=desktop?.platform==='android';
   const health=useMemo(()=>[
-    {label:remote?'数据源':'Core',title:remote?'自托管服务器':desktop?.desktop?(desktop.status||'unknown'):'web dev',detail:remote?(desktop?.dataLocation==='self-hosted-server'?'远程服务 · 本机不复制数据':'等待连接'):desktop?.desktop?`v${desktop.version||'0.7.0'}`:'Browser development mode'},
+    {label:remote?'数据源':'Core',title:remote?'自托管服务器':desktop?.desktop?(desktop.status||'unknown'):'web dev',detail:remote?(desktop?.dataLocation==='self-hosted-server'?'远程服务 · 本机不复制数据':'等待连接'):desktop?.desktop?`v${desktop.version||'1.0.0'}`:'Browser development mode'},
     {label:'Native execution',title:integrations?.native_execution?.provider?'ready':'loading',detail:integrations?.native_execution?.llm_available?'Native Core + configured model':'Native local capabilities ready · model optional'},
     {label:'DeepSeek',title:remote?'remote':(secretStatus?.configured?'configured':'optional'),detail:remote?'模型通道由服务器侧配置，不在本机管理。':'仅作为可替换模型通道，不拥有产品状态。'},
     {label:'Interest Area',title:area?.name||'loading',detail:area?.domain_name||''},
