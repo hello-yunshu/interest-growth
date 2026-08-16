@@ -108,9 +108,11 @@ jobs:
             adb reverse tcp:18080 tcp:8000
             adb reverse --list
             # Inject the debug-only vertical-slice trigger config into the app-private files dir.
-            cat > /tmp/ig_e2e.json <<'JSON'
-            {"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-ci"}
-            JSON
+            # NOTE: no heredoc here — the script runs via /usr/bin/sh (dash) and
+            # any heredoc delimiter would carry YAML block-scalar indentation, so
+            # the delimiter would never be seen as column-0 and the JSON line would
+            # be executed as a command. Build the file with printf instead.
+            printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-ci"}' > /tmp/ig_e2e.json
             adb push /tmp/ig_e2e.json /data/local/tmp/ig_e2e.json
             adb shell run-as ${PKG} sh -c 'mkdir -p files && cp /data/local/tmp/ig_e2e.json files/ig_e2e_config.json && chmod 600 files/ig_e2e_config.json'
             # Launch the app; debug setup spawns the debug-only vertical slice.
