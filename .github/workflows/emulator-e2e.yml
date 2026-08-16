@@ -64,6 +64,11 @@ jobs:
       - name: Boot self-hosted API server (docker, current commit)
         run: |
           set -euo pipefail
+          # Base compose declares env_file: [.env]; a clean checkout has no .env,
+          # so docker compose refuses to parse it. Provide an empty one so the
+          # api service's runtime config (PG_REMOTE_* / PG_OWNER_* below) is what
+          # actually configures the server.
+          touch .env
           docker compose -p ig-emulator build api
           PG_REMOTE_AUTH_ENABLED=true \
           PG_OWNER_BOOTSTRAP_TOKEN="ci-bootstrap-token-7a1f" \
