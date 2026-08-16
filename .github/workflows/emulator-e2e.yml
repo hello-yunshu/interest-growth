@@ -98,41 +98,18 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            # run via the runner's /usr/bin/sh (dash), which does NOT support
-            # `set -o pipefail` — keep the script POSIX-sh compatible.
-            set -eu
-            PKG=app.psychologygrowth.desktop
+            # This runner executes the `script:` body one LINE at a time, each
+            # line in its own /usr/bin/sh (dash) subprocess — so cross-line shell
+            # state (a `PKG=` variable, a multi-line `for`/`if`) never survives to
+            # the following line.  Keep every line a self-contained dash command,
+            # inline the package name (no variable), and fold the polling loop
+            # into a single line so its loop/conditions/exit run in one sh -c.
             adb install dist/android/interest-growth-android-x86_64-debug.apk
-            # Map the host self-hosted API server (port 8000) onto the emulator
-            # loopback at 127.0.0.1:18080 so the enrollment origin stays loopback.
             adb reverse tcp:18080 tcp:8000
-            adb reverse --list
-            # Inject the debug-only vertical-slice trigger config into the app-private files dir.
-            # NOTE: no heredoc here — the script runs via /usr/bin/sh (dash) and
-            # any heredoc delimiter would carry YAML block-scalar indentation, so
-            # the delimiter would never be seen as column-0 and the JSON line would
-            # be executed as a command. Build the file with printf instead.
             printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-ci"}' > /tmp/ig_e2e.json
             adb push /tmp/ig_e2e.json /data/local/tmp/ig_e2e.json
-            adb shell run-as ${PKG} sh -c 'mkdir -p files && cp /data/local/tmp/ig_e2e.json files/ig_e2e_config.json && chmod 600 files/ig_e2e_config.json'
-            # Launch the app; debug setup spawns the debug-only vertical slice.
-            adb shell am start -n ${PKG}/.MainActivity
-            # Poll the result file (up to ~90s) written by the in-app slice.
-            for _ in $(seq 1 45); do
-              RESULT="$(adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true)"
-              if echo "$RESULT" | grep -q '"result": "PASS"'; then
-                echo "emulator real remote vertical slice: PASS"
-                echo "$RESULT"
-                adb shell pidof ${PKG} || true
-                exit 0
-              fi
-              if echo "$RESULT" | grep -q '"result": "FAIL"'; then
-                echo "emulator real remote vertical slice: FAIL"
-                echo "$RESULT"
-                exit 1
-              fi
-              sleep 2
-            done
-            echo "FAIL: vertical slice did not complete in time" >&2
-            adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true
-            exit 1
+            adb shell run-as app.psychologygrowth.desktop mkdir -p files
+            adb shell run-as app.psychologygrowth.desktop cp /data/local/tmp/ig_e2e.json files/ig_e2e_config.json
+            adb shell run-as app.psychologygrowth.desktop chmod 600 files/ig_e2e_config.json
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            for i in $(seq 1 45); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "emulator real remote vertical slice: PASS"; echo "$R"; exit 0; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "emulator real remote vertical slice: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; echo "FAIL: vertical slice did not complete in time" >&2; exit 1
