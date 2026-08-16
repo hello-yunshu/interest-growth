@@ -13,8 +13,8 @@ GITHUB_SHA, GITHUB_RUN_ID, RUNNER_OS).
 
 Usage:
     python scripts/ci/generate_release_report.py \
-        --out V0_7_RELEASE_VERIFICATION.md \
-        --asset dist/.../interest-growth-v0.7.0-android-arm64.apk \
+        --out V1_0_RELEASE_VERIFICATION.md \
+        --asset dist/.../interest-growth-v1.0.0-android-arm64.apk \
         --field "Android SDK=36" --field "NDK=27.1"
 """
 

@@ -338,7 +338,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
         ownerPassword,
         deviceName: deviceName || (runtime?.platform === 'windows' ? '这台电脑' : runtime?.platform === 'android' ? '这台 Android 设备' : '这台 Mac'),
         platform: runtime?.platform || 'macos',
-        appVersion: runtime?.version || '0.7.0',
+        appVersion: runtime?.version || '1.0.0',
         expectedServerInstanceId: probe?.server?.serverInstanceId || session?.serverInstanceId || '',
       }));
       setOwnerPassword('');

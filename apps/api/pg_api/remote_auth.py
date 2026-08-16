@@ -30,9 +30,9 @@ from .db import (
 
 router = APIRouter(prefix="/auth", tags=["remote-auth"])
 
-SERVER_VERSION = "0.7.0"
+SERVER_VERSION = "1.0.0"
 API_VERSION = "1"
-MIN_CLIENT_VERSION = "0.7.0"
+MIN_CLIENT_VERSION = "1.0.0"
 PRODUCT_NAME = "interest-growth"
 
 # Public by contract: health, capability metadata, and the authentication
