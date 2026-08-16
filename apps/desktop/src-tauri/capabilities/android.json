@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/android-schema.json",
+  "identifier": "android-main-capability",
+  "description": "Gate R0.7 — minimal capability set for the Interest Growth Android runtime. Android never inherits the desktop surface: no window state, no desktop shell/window controls, no desktop filesystem breadth, no dialog save permissions, no updater, and no provider-secret administration. The remote broker and SAF operations are custom commands (remote_*, remote_pick_document, remote_api_upload_by_uri, remote_save_export) that do not require plugin capabilities, so the only plugin surface is opening external URLs in the system browser.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "android"
+  ],
+  "permissions": [
+    "core:default",
+    "opener:allow-default-urls"
+  ]
+}

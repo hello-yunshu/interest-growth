@@ -60,6 +60,7 @@ def test_backup_creates_complete_consistent_bundle(seeded_client, tmp_path):
     bundle = create_backup(destination_dir=str(tmp_path / "backups"))
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["product"] == "interest-growth"
+    assert manifest["format_version"] == 1
     assert manifest["schema_version"] == 15
     assert manifest["server_instance_id"]
     assert manifest["database"]["sha256"]
@@ -238,6 +239,108 @@ def test_restore_migrates_older_bundle_schema_during_staging(seeded_client, tmp_
     assert result["schema_version"] == 15
     with get_session_factory()() as db:
         assert db.scalar(select(func.max(SchemaMigration.version))) == 15
+    reset_engine_for_tests()
+
+
+# ------------------------------------------------------------- Gate R2 §9.5
+
+
+def _assert_live_state_untouched(settings, live_files):
+    db_path = Path(settings.database_url[len("sqlite:///"):])
+    assert db_path.read_bytes() == live_files["db"]
+    assert sorted(p.relative_to(Path(settings.source_storage_root)) for p in Path(settings.source_storage_root).rglob("*") if p.is_file()) == sorted(live_files["sources"])
+
+
+def test_restore_fails_closed_on_newer_schema_bundle(seeded_client, tmp_path):
+    """Gate R2 §9.5: a bundle from a FUTURE schema fails closed during staged
+    verification (no downgrade path) and never touches the live state."""
+    import sqlite3
+
+    from pg_api.backup_restore import create_backup, restore_backup
+
+    settings = get_settings()
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    db_before = Path(settings.database_url[len("sqlite:///"):]).read_bytes()
+    source_before = sorted(
+        p.relative_to(Path(settings.source_storage_root))
+        for p in Path(settings.source_storage_root).rglob("*")
+        if p.is_file()
+    )
+
+    db_file = bundle / "psychology_growth.db"
+    conn = sqlite3.connect(db_file)
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (99, '2099-01-01 00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["database"]["sha256"] = _sha256(db_file)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="newer than this build"):
+        restore_backup(bundle_dir=str(bundle))
+    _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
+    reset_engine_for_tests()
+
+
+def test_restore_aborts_staging_on_schema_migration_failure(seeded_client, tmp_path):
+    """Gate R2 §9.5: a bundle whose schema ledger is broken (migration cannot
+    apply) aborts during staging and leaves the live state intact."""
+    import sqlite3
+
+    from pg_api.backup_restore import create_backup, restore_backup
+
+    settings = get_settings()
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    db_before = Path(settings.database_url[len("sqlite:///"):]).read_bytes()
+    source_before = sorted(
+        p.relative_to(Path(settings.source_storage_root))
+        for p in Path(settings.source_storage_root).rglob("*")
+        if p.is_file()
+    )
+
+    db_file = bundle / "psychology_growth.db"
+    conn = sqlite3.connect(db_file)
+    # Dropping the ledger leaves the data tables behind: the staged migration
+    # bootstrap cannot re-create them, so staging must fail before any switch.
+    conn.execute("DROP TABLE schema_migrations")
+    conn.commit()
+    conn.close()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["database"]["sha256"] = _sha256(db_file)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(Exception):
+        restore_backup(bundle_dir=str(bundle))
+    _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
+    reset_engine_for_tests()
+
+
+def test_restore_fails_closed_on_future_backup_format(seeded_client, tmp_path):
+    """Gate R2 §43: a bundle whose manifest claims a future format_version is
+    rejected before any staged verification, leaving live state intact."""
+    from pg_api.backup_restore import create_backup, restore_backup
+
+    settings = get_settings()
+    bundle = create_backup(destination_dir=str(tmp_path / "backups"))
+    db_before = Path(settings.database_url[len("sqlite:///"):]).read_bytes()
+    source_before = sorted(
+        p.relative_to(Path(settings.source_storage_root))
+        for p in Path(settings.source_storage_root).rglob("*")
+        if p.is_file()
+    )
+
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["format_version"] = 999
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="format_version 999 is newer"):
+        restore_backup(bundle_dir=str(bundle))
+    _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
     reset_engine_for_tests()
 
 

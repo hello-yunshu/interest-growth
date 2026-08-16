@@ -16,14 +16,17 @@ pub const RUNTIME_PROFILE_FILE: &str = "runtime-profile.json";
 
 pub const RUNTIME_ID_DESKTOP_LOCAL: &str = "desktop-local";
 pub const RUNTIME_ID_DESKTOP_REMOTE: &str = "desktop-remote";
+pub const RUNTIME_ID_ANDROID_REMOTE: &str = "android-remote";
 
-// The only modes a Tauri desktop shell can express in Gate C. android-remote
-// / browser-remote are future runtimes for other shells and are not
-// expressible here.
+// Gate E §6.3 — the modes a shell can express. A Tauri desktop shell may be
+// desktop-local / desktop-remote. The Android shell only ever expresses
+// android-remote (no local Core, no desktop keyring, no sidecar). browser-remote
+// is reserved for a future web shell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeMode {
     DesktopLocal,
     DesktopRemote,
+    AndroidRemote,
 }
 
 impl RuntimeMode {
@@ -31,6 +34,7 @@ impl RuntimeMode {
         match self {
             RuntimeMode::DesktopLocal => RUNTIME_ID_DESKTOP_LOCAL,
             RuntimeMode::DesktopRemote => RUNTIME_ID_DESKTOP_REMOTE,
+            RuntimeMode::AndroidRemote => RUNTIME_ID_ANDROID_REMOTE,
         }
     }
 }
@@ -63,6 +67,28 @@ pub fn parse_runtime_mode(profile: Option<&RuntimeProfile>) -> RuntimeMode {
 
 pub fn should_spawn_sidecar(mode: RuntimeMode) -> bool {
     mode == RuntimeMode::DesktopLocal
+}
+
+// Gate R0 §4 — the remote broker's expected runtime, resolved independently of
+// local mode. A desktop-local session still owns a RemoteBroker object, but it
+// is never reachable while local mode is active (every remote command is gated
+// by ensure_remote_mode). So desktop-local uses a default remote runtime that
+// is never reachable during the session; only a genuinely remote mode binds
+// the broker to its own runtime id.
+pub fn broker_expected_runtime_id(mode: RuntimeMode) -> &'static str {
+    match mode {
+        RuntimeMode::DesktopLocal => RUNTIME_ID_DESKTOP_REMOTE,
+        RuntimeMode::DesktopRemote => RUNTIME_ID_DESKTOP_REMOTE,
+        RuntimeMode::AndroidRemote => RUNTIME_ID_ANDROID_REMOTE,
+    }
+}
+
+// Gate E §6.3 — the Android shell is always android-remote: it never spawns a
+// Python sidecar, never reads a desktop keyring / local vaults, and never has
+// a canonical local DB. This is the only mode the Android host can express.
+#[cfg(target_os = "android")]
+pub fn android_remote_mode() -> RuntimeMode {
+    RuntimeMode::AndroidRemote
 }
 
 #[cfg(test)]
@@ -113,5 +139,47 @@ mod tests {
         assert!(!is_desktop_runtime_id("android-remote"));
         assert!(!is_desktop_runtime_id("browser-remote"));
         assert!(!is_desktop_runtime_id(""));
+    }
+
+    #[test]
+    fn android_remote_never_spawns_sidecar() {
+        assert_eq!(
+            RuntimeMode::AndroidRemote.as_str(),
+            RUNTIME_ID_ANDROID_REMOTE
+        );
+        assert!(!should_spawn_sidecar(RuntimeMode::AndroidRemote));
+    }
+
+    // Gate R0 §4 — broker construction must succeed even on a clean default
+    // desktop-local startup, while credential-bearing remote commands stay
+    // denied. The broker's expected runtime is resolved independently of local
+    // mode.
+    #[test]
+    fn desktop_local_broker_expected_runtime_is_a_remote_runtime() {
+        // desktop-local must still yield a valid remote runtime id so
+        // RemoteBroker::with_expected_runtime succeeds at setup.
+        assert!(crate::remote::is_remote_runtime_id(broker_expected_runtime_id(
+            RuntimeMode::DesktopLocal
+        )));
+        assert_eq!(
+            broker_expected_runtime_id(RuntimeMode::DesktopLocal),
+            RUNTIME_ID_DESKTOP_REMOTE
+        );
+    }
+
+    #[test]
+    fn desktop_remote_broker_expected_runtime_is_desktop_remote() {
+        assert_eq!(
+            broker_expected_runtime_id(RuntimeMode::DesktopRemote),
+            RUNTIME_ID_DESKTOP_REMOTE
+        );
+    }
+
+    #[test]
+    fn android_remote_broker_expected_runtime_is_android_remote() {
+        assert_eq!(
+            broker_expected_runtime_id(RuntimeMode::AndroidRemote),
+            RUNTIME_ID_ANDROID_REMOTE
+        );
     }
 }

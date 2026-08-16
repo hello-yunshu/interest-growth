@@ -12,8 +12,10 @@ import {
   runtimeConnectReducer,
   dataLocationOf,
   isRemoteActive,
+  isRemoteRuntime,
   RUNTIME_LOCAL,
   RUNTIME_REMOTE,
+  RUNTIME_ANDROID_REMOTE,
 } from '../runtime-connect-controller.js';
 
 test('active local, no pending → local, no restart required', () => {
@@ -103,4 +105,36 @@ test('reducer rejects unknown runtime ids fail-closed', () => {
     () => runtimeConnectReducer(state, { type: 'MODE_LOADED', activeRuntimeId: 'tauri', pendingRuntimeId: RUNTIME_LOCAL }),
     /unknown runtime id/,
   );
+});
+
+// Gate R0.1 — android-remote is a first-class runtime id. The reducer must
+// accept it and the controller must classify it as remote everywhere the
+// desktop-remote checks used to be hardcoded.
+test('reducer accepts android-remote as a native runtime id', () => {
+  let state = initialRuntimeConnectState({ activeRuntimeId: RUNTIME_ANDROID_REMOTE });
+  assert.equal(state.activeRuntimeId, RUNTIME_ANDROID_REMOTE);
+  assert.equal(state.pendingRuntimeId, RUNTIME_ANDROID_REMOTE);
+  // Native process setup resolves android-remote without an error.
+  state = runtimeConnectReducer(state, {
+    type: 'MODE_LOADED',
+    activeRuntimeId: RUNTIME_ANDROID_REMOTE,
+    pendingRuntimeId: RUNTIME_ANDROID_REMOTE,
+  });
+  assert.equal(state.activeRuntimeId, RUNTIME_ANDROID_REMOTE);
+  assert.equal(state.restartRequired, false);
+});
+
+test('android-remote is classified remote: data location and isRemoteActive', () => {
+  const state = initialRuntimeConnectState({ activeRuntimeId: RUNTIME_ANDROID_REMOTE });
+  assert.equal(isRemoteRuntime(RUNTIME_ANDROID_REMOTE), true);
+  assert.equal(isRemoteActive(state), true);
+  // Android never exposes a local-device data location (R0.1).
+  assert.equal(dataLocationOf(state), 'self-hosted-server');
+});
+
+test('desktop local is never classified remote', () => {
+  const state = initialRuntimeConnectState({ activeRuntimeId: RUNTIME_LOCAL });
+  assert.equal(isRemoteRuntime(RUNTIME_LOCAL), false);
+  assert.equal(isRemoteActive(state), false);
+  assert.equal(dataLocationOf(state), 'local-device');
 });

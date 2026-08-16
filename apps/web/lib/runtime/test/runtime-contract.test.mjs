@@ -127,11 +127,12 @@ test('android-remote never reaches a desktop/local path; mobile adapters are pla
   // Frozen contract §2 assigns the renewal credential to Android Keystore.
   assert.equal(android.capabilities.canUseNativeSecureStore, true);
   assert.equal(android.capabilities.canOpenExternalUrl, true);
-  // Gate D §P21 — mobile adapters are declared by the contract but planned,
-  // not yet built. The descriptor must NOT enable features that do not exist.
-  assert.equal(android.capabilities.canUseDocumentPicker, false);
+  // Gate R0.4 — the SAF document picker and the suspend/resume lifecycle
+  // adapter are real now (onSuspendResume re-evaluates the session on
+  // foreground return); the rest stay planned.
+  assert.equal(android.capabilities.canUseDocumentPicker, true);
   assert.equal(android.capabilities.canUseShareSheet, false);
-  assert.equal(android.capabilities.supportsLifecycleSuspendResume, false);
+  assert.equal(android.capabilities.supportsLifecycleSuspendResume, true);
   assert.equal(android.capabilities.canUseBiometricUnlock, false);
 });
 
@@ -693,10 +694,15 @@ test('remote error events: server verdicts become their honest states', () => {
   assert.equal(remoteErrorEvent('{"code":"UNSUPPORTED_SERVER","message":"x"}'), 'UNSUPPORTED_SERVER');
   assert.equal(remoteErrorEvent('{"code":"PROTOCOL_ERROR","message":"x"}'), 'UNSUPPORTED_SERVER');
   assert.equal(remoteErrorEvent('{"code":"NETWORK_UNAVAILABLE","message":"x"}'), 'NETWORK_FAIL');
+  // Gate C/D §4.1 — rate-limit and 5xx are transient, never LoginExpired.
+  assert.equal(remoteErrorEvent('{"code":"RATE_LIMITED","message":"busy"}'), 'NETWORK_FAIL');
+  assert.equal(remoteErrorEvent('{"code":"SERVER_UNAVAILABLE","message":"busy"}'), 'NETWORK_FAIL');
   // Ambiguous / unknown / non-coded failures are NEVER terminal verdicts.
   assert.equal(remoteErrorEvent('{"code":"NONSENSE","message":"x"}'), 'NETWORK_FAIL');
   assert.equal(remoteErrorEvent('connection reset by peer'), 'NETWORK_FAIL');
   assert.equal(REMOTE_ERROR_CODES.CREDENTIAL_PERSISTENCE_FAILURE, 'CREDENTIAL_PERSISTENCE_FAILURE');
+  assert.equal(REMOTE_ERROR_CODES.RATE_LIMITED, 'RATE_LIMITED');
+  assert.equal(REMOTE_ERROR_CODES.SERVER_UNAVAILABLE, 'SERVER_UNAVAILABLE');
 });
 
 test('transport records coded verdicts into the machine (single source)', async () => {

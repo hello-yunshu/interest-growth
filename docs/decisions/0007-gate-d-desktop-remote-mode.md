@@ -72,8 +72,18 @@ command callable in any runtime mode (so the System page can show enrollment
 choices before a mode is active). Its result is display cache only: it is
 never reused as authorization for sending a credential. Login and bootstrap
 perform their own FRESH verified probe inside the same call that sends the
-credential, so a server replaced behind the same URL is detected right
-before the password/refresh leaves the process.
+credential.
+
+Precise security semantics (Gate C/D §4.9): the fresh probe closes a STALE
+authorization cache — a server that was replaced while an earlier probe result
+was cached is detected before the credential is sent. It does NOT claim to
+eliminate every theoretical time-of-check/time-of-use between the fresh
+metadata GET and the login POST; those are two separate HTTP requests and some
+TOCTOU window always exists. Endpoint cryptographic identity is provided by
+the TLS certificate / PKI (validated by the OS/transport on HTTPS). The
+`server_instance_id` comparison is an APPLICATION-instance continuity check —
+it confirms the same application instance is behind the URL across the
+probe/login, not a substitute for TLS certificate validation.
 
 ### 8. Runtime gate for credential-bearing commands
 

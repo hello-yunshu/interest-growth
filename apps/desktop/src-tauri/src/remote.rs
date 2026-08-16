@@ -35,6 +35,7 @@ use std::{
 };
 
 use base64::Engine;
+#[cfg(not(target_os = "android"))]
 use keyring::v1::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -52,7 +53,19 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const API_PRODUCT: &str = "interest-growth";
 const SUPPORTED_API_VERSION: &str = "1";
 const RUNTIME_DESKTOP_REMOTE: &str = "desktop-remote";
+// Gate R0.3 — the Android shell is its own remote runtime: it must NOT borrow
+// desktop-remote to "coincidentally pass" compatibility. A server must
+// advertise the exact runtime the client actually runs.
+const RUNTIME_ANDROID_REMOTE: &str = "android-remote";
 const AUTH_MODE_SINGLE_OWNER_DEVICES: &str = "single_owner_devices";
+
+/// Gate R0.3 — the shipped native remote runtimes. Both require the same
+/// frozen auth/transport contract (auth enabled, single-owner-devices,
+/// online-first, no offline sync). browser-remote is not a shipped native
+/// runtime in this binary.
+pub(crate) fn is_remote_runtime_id(runtime_id: &str) -> bool {
+    runtime_id == RUNTIME_DESKTOP_REMOTE || runtime_id == RUNTIME_ANDROID_REMOTE
+}
 
 // Gate D §P17 — upload bound matches the server product limit (100 MiB).
 const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
@@ -68,6 +81,8 @@ const ALLOWED_HTTP_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS", "POST", "PUT",
 // codes in a `{"code": "...", "message": "..."}` payload. Errors never
 // contain a password, access token, refresh token or bootstrap token.
 pub const ERR_NETWORK_UNAVAILABLE: &str = "NETWORK_UNAVAILABLE";
+pub const ERR_RATE_LIMITED: &str = "RATE_LIMITED";
+pub const ERR_SERVER_UNAVAILABLE: &str = "SERVER_UNAVAILABLE";
 pub const ERR_LOGIN_EXPIRED: &str = "LOGIN_EXPIRED";
 pub const ERR_IDENTITY_CHANGED: &str = "IDENTITY_CHANGED";
 pub const ERR_UPDATE_REQUIRED: &str = "UPDATE_REQUIRED";
@@ -154,6 +169,18 @@ struct TokenSnapshot {
 struct SentRequest {
     status: u16,
     bytes: Vec<u8>,
+    content_type: String,
+    response_headers: HashMap<String, String>,
+    access_snapshot: TokenSnapshot,
+}
+
+/// Gate R0.6 — result of streaming an artifact download into a bounded
+/// app-private temp file. The bytes stay on disk (never a full base64 Vec);
+/// only status + metadata are surfaced and `access_snapshot` drives the single
+/// 401 refresh-recovery.
+#[derive(Clone, Debug)]
+pub(crate) struct DownloadedExport {
+    status: u16,
     content_type: String,
     response_headers: HashMap<String, String>,
     access_snapshot: TokenSnapshot,
@@ -248,10 +275,21 @@ pub struct RemoteLogoutResult {
 /// Multi-key keyring operations are not assumed atomic; every step reports
 /// its own failure and the read order is what provides crash recovery.
 pub trait CredentialStore: Send + Sync {
-    /// Active slot: the last successfully promoted credential.
-    fn read_refresh(&self, server_instance_id: &str, device_id: &str) -> Option<String>;
+    /// Active slot: the last successfully promoted credential. `Ok(None)`
+    /// means no entry exists; an `Err` means the store itself failed (locked,
+    /// backend unavailable, permission denied) and must NOT be treated as
+    /// "no credential / please log in" (Gate C/D §4.5).
+    fn read_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError>;
     /// Pending slot: a rotated replacement that has not yet been promoted.
-    fn read_pending_refresh(&self, server_instance_id: &str, device_id: &str) -> Option<String>;
+    fn read_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError>;
     /// Promote a replacement into the active slot.
     fn write_refresh(
         &self,
@@ -276,9 +314,63 @@ pub trait CredentialStore: Send + Sync {
     fn delete_refresh(&self, server_instance_id: &str, device_id: &str) -> Result<(), String>;
 }
 
-/// OS keyring backed store. One refresh credential per server per device.
-/// The active slot keeps the legacy `remote-refresh:<server>:<device>` key so
-/// existing installs read their stored credential without any migration.
+/// Gate C/D §4.5 — classified credential-store read failures. `NoEntry` means
+/// the key simply does not exist (→ LoginExpired / re-login). Everything else
+/// is a store/backend problem (→ CREDENTIAL_PERSISTENCE_FAILURE) so the client
+/// never falsely demands a re-login when the OS keychain is merely locked or
+/// its backend is unavailable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialStoreError {
+    /// The key does not exist in the store.
+    NoEntry,
+    /// The secure-store backend is unavailable (keychain/secret-service down).
+    BackendUnavailable,
+    /// The process/account is not allowed to access the credential.
+    PermissionDenied,
+    /// The stored value is present but not a usable credential.
+    CorruptCredential,
+    /// Any other store error.
+    Other(String),
+}
+
+impl std::fmt::Display for CredentialStoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CredentialStoreError::NoEntry => write!(formatter, "no entry"),
+            CredentialStoreError::BackendUnavailable => write!(formatter, "store backend unavailable"),
+            CredentialStoreError::PermissionDenied => write!(formatter, "permission denied"),
+            CredentialStoreError::CorruptCredential => write!(formatter, "corrupt credential"),
+            CredentialStoreError::Other(detail) => write!(formatter, "{detail}"),
+        }
+    }
+}
+
+/// Gate C/D §4.5 — map a keyring error to a classified store error so a read
+/// that fails because the OS keychain is locked/unavailable is never mistaken
+/// for "no credential stored".
+#[cfg(not(target_os = "android"))]
+fn classify_store_error(error: keyring::Error) -> CredentialStoreError {
+    use keyring::Error;
+    match error {
+        Error::NoEntry => CredentialStoreError::NoEntry,
+        Error::NoStorageAccess(_) | Error::PlatformFailure(_) => {
+            CredentialStoreError::BackendUnavailable
+        }
+        Error::BadEncoding(_) | Error::BadDataFormat(..) | Error::BadStoreFormat(_) => {
+            CredentialStoreError::CorruptCredential
+        }
+        Error::Invalid(parameter, _) if parameter.eq_ignore_ascii_case("credential") => {
+            CredentialStoreError::PermissionDenied
+        }
+        Error::NoDefaultStore => CredentialStoreError::BackendUnavailable,
+        other => CredentialStoreError::Other(other.to_string()),
+    }
+}
+
+/// OS keyring backed store (desktop only). One refresh credential per server
+/// per device. The active slot keeps the legacy `remote-refresh:<server>:<device>`
+/// key so existing installs read their stored credential without any migration.
+#[cfg(not(target_os = "android"))]
 pub struct KeyringStore;
 
 fn active_username(server_instance_id: &str, device_id: &str) -> String {
@@ -292,23 +384,34 @@ fn pending_username(server_instance_id: &str, device_id: &str) -> String {
     )
 }
 
+#[cfg(not(target_os = "android"))]
 impl CredentialStore for KeyringStore {
-    fn read_refresh(&self, server_instance_id: &str, device_id: &str) -> Option<String> {
-        Entry::new(KEYRING_SERVICE, &active_username(server_instance_id, device_id))
-            .ok()?
-            .get_password()
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+    fn read_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError> {
+        let entry = Entry::new(KEYRING_SERVICE, &active_username(server_instance_id, device_id))
+            .map_err(classify_store_error)?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value.trim().to_string()).filter(|v| !v.is_empty())),
+            Err(error) if matches!(error, keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(classify_store_error(error)),
+        }
     }
 
-    fn read_pending_refresh(&self, server_instance_id: &str, device_id: &str) -> Option<String> {
-        Entry::new(KEYRING_SERVICE, &pending_username(server_instance_id, device_id))
-            .ok()?
-            .get_password()
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+    fn read_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError> {
+        let entry = Entry::new(KEYRING_SERVICE, &pending_username(server_instance_id, device_id))
+            .map_err(classify_store_error)?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value.trim().to_string()).filter(|v| !v.is_empty())),
+            Err(error) if matches!(error, keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(classify_store_error(error)),
+        }
     }
 
     fn write_refresh(
@@ -363,6 +466,138 @@ impl CredentialStore for KeyringStore {
     }
 }
 
+/// Gate E §6.4 — Android OS-backed secure credential store. Wraps the Android
+/// Keystore-backed store (android-native-keyring-store): the refresh credential
+/// is encrypted and persisted to app-private SharedPreferences with the key
+/// held in the hardware/OS Android Keystore. The credential never touches
+/// localStorage, plain-text SharedPreferences, or the renderer, and is only
+/// ever read/written inside the native Rust broker. Requires the NDK
+/// application context, which Tauri Android initializes automatically at
+/// startup before setup() runs.
+#[cfg(target_os = "android")]
+pub struct AndroidKeystoreStore {
+    store: Arc<keyring_android::Store>,
+}
+
+#[cfg(target_os = "android")]
+impl AndroidKeystoreStore {
+    pub fn new() -> Result<Arc<Self>, String> {
+        let store = keyring_android::Store::new()
+            .map_err(|error| format!("failed to open Android Keystore store: {error}"))?;
+        Ok(Arc::new(Self { store }))
+    }
+
+    fn entry(&self, username: &str) -> Result<keyring_core::Entry, CredentialStoreError> {
+        use keyring_core::api::CredentialStoreApi;
+        self.store
+            .build(KEYRING_SERVICE, username, None)
+            .map_err(classify_keyring_core_error)
+    }
+
+    fn read_username(&self, username: &str) -> Result<Option<String>, CredentialStoreError> {
+        let entry = self.entry(username)?;
+        match entry.get_secret() {
+            Ok(bytes) => {
+                let value = String::from_utf8(bytes).unwrap_or_default();
+                Ok(Some(value.trim().to_string()).filter(|v| !v.is_empty()))
+            }
+            Err(keyring_core::Error::NoEntry) => Ok(None),
+            Err(error) => Err(classify_keyring_core_error(error)),
+        }
+    }
+
+    fn write_username(&self, username: &str, token: &str) -> Result<(), String> {
+        self.entry(username)
+            .map_err(|error| error.to_string())?
+            .set_secret(token.as_bytes())
+            .map_err(|error| error.to_string())
+    }
+
+    fn delete_username(&self, username: &str) -> Result<(), String> {
+        let entry = self.entry(username).map_err(|error| error.to_string())?;
+        if entry.get_secret().is_ok() {
+            entry.delete_credential().map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "android")]
+impl CredentialStore for AndroidKeystoreStore {
+    fn read_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError> {
+        self.read_username(&active_username(server_instance_id, device_id))
+    }
+
+    fn read_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError> {
+        self.read_username(&pending_username(server_instance_id, device_id))
+    }
+
+    fn write_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+        token: &str,
+    ) -> Result<(), String> {
+        self.write_username(&active_username(server_instance_id, device_id), token)
+    }
+
+    fn write_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+        token: &str,
+    ) -> Result<(), String> {
+        self.write_username(&pending_username(server_instance_id, device_id), token)
+    }
+
+    fn clear_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<(), String> {
+        self.delete_username(&pending_username(server_instance_id, device_id))
+    }
+
+    fn delete_refresh(&self, server_instance_id: &str, device_id: &str) -> Result<(), String> {
+        for username in [
+            active_username(server_instance_id, device_id),
+            pending_username(server_instance_id, device_id),
+        ] {
+            self.delete_username(&username)?;
+        }
+        Ok(())
+    }
+}
+
+/// Gate E §6.4 — classify an Android Keystore (keyring-core) error identically
+/// to the desktop keyring classification so a locked/unavailable Keystore is
+/// never misread as "no credential stored".
+#[cfg(target_os = "android")]
+fn classify_keyring_core_error(error: keyring_core::Error) -> CredentialStoreError {
+    use keyring_core::Error;
+    match error {
+        Error::NoEntry => CredentialStoreError::NoEntry,
+        Error::NoStorageAccess(_) | Error::PlatformFailure(_) | Error::NoDefaultStore => {
+            CredentialStoreError::BackendUnavailable
+        }
+        Error::BadEncoding(_) | Error::BadDataFormat(..) | Error::BadStoreFormat(_) => {
+            CredentialStoreError::CorruptCredential
+        }
+        Error::Invalid(parameter, _) if parameter.eq_ignore_ascii_case("credential") => {
+            CredentialStoreError::PermissionDenied
+        }
+        other => CredentialStoreError::Other(other.to_string()),
+    }
+}
+
 /// Shared mutable broker state owned by the app. The session is split from the
 /// credential store so tests can construct a real broker without Tauri.
 pub struct RemoteBrokerState {
@@ -402,6 +637,12 @@ pub struct RemoteBroker {
     pub client: reqwest::Client,
     pub store: Arc<dyn CredentialStore>,
     pub state: Arc<RemoteBrokerState>,
+    // Gate R0.3 — the exact remote runtime this process runs
+    // (desktop-remote / android-remote). Credential-bearing flows only accept a
+    // server that advertises this runtime; the Android shell must not borrow
+    // desktop-remote. Set from the ACTIVE mode at setup; the probe command
+    // independently selects the expected runtime.
+    expected_runtime_id: Arc<tokio::sync::Mutex<String>>,
 }
 
 // ------------------------------------------------------------- helpers
@@ -441,28 +682,63 @@ fn clear_enrollment(app_data: &Path) {
     let _ = std::fs::remove_file(enrollment_path(app_data));
 }
 
-fn parse_version_parts(value: &str) -> Vec<u32> {
-    value
-        .split(|character: char| !character.is_ascii_digit())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.parse::<u32>().unwrap_or(0))
-        .collect()
+/// Strict numeric dotted version (semver-lite). Every component is checked
+/// parsed so a huge/corrupt value fails closed as PROTOCOL_ERROR instead of
+/// silently becoming `0` (Gate C/D §4.3). `0.7.0 < 0.10.0`, `1.2 == 1.2.0`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParsedVersion(Vec<u32>);
+
+impl ParsedVersion {
+    fn parse(value: &str) -> Result<ParsedVersion, String> {
+        if !value.chars().all(|character| character.is_ascii_digit() || character == '.') {
+            return Err(remote_error(
+                ERR_PROTOCOL,
+                format!("malformed version: {value}"),
+            ));
+        }
+        let parts: Vec<&str> = value.split('.').collect();
+        if parts.iter().any(|part| part.is_empty()) {
+            return Err(remote_error(
+                ERR_PROTOCOL,
+                format!("malformed version: {value}"),
+            ));
+        }
+        let mut numeric = Vec::with_capacity(parts.len());
+        for part in parts {
+            let component = part.parse::<u32>().map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("version component overflows: {value} ({error})"),
+                )
+            })?;
+            numeric.push(component);
+        }
+        Ok(ParsedVersion(numeric))
+    }
+
+    fn compare(&self, other: &ParsedVersion) -> std::cmp::Ordering {
+        let left = &self.0;
+        let right = &other.0;
+        let length = left.len().max(right.len());
+        for index in 0..length {
+            let left_component = left.get(index).copied().unwrap_or(0);
+            let right_component = right.get(index).copied().unwrap_or(0);
+            let ordering = left_component.cmp(&right_component);
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
+        }
+        std::cmp::Ordering::Equal
+    }
 }
 
-/// Numeric semver-lite comparison (0.7.0 < 0.10.0, 1.2 < 1.2.0).
-fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
-    let left_parts = parse_version_parts(left);
-    let right_parts = parse_version_parts(right);
-    let length = left_parts.len().max(right_parts.len());
-    for index in 0..length {
-        let left_part = left_parts.get(index).copied().unwrap_or(0);
-        let right_part = right_parts.get(index).copied().unwrap_or(0);
-        let ordering = left_part.cmp(&right_part);
-        if ordering != std::cmp::Ordering::Equal {
-            return ordering;
-        }
-    }
-    std::cmp::Ordering::Equal
+/// Numeric semver-lite comparison. Returns PROTOCOL_ERROR when either operand
+/// is malformed or overflows so no caller can ever treat a bad version as
+/// `0.0.0` (fail-closed, Gate C/D §4.3).
+fn compare_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, String> {
+    let left = ParsedVersion::parse(left)?;
+    let right = ParsedVersion::parse(right)?;
+    Ok(left.compare(&right))
 }
 
 // Gate C §7 — enrollment origin normalization. Origin-only HTTPS; loopback
@@ -567,13 +843,47 @@ fn http_client() -> Result<reqwest::Client, String> {
 
 impl RemoteBroker {
     pub fn new(store: Arc<dyn CredentialStore>) -> Result<Self, String> {
+        // Default expected runtime is desktop-remote (legacy desktop behavior).
+        // lib.rs overrides this with the ACTIVE mode at setup; tests may switch
+        // it explicitly (Gate R0.3).
+        Self::with_expected_runtime(store, RUNTIME_DESKTOP_REMOTE)
+    }
+
+    pub fn with_expected_runtime(
+        store: Arc<dyn CredentialStore>,
+        runtime_id: &str,
+    ) -> Result<Self, String> {
+        if !is_remote_runtime_id(runtime_id) {
+            return Err(remote_error(
+                ERR_INTERNAL,
+                format!("expected runtime must be a remote runtime, got: {runtime_id}"),
+            ));
+        }
         Ok(Self {
             client: http_client().map_err(|error| {
                 remote_error(ERR_INTERNAL, format!("cannot build HTTP client: {error}"))
             })?,
             store,
             state: Arc::new(RemoteBrokerState::new()),
+            expected_runtime_id: Arc::new(tokio::sync::Mutex::new(runtime_id.to_string())),
         })
+    }
+
+    /// Gate R0.3 — the runtime this broker requires for credential-bearing
+    /// flows. Callers that know the ACTIVE mode (e.g. the probe command) can
+    /// select the exact runtime a server must advertise.
+    async fn expected_runtime(&self) -> String {
+        self.expected_runtime_id.lock().await.clone()
+    }
+
+    /// Gate R0.3 — switch the required runtime for the remainder of this
+    /// session. Session-immutable in production; used by tests to prove the
+    /// Android client does not borrow desktop-remote.
+    #[cfg(test)]
+    async fn set_expected_runtime(&self, runtime_id: &str) {
+        if is_remote_runtime_id(runtime_id) {
+            *self.expected_runtime_id.lock().await = runtime_id.to_string();
+        }
     }
 
     // -------------------------------------------------- session primitives
@@ -728,8 +1038,26 @@ impl RemoteBroker {
     /// native compatibility gate so an incompatible server can never produce a
     /// pending enrollment or receive a credential.
     pub async fn probe_desktop_remote(&self, origin: &str) -> Result<RemoteProbeResult, String> {
+        self.probe_for_runtime(origin, RUNTIME_DESKTOP_REMOTE).await
+    }
+
+    /// Gate R0.3 — probe a server for an explicitly requested remote runtime
+    /// (desktop-remote or android-remote). The Android shell probes for
+    /// android-remote and must never "coincidentally pass" via a server that
+    /// only advertises desktop-remote.
+    pub async fn probe_for_runtime(
+        &self,
+        origin: &str,
+        runtime_id: &str,
+    ) -> Result<RemoteProbeResult, String> {
+        if !is_remote_runtime_id(runtime_id) {
+            return Err(remote_error(
+                ERR_UNSUPPORTED_SERVER,
+                format!("unsupported remote runtime for probe: {runtime_id}"),
+            ));
+        }
         let result = self.probe(origin).await?;
-        self.check_compatibility(&result.server, RUNTIME_DESKTOP_REMOTE)?;
+        self.check_compatibility(&result.server, runtime_id)?;
         Ok(result)
     }
 
@@ -755,9 +1083,12 @@ impl RemoteBroker {
                 format!("unsupported API version: {}", server.api_version),
             ));
         }
-        if compare_versions(CLIENT_APP_VERSION, &server.min_client_version)
-            == std::cmp::Ordering::Less
-        {
+        // Gate C/D §4.3 — a malformed/overflowing minimum must fail closed as
+        // PROTOCOL_ERROR, never be treated as `0.0.0` (which would pass).
+        let client_below_minimum =
+            compare_versions(CLIENT_APP_VERSION, &server.min_client_version)?
+                == std::cmp::Ordering::Less;
+        if client_below_minimum {
             return Err(remote_error(
                 ERR_UPDATE_REQUIRED,
                 format!(
@@ -772,7 +1103,9 @@ impl RemoteBroker {
                 format!("server does not support runtime {runtime_id}"),
             ));
         }
-        if runtime_id == RUNTIME_DESKTOP_REMOTE {
+        // Gate R0.3 — every shipped remote runtime (desktop-remote,
+        // android-remote) requires the same frozen auth/transport contract.
+        if is_remote_runtime_id(runtime_id) {
             if !server.auth_enabled {
                 return Err(remote_error(
                     ERR_UNSUPPORTED_SERVER,
@@ -811,8 +1144,9 @@ impl RemoteBroker {
     /// closure). The renderer-facing probe result remains a UI display cache
     /// and is never an authorization cache.
     async fn fresh_verified_server(&self, origin: &str) -> Result<RemoteServerInfo, String> {
+        let runtime_id = self.expected_runtime().await;
         let result = self.probe(origin).await?;
-        self.check_compatibility(&result.server, RUNTIME_DESKTOP_REMOTE)?;
+        self.check_compatibility(&result.server, &runtime_id)?;
         Ok(result.server)
     }
 
@@ -820,8 +1154,9 @@ impl RemoteBroker {
     /// identity preflight. A replaced server behind the same URL blocks before
     /// the refresh credential is read or sent.
     async fn identity_preflight(&self, enrollment: &RemoteEnrollment) -> Result<(), String> {
+        let runtime_id = self.expected_runtime().await;
         let probe = self.probe(&enrollment.normalized_origin).await?;
-        self.check_compatibility(&probe.server, RUNTIME_DESKTOP_REMOTE)?;
+        self.check_compatibility(&probe.server, &runtime_id)?;
         if probe.server.server_instance_id != enrollment.server_instance_id {
             return Err(remote_error(
                 ERR_IDENTITY_CHANGED,
@@ -844,30 +1179,50 @@ impl RemoteBroker {
                 return Ok(pending.clone());
             }
         }
-        if let Some(token) = self
+        // Gate C/D §4.5 — a store read that fails because the backend is
+        // locked/unavailable is a persistence failure, NOT a missing
+        // credential; only NoEntry means "please log in again".
+        match self
             .store
             .read_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id)
         {
-            if !token.is_empty() {
-                return Ok(token);
+            Ok(Some(token)) if !token.is_empty() => return Ok(token),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(remote_error(
+                    ERR_CREDENTIAL_PERSISTENCE,
+                    format!("secure store is unavailable: {error}"),
+                ))
             }
         }
-        self.store
+        match self
+            .store
             .read_refresh(&enrollment.server_instance_id, &enrollment.device_id)
-            .ok_or_else(|| {
-                remote_error(
-                    ERR_LOGIN_EXPIRED,
-                    "no remote refresh credential stored; please log in again",
-                )
-            })
+        {
+            Ok(Some(token)) if !token.is_empty() => Ok(token),
+            Ok(_) => Err(remote_error(
+                ERR_LOGIN_EXPIRED,
+                "no remote refresh credential stored; please log in again",
+            )),
+            Err(error) => Err(remote_error(
+                ERR_CREDENTIAL_PERSISTENCE,
+                format!("secure store is unavailable: {error}"),
+            )),
+        }
     }
 
-    /// Gate D §P8 — persist a rotated refresh credential with crash recovery.
-    /// The server has already consumed the old one, so a keyring write failure
-    /// must not map to "password invalid". Write order: pending (durable
-    /// recovery path) → promote to active → clear pending. If NOTHING can be
-    /// written, the replacement is staged in memory for this session.
-    async fn rotate_refresh(&self, enrollment: &RemoteEnrollment, next: &str) {
+    /// Gate D §P8 / Gate C/D §4.4 — persist a rotated refresh credential with
+    /// crash recovery. The server has already consumed the old one, so a
+    /// keyring write failure must not map to "password invalid". Write order:
+    /// pending (durable recovery path) → promote to active → clear pending.
+    /// If NOTHING can be written the replacement is staged in memory for this
+    /// session and CREDENTIAL_PERSISTENCE_FAILURE is returned so callers never
+    /// report a durable success that did not happen.
+    async fn rotate_refresh(
+        &self,
+        enrollment: &RemoteEnrollment,
+        next: &str,
+    ) -> Result<(), String> {
         let pending_ok = self
             .store
             .write_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id, next)
@@ -882,15 +1237,20 @@ impl RemoteBroker {
                 .store
                 .clear_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id);
             *self.state.pending_refresh.lock().await = None;
-            return;
+            return Ok(());
         }
         if pending_ok {
             // Active write failed but the durable pending slot keeps the only
             // valid replacement readable after a crash (read prefers pending).
-            return;
+            return Ok(());
         }
-        // No durable slot written: stage in memory for this session.
+        // No durable slot written: stage in memory for this session and report
+        // the degraded persistence honestly (Gate C/D §4.4).
         *self.state.pending_refresh.lock().await = Some(next.to_string());
+        Err(remote_error(
+            ERR_CREDENTIAL_PERSISTENCE,
+            "secure store is unavailable; the renewed credential is only held in memory for this session",
+        ))
     }
 
     /// Rotate via the refresh endpoint and store the replacement. Caller MUST
@@ -919,26 +1279,58 @@ impl RemoteBroker {
                 )
             })?;
         let status = response.status().as_u16();
+        // Gate C/D §4.1 — classify the refresh outcome by HTTP status. Only an
+        // explicit 401/403 is a credential denial (LoginExpired). 429 and 5xx
+        // are transient server/network conditions and must NOT invalidate the
+        // credential or force a re-login.
+        *self.state.refresh_denied.lock().await = false;
+        if status == 401 || status == 403 {
+            // A 401/denial here means the refresh credential itself is
+            // invalid/rotated/revoked. Do not loop: mark LoginExpired.
+            *self.state.refresh_denied.lock().await = true;
+            let detail = response
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|payload| {
+                    payload
+                        .get("detail")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| "refresh denied".to_string());
+            return Err(remote_error(
+                ERR_LOGIN_EXPIRED,
+                format!("refresh denied: {detail}"),
+            ));
+        }
+        if status == 429 {
+            return Err(remote_error(
+                ERR_RATE_LIMITED,
+                "refresh endpoint is rate limiting this client; retry later",
+            ));
+        }
+        if (300..400).contains(&status) {
+            // Redirects stay disabled on the transport; a 3xx here is a
+            // protocol violation, not a credential problem.
+            return Err(remote_error(
+                ERR_PROTOCOL,
+                format!("refresh endpoint returned an unexpected redirect ({status})"),
+            ));
+        }
+        if status != 200 {
+            // 5xx (and any other server-side failure) is transient.
+            return Err(remote_error(
+                ERR_SERVER_UNAVAILABLE,
+                format!("refresh endpoint is unavailable ({status})"),
+            ));
+        }
         let payload: serde_json::Value = response
             .json()
             .await
             .map_err(|error| {
                 remote_error(ERR_PROTOCOL, format!("invalid refresh response: {error}"))
             })?;
-        if status != 200 {
-            // A 401/denial here means the refresh credential itself is
-            // invalid/rotated/revoked. Do not loop: mark LoginExpired.
-            *self.state.refresh_denied.lock().await = true;
-            let detail = payload
-                .get("detail")
-                .and_then(|value| value.as_str())
-                .unwrap_or("refresh failed");
-            return Err(remote_error(
-                ERR_LOGIN_EXPIRED,
-                format!("refresh denied: {detail}"),
-            ));
-        }
-        *self.state.refresh_denied.lock().await = false;
         let tokens = payload
             .get("tokens")
             .ok_or_else(|| remote_error(ERR_PROTOCOL, "refresh response missing tokens"))?;
@@ -952,7 +1344,14 @@ impl RemoteBroker {
             .and_then(|value| value.as_u64())
             .unwrap_or(300);
         if let Some(next_refresh) = tokens.get("refresh_token").and_then(|value| value.as_str()) {
-            self.rotate_refresh(enrollment, next_refresh).await;
+            // Gate C/D §4.4 — a total durable-store failure is surfaced as
+            // CREDENTIAL_PERSISTENCE_FAILURE (never reported as durable
+            // success), while the access credential stays in memory so the
+            // current session can continue.
+            if let Err(error) = self.rotate_refresh(enrollment, next_refresh).await {
+                self.set_session(&access, expires_in).await;
+                return Err(error);
+            }
         }
         self.set_session(&access, expires_in).await;
         Ok(access)
@@ -1237,6 +1636,126 @@ impl RemoteBroker {
                     file_name,
                     file_content_type,
                     file_bytes,
+                    fields,
+                )
+                .await?;
+            if second.status == 401 {
+                return Err(remote_error(
+                    ERR_LOGIN_EXPIRED,
+                    "auth session expired; please log in again",
+                ));
+            }
+            return Ok(second);
+        }
+        Ok(first)
+    }
+
+    // Gate R0.5 — file-backed multipart upload. The file bytes are streamed
+    // from a bounded app-private temp file via `Part::stream(ReaderStream)`
+    // instead of `Part::bytes(full_vec)`, so a 100 MiB SAF upload is never
+    // materialised as a full Rust Vec in memory.
+    async fn send_multipart_file_once(
+        &self,
+        enrollment: &RemoteEnrollment,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_path: &Path,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<SentRequest, String> {
+        let access = self.get_session_token(enrollment).await?;
+        let snapshot = self.token_snapshot().await;
+        let url = format!("{}{}", enrollment.normalized_origin, path);
+        let mut form = reqwest::multipart::Form::new();
+        for (key, value) in fields {
+            form = form.text(key.clone(), value.clone());
+        }
+        let file = tokio::fs::File::open(file_path)
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("cannot open staged upload: {error}"),
+                )
+            })?;
+        let stream = tokio_util::io::ReaderStream::new(file);
+        // `ReaderStream` yields `Result<Bytes, io::Error>`; wrap it as a
+        // streaming Body so the multipart part is never materialised as a full
+        // Vec (Gate R0.5).
+        let body = reqwest::Body::wrap_stream(stream);
+        let part = reqwest::multipart::Part::stream(body)
+            .file_name(file_name.to_string())
+            .mime_str(file_content_type)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error.to_string()))?;
+        form = form.part(file_field.to_string(), part);
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&access)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_NETWORK_UNAVAILABLE,
+                    format!("remote upload failed: {error}"),
+                )
+            })?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let response_headers = Self::capture_response_headers(response.headers());
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| remote_error(ERR_NETWORK_UNAVAILABLE, error.to_string()))?
+            .to_vec();
+        Ok(SentRequest {
+            status,
+            bytes,
+            content_type,
+            response_headers,
+            access_snapshot: snapshot,
+        })
+    }
+
+    async fn send_multipart_file_with_auth(
+        &self,
+        enrollment: &RemoteEnrollment,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_path: &Path,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<SentRequest, String> {
+        let first = self
+            .send_multipart_file_once(
+                enrollment,
+                path,
+                file_field,
+                file_name,
+                file_path,
+                file_content_type,
+                fields,
+            )
+            .await?;
+        if first.status == 401 {
+            self.refresh_after_401(enrollment, &first.access_snapshot)
+                .await?;
+            let second = self
+                .send_multipart_file_once(
+                    enrollment,
+                    path,
+                    file_field,
+                    file_name,
+                    file_path,
+                    file_content_type,
                     fields,
                 )
                 .await?;
@@ -1536,10 +2055,6 @@ impl RemoteBroker {
         file_content_type: &str,
         fields: &HashMap<String, String>,
     ) -> Result<RemoteApiResponse, String> {
-        let enrollment = load_enrollment(app_data)
-            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
-        assert_relative_path(path)
-            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
         let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
         if file_bytes_b64.len() > (MAX_UPLOAD_BYTES * 4) / 3 + 4 {
             return Err(remote_error(
@@ -1550,6 +2065,37 @@ impl RemoteBroker {
         let file_bytes = base64::engine::general_purpose::STANDARD
             .decode(file_bytes_b64)
             .map_err(|error| remote_error(ERR_PROTOCOL, format!("invalid file payload: {error}")))?;
+        self.api_upload_raw(
+            app_data,
+            path,
+            file_field,
+            file_name,
+            file_bytes,
+            file_content_type,
+            fields,
+        )
+        .await
+    }
+
+    /// Gate R0.5 — upload already-materialised native bytes (e.g. read from a
+    /// SAF content URI by the Android bridge). Shares the product upload bound
+    /// and the enrollment/path checks with the base64 path so Android and
+    /// desktop observe identical limits.
+    pub async fn api_upload_raw(
+        &self,
+        app_data: &Path,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_bytes: Vec<u8>,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<RemoteApiResponse, String> {
+        let enrollment = load_enrollment(app_data)
+            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
+        assert_relative_path(path)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
+        let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
         if file_bytes.len() > MAX_UPLOAD_BYTES {
             return Err(remote_error(
                 ERR_PROTOCOL,
@@ -1572,6 +2118,183 @@ impl RemoteBroker {
             body_base64: base64::engine::general_purpose::STANDARD.encode(sent.bytes),
             content_type: sent.content_type,
             response_headers: sent.response_headers,
+        })
+    }
+
+    /// Gate R0.5 — upload a bounded app-private temp file by STREAMING it as
+    /// the multipart body (never `Part::bytes` of a full Vec). The size was
+    /// already enforced while Kotlin staged the file; Rust re-checks cheaply so
+    /// the bound holds even if the staged file grows.
+    pub async fn api_upload_file(
+        &self,
+        app_data: &Path,
+        path: &str,
+        file_field: &str,
+        file_name: &str,
+        file_path: &Path,
+        file_content_type: &str,
+        fields: &HashMap<String, String>,
+    ) -> Result<RemoteApiResponse, String> {
+        let enrollment = load_enrollment(app_data)
+            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
+        assert_relative_path(path)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
+        let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
+        let size = tokio::fs::metadata(file_path)
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("cannot stat staged upload: {error}"),
+                )
+            })?
+            .len();
+        if size > MAX_UPLOAD_BYTES as u64 {
+            return Err(remote_error(
+                ERR_PROTOCOL,
+                format!("file exceeds the {limit_mib} MiB upload limit"),
+            ));
+        }
+        let sent = self
+            .send_multipart_file_with_auth(
+                &enrollment,
+                path,
+                file_field,
+                file_name,
+                file_path,
+                file_content_type,
+                fields,
+            )
+            .await?;
+        Ok(RemoteApiResponse {
+            status: sent.status,
+            body_base64: base64::engine::general_purpose::STANDARD.encode(sent.bytes),
+            content_type: sent.content_type,
+            response_headers: sent.response_headers,
+        })
+    }
+
+    /// Gate R0.6 — download an artifact into a bounded app-private temp file by
+    /// streaming the HTTP response body (never a full base64 Vec). Validates
+    /// `Content-Length` when trustworthy and enforces the bound while reading a
+    /// chunked/no-length body. Honors the single 401 refresh-recovery.
+    pub async fn download_to_file(
+        &self,
+        app_data: &Path,
+        path: &str,
+        dest: &Path,
+    ) -> Result<DownloadedExport, String> {
+        let enrollment = load_enrollment(app_data)
+            .ok_or_else(|| remote_error(ERR_LOGIN_EXPIRED, "not enrolled to a server"))?;
+        assert_relative_path(path)
+            .map_err(|error| remote_error(ERR_PROTOCOL, error))?;
+        let first = self
+            .download_to_file_once(&enrollment, path, dest)
+            .await?;
+        if first.status == 401 {
+            self.refresh_after_401(&enrollment, &first.access_snapshot)
+                .await?;
+            let second = self.download_to_file_once(&enrollment, path, dest).await?;
+            if second.status == 401 {
+                return Err(remote_error(
+                    ERR_LOGIN_EXPIRED,
+                    "auth session expired; please log in again",
+                ));
+            }
+            return Ok(second);
+        }
+        Ok(first)
+    }
+
+    async fn download_to_file_once(
+        &self,
+        enrollment: &RemoteEnrollment,
+        path: &str,
+        dest: &Path,
+    ) -> Result<DownloadedExport, String> {
+        let access = self.get_session_token(enrollment).await?;
+        let snapshot = self.token_snapshot().await;
+        let url = format!("{}{}", enrollment.normalized_origin, path);
+        let response = self
+            .client
+            .get(&url)
+            .bearer_auth(&access)
+            .send()
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_NETWORK_UNAVAILABLE,
+                    format!("artifact download request failed: {error}"),
+                )
+            })?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let response_headers = Self::capture_response_headers(response.headers());
+        let limit_mib = MAX_UPLOAD_BYTES / (1024 * 1024);
+        // Precheck Content-Length when the server provides a trustworthy one.
+        if let Some(len) = response.content_length() {
+            if len > MAX_UPLOAD_BYTES as u64 {
+                return Err(remote_error(
+                    ERR_PROTOCOL,
+                    format!("export exceeds the {limit_mib} MiB native export limit"),
+                ));
+            }
+        }
+        // Stream the body to the temp file with a hard bound regardless of
+        // whether the server sent Content-Length.
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(dest)
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("cannot create export temp file: {error}"),
+                )
+            })?;
+        let mut total: u64 = 0;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| {
+                remote_error(
+                    ERR_NETWORK_UNAVAILABLE,
+                    format!("artifact download stream failed: {error}"),
+                )
+            })?;
+            total += chunk.len() as u64;
+            if total > MAX_UPLOAD_BYTES as u64 {
+                return Err(remote_error(
+                    ERR_PROTOCOL,
+                    format!("export exceeds the {limit_mib} MiB native export limit"),
+                ));
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| {
+                    remote_error(
+                        ERR_PROTOCOL,
+                        format!("failed writing export temp file: {error}"),
+                    )
+                })?;
+        }
+        file.flush()
+            .await
+            .map_err(|error| {
+                remote_error(
+                    ERR_PROTOCOL,
+                    format!("failed flushing export temp file: {error}"),
+                )
+            })?;
+        Ok(DownloadedExport {
+            status,
+            content_type,
+            response_headers,
+            access_snapshot: snapshot,
         })
     }
 
@@ -1864,23 +2587,39 @@ fn parse_server_info(payload: &serde_json::Value) -> Result<AuthServerInfoRespon
 /// DISPLAY the compatibility gate before enrollment. No probe result is ever
 /// cached or reused as a credential-send authorization (Gate D §P6): login and
 /// bootstrap always re-probe natively within the same call.
+///
+/// Gate R0.3 — the probe checks the EXACT runtime the client runs. The
+/// renderer submits a `runtime_id` (desktop-remote on desktop, android-remote
+/// on Android); when absent, it falls back to the ACTIVE mode's runtime id so
+/// a credential-bearing flow can never accidentally probe for a different
+/// runtime than the one being used.
 #[tauri::command]
-pub async fn remote_probe_server(app: AppHandle, origin: String) -> Result<RemoteProbeResult, String> {
+pub async fn remote_probe_server(
+    app: AppHandle,
+    origin: String,
+    runtime_id: Option<String>,
+) -> Result<RemoteProbeResult, String> {
     let normalized = normalize_enrollment_origin(&origin)?;
     let broker = app.state::<DesktopState>().broker.clone();
-    broker.probe_desktop_remote(&normalized).await
+    let runtime_id = match runtime_id {
+        Some(runtime_id) => runtime_id,
+        None => app.state::<DesktopState>().mode.as_str().to_string(),
+    };
+    broker.probe_for_runtime(&normalized, &runtime_id).await
 }
 
 /// Gate D §P28 (HIGH) — the native remote broker is only reachable while the
-/// ACTIVE runtime is desktop-remote. Every remote command except the public
-/// probe requires this active-mode boundary; a desktop-local renderer must
-/// never be able to read enrollment state or reach the remote transport, even
-/// if its UI shows no such controls (the renderer is not a security boundary).
+/// ACTIVE runtime is desktop-remote (or, on the Android host, android-remote).
+/// Every remote command except the public probe requires this active-mode
+/// boundary; a desktop-local renderer must never be able to read enrollment
+/// state or reach the remote transport, even if its UI shows no such controls
+/// (the renderer is not a security boundary).
 pub(crate) fn ensure_remote_mode(mode: crate::runtime_mode::RuntimeMode) -> Result<(), String> {
-    if mode != crate::runtime_mode::RuntimeMode::DesktopRemote {
+    use crate::runtime_mode::RuntimeMode;
+    if mode != RuntimeMode::DesktopRemote && mode != RuntimeMode::AndroidRemote {
         return Err(remote_error(
             ERR_RUNTIME_MODE_DENIED,
-            "remote session commands require the desktop-remote runtime mode",
+            "remote session commands require the desktop-remote or android-remote runtime mode",
         ));
     }
     Ok(())
@@ -1975,6 +2714,144 @@ pub async fn remote_api_upload(
         .await
 }
 
+/// Gate R0.5 — Android SAF upload. The renderer only passes a content URI,
+/// filename, MIME type and size; the native layer stages the SAF content URI
+/// into a bounded app-private temp file (enforcing the product limit during
+/// the copy) and STREAMS that file as the multipart body. A 100 MiB file is
+/// never materialised as a renderer base64 copy, a Kotlin ByteArray, or a full
+/// Rust Vec simultaneously — it lives on disk until the upload completes.
+#[tauri::command]
+pub async fn remote_api_upload_by_uri(
+    app: AppHandle,
+    path: String,
+    file_field: Option<String>,
+    uri: String,
+    file_name: Option<String>,
+    file_content_type: Option<String>,
+    fields: Option<HashMap<String, String>>,
+) -> Result<RemoteApiResponse, String> {
+    ensure_remote_mode(app.state::<DesktopState>().mode)?;
+    // Stage the SAF content URI into a bounded app-private cache file. The
+    // Kotlin layer aborts the copy if it would exceed the product limit, so
+    // no unbounded buffer is ever built (Gate R0.5).
+    let staged =
+        crate::android_bridge::stage_upload(&app, &uri, MAX_UPLOAD_BYTES as u64).await?;
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let broker = app.state::<DesktopState>().broker.clone();
+    let result = broker
+        .api_upload_file(
+            &app_data,
+            &path,
+            &file_field.unwrap_or_else(|| "file".into()),
+            &file_name.filter(|name| !name.is_empty()).unwrap_or(staged.name),
+            Path::new(&staged.path),
+            &file_content_type
+                .filter(|mime| !mime.is_empty())
+                .unwrap_or(staged.mime_type),
+            &fields.unwrap_or_default(),
+        )
+        .await;
+    // Always clean up the bounded temp file, regardless of upload outcome.
+    let _ = tokio::fs::remove_file(&staged.path).await;
+    result
+}
+
+/// Gate R0.5 — open the Android SAF document picker natively. Returns only a
+/// content URI plus metadata so the renderer passes the URI onward instead of
+/// ever reading the file bytes.
+#[tauri::command]
+pub async fn remote_pick_document(
+    app: AppHandle,
+    mime_type: Option<String>,
+) -> Result<crate::android_bridge::PickedDocument, String> {
+    ensure_remote_mode(app.state::<DesktopState>().mode)?;
+    crate::android_bridge::pick_document(&app, mime_type).await
+}
+
+/// Gate R0.6 — Android export. The native broker STREAMS the artifact bytes
+/// into a bounded app-private temp file (never a full base64 Vec), then the
+/// native SAF layer copies that file into the user-selected location. The
+/// renderer only passes the relative download path and a default filename; it
+/// never materialises the artifact bytes.
+#[tauri::command]
+pub async fn remote_save_export(
+    app: AppHandle,
+    path: String,
+    file_name: Option<String>,
+    file_content_type: Option<String>,
+) -> Result<serde_json::Value, String> {
+    ensure_remote_mode(app.state::<DesktopState>().mode)?;
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let broker = app.state::<DesktopState>().broker.clone();
+    // Stream the HTTP response into a bounded app-private temp file (Gate
+    // R0.6). The body is written to disk in chunks with a hard bound, so an
+    // export is never materialised as a full base64/Rust Vec.
+    let cache_dir = app.path().app_cache_dir().map_err(|error| error.to_string())?;
+    let dest = cache_dir.join(format!("export-{}.tmp", uuid::Uuid::new_v4().simple()));
+    let downloaded = broker.download_to_file(&app_data, &path, &dest).await?;
+    if downloaded.status >= 400 {
+        let _ = std::fs::remove_file(&dest);
+        return Err(remote_error(
+            ERR_SERVER_UNAVAILABLE,
+            format!("artifact download failed with status {}", downloaded.status),
+        ));
+    }
+    // Prefer the server-provided Content-Disposition filename, then the
+    // caller's default. The disposition is on the native response allowlist.
+    let filename = downloaded
+        .response_headers
+        .get("content-disposition")
+        .and_then(|value| extract_filename_from_disposition(value))
+        .or_else(|| file_name.filter(|name| !name.is_empty()))
+        .unwrap_or_else(|| "interest-growth-export.bin".into());
+    let content_type = file_content_type
+        .filter(|mime| !mime.is_empty())
+        .unwrap_or_else(|| {
+            if downloaded.content_type.is_empty() {
+                "application/octet-stream".into()
+            } else {
+                downloaded.content_type
+            }
+        });
+    let saved = crate::android_bridge::save_document_from_file(
+        &app,
+        &dest.to_string_lossy(),
+        &filename,
+        &content_type,
+    )
+    .await?;
+    // Always clean up the bounded temp file after the SAF copy completes.
+    let _ = std::fs::remove_file(&dest);
+    Ok(serde_json::json!({
+        "uri": saved.uri,
+        "size": saved.size,
+        "name": filename,
+    }))
+}
+
+/// Parse the filename from a `Content-Disposition` header value. Supports the
+/// plain `filename="x.zip"` form (the export endpoint's format) and the
+/// `filename*=UTF-8''x.zip` extended form.
+fn extract_filename_from_disposition(value: &str) -> Option<String> {
+    let value = value.trim();
+    let (_, rest) = value.split_once("filename*=")
+        .or_else(|| value.split_once("filename="))?;
+    let rest = rest.trim();
+    if let Some(stripped) = rest.strip_prefix('"') {
+        return stripped
+            .split('"')
+            .next()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned);
+    }
+    rest.split(';')
+        .next()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 /// Explicitly refresh the session (used by the connection-status UX).
 #[tauri::command]
 pub async fn remote_refresh_now(app: AppHandle) -> Result<RemoteSessionStatus, String> {
@@ -2028,6 +2905,7 @@ mod tests {
         values: Arc<StdMutex<HashMap<String, String>>>,
         write_fail: Arc<AtomicBool>,
         pending_write_fail: Arc<AtomicBool>,
+        read_fail: Arc<AtomicBool>,
     }
 
     impl MemoryStore {
@@ -2040,15 +2918,26 @@ mod tests {
         fn set_pending_write_fail(&self, fail: bool) {
             self.pending_write_fail.store(fail, Ordering::SeqCst);
         }
+        fn set_read_fail(&self, fail: bool) {
+            self.read_fail.store(fail, Ordering::SeqCst);
+        }
     }
 
     impl CredentialStore for MemoryStore {
-        fn read_refresh(&self, server_instance_id: &str, device_id: &str) -> Option<String> {
-            self.values
+        fn read_refresh(
+            &self,
+            server_instance_id: &str,
+            device_id: &str,
+        ) -> Result<Option<String>, CredentialStoreError> {
+            if self.read_fail.load(Ordering::SeqCst) {
+                return Err(CredentialStoreError::BackendUnavailable);
+            }
+            Ok(self
+                .values
                 .lock()
                 .unwrap()
                 .get(&remote_refresh_username(server_instance_id, device_id))
-                .cloned()
+                .cloned())
         }
         fn write_refresh(
             &self,
@@ -2065,12 +2954,20 @@ mod tests {
             );
             Ok(())
         }
-        fn read_pending_refresh(&self, server_instance_id: &str, device_id: &str) -> Option<String> {
-            self.values
+        fn read_pending_refresh(
+            &self,
+            server_instance_id: &str,
+            device_id: &str,
+        ) -> Result<Option<String>, CredentialStoreError> {
+            if self.read_fail.load(Ordering::SeqCst) {
+                return Err(CredentialStoreError::BackendUnavailable);
+            }
+            Ok(self
+                .values
                 .lock()
                 .unwrap()
                 .get(&pending_username(server_instance_id, device_id))
-                .cloned()
+                .cloned())
         }
         fn write_pending_refresh(
             &self,
@@ -2373,10 +3270,33 @@ mod tests {
                 value["auth"]["enabled"] = serde_json::json!(*val == "true");
             } else if *key == "auth.mode" {
                 value["auth"]["mode"] = serde_json::json!(val);
+            } else if *key == "auth.owner_configured" {
+                // MUST modify the nested auth object, never create a top-level
+                // "auth.owner_configured" key (Gate C/D §4.7).
+                value["auth"]["owner_configured"] = serde_json::json!(*val == "true");
             } else {
                 value[*key] = serde_json::json!(val);
             }
         }
+        value.to_string()
+    }
+
+    // Gate R0.3 — capabilities with an explicit runtime_modes array (the
+    // generic caps_with override would replace the array with a JSON string).
+    fn caps_with_modes(modes_json: &str) -> String {
+        let mut value = serde_json::json!({
+            "product": "interest-growth",
+            "server_version": "0.7.0",
+            "api_version": "1",
+            "min_client_version": "0.7.0",
+            "server_instance_id": "instance-A",
+            "server_display_name": "Test Server",
+            "auth": { "mode": "single_owner_devices", "enabled": true, "owner_configured": true },
+            "online_first": true,
+            "offline_sync": false,
+            "tls": false
+        });
+        value["runtime_modes"] = serde_json::from_str::<serde_json::Value>(modes_json).unwrap();
         value.to_string()
     }
 
@@ -2494,11 +3414,48 @@ mod tests {
 
     #[test]
     fn version_comparison_is_numeric() {
-        assert_eq!(compare_versions("0.7.0", "0.7.0"), std::cmp::Ordering::Equal);
-        assert_eq!(compare_versions("0.7.0", "0.10.0"), std::cmp::Ordering::Less);
-        assert_eq!(compare_versions("0.10.0", "0.7.0"), std::cmp::Ordering::Greater);
-        assert_eq!(compare_versions("1.2", "1.2.0"), std::cmp::Ordering::Equal);
-        assert_eq!(compare_versions("0.6.0", "0.7.0"), std::cmp::Ordering::Less);
+        assert_eq!(
+            compare_versions("0.7.0", "0.7.0").unwrap(),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            compare_versions("0.7.0", "0.10.0").unwrap(),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_versions("0.10.0", "0.7.0").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(compare_versions("1.2", "1.2.0").unwrap(), std::cmp::Ordering::Equal);
+        assert_eq!(
+            compare_versions("0.6.0", "0.7.0").unwrap(),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn version_parser_accepts_valid_and_rejects_malformed_or_overflowing() {
+        // Gate C/D §4.3 — accepted forms.
+        for valid in ["0.7.0", "0.10.0", "1", "1.2", "1.2.0"] {
+            assert!(ParsedVersion::parse(valid).is_ok(), "{valid} should parse");
+        }
+        // Gate C/D §4.3 — malformed / overflowing forms must fail closed.
+        for invalid in [
+            "1..2",
+            "1.2.",
+            ".1.2",
+            "1.a.2",
+            "999999999999999999999999999999999.0.0",
+            "4294967296",
+            "0.7.0-alpha",
+        ] {
+            assert!(ParsedVersion::parse(invalid).is_err(), "{invalid} must be rejected");
+        }
+        // A huge server minimum must fail closed as PROTOCOL_ERROR, never be
+        // treated as 0.0.0 (which would otherwise pass the compatibility gate).
+        let err = compare_versions(CLIENT_APP_VERSION, "999999999999999999999999999999999.0.0")
+            .unwrap_err();
+        assert!(err.contains(ERR_PROTOCOL), "got: {err}");
     }
 
     fn broker_with(store: Arc<dyn CredentialStore>) -> RemoteBroker {
@@ -2534,8 +3491,8 @@ mod tests {
         assert!(!error.contains("correct-horse"));
         // Nothing was persisted: no enrollment, no refresh credential.
         assert!(!app_data.0.join(ENROLLMENT_FILE).exists());
-        assert!(store.read_refresh("instance-A", "device-1").is_none());
-        assert!(store.read_refresh("instance-B", "device-1").is_none());
+        assert!(store.read_refresh("instance-A", "device-1").unwrap().is_none());
+        assert!(store.read_refresh("instance-B", "device-1").unwrap().is_none());
     }
 
     #[tokio::test]
@@ -2600,7 +3557,7 @@ mod tests {
                     TestResponse::json(200, &caps_with(&[("auth.owner_configured", "false")]))
                 }
                 "/api/auth/server-info" => {
-                    TestResponse::json(200, &caps_with(&[("auth.owner_configured", "false")]).replace("\"runtime_modes\": [\"desktop-local\", \"desktop-remote\", \"android-remote\", \"browser-remote\"],", ""))
+                    TestResponse::json(200, &caps_with(&[("auth.owner_configured", "false")]))
                 }
                 "/api/auth/owner/bootstrap" => TestResponse::redirect(302, "/api/auth/owner/bootstrap/evil"),
                 _ => TestResponse::json(404, "{}"),
@@ -2610,21 +3567,33 @@ mod tests {
         let result = broker
             .bootstrap_owner(server.url(), "correct-horse", "bootstrap-secret")
             .await;
+        // Gate C/D §4.7 — the server genuinely reports owner_configured=false
+        // (nested `auth.owner_configured`, NOT a top-level string key), so the
+        // client really enters the bootstrap path and really sends the secret
+        // to the ORIGINAL endpoint exactly once. This is not a vacuous pass
+        // caused by skipping bootstrap entirely.
         assert!(result.is_err());
-        let paths = server.paths();
-        assert!(!paths.iter().any(|path| path.contains("evil")));
-        for request in server.requests() {
-            if request.path == "/api/auth/owner/bootstrap" {
-                assert!(
-                    !request
-                        .headers
-                        .iter()
-                        .any(|(key, value)| key == "x-pg-owner-bootstrap-token"
-                            && value == "bootstrap-secret"),
-                    "bootstrap secret must not reach a redirect target"
-                );
-            }
-        }
+        let requests = server.requests();
+        let bootstrap_requests: Vec<&RecordedRequest> = requests
+            .iter()
+            .filter(|request| request.path == "/api/auth/owner/bootstrap")
+            .collect();
+        assert_eq!(bootstrap_requests.len(), 1, "original bootstrap endpoint must be hit exactly once");
+        assert!(
+            bootstrap_requests[0]
+                .headers
+                .iter()
+                .any(|(key, value)| key == "x-pg-owner-bootstrap-token" && value == "bootstrap-secret"),
+            "the bootstrap secret must reach the original endpoint once"
+        );
+        // The redirect target never receives any request (fail-closed on 3xx).
+        assert!(
+            !server
+                .paths()
+                .iter()
+                .any(|path| path.contains("evil")),
+            "redirect target must receive 0 requests"
+        );
     }
 
     // ------------------------------------------------- P2/P4 compatibility
@@ -2699,6 +3668,148 @@ mod tests {
         .await;
         let error = broker.probe_desktop_remote(server.url()).await.unwrap_err();
         assert!(error.contains("runtime"));
+    }
+
+    // ------------------------------------------- Gate R0.3 expected runtime
+
+    #[tokio::test]
+    async fn android_probe_accepts_server_advertising_only_android_remote() {
+        // Directed R0.3 case 1: server supports ONLY android-remote and the
+        // Android client probes for android-remote → PASS.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let caps = caps_with_modes(r#"["android-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let result = broker
+            .probe_for_runtime(server.url(), RUNTIME_ANDROID_REMOTE)
+            .await;
+        assert!(result.is_ok(), "android probe must pass: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn android_probe_rejects_server_advertising_only_desktop_remote() {
+        // Directed R0.3 case 2: server supports ONLY desktop-remote and the
+        // Android client probes for android-remote → UNSUPPORTED_SERVER, so it
+        // can never "coincidentally pass" via desktop-remote.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let caps = caps_with_modes(r#"["desktop-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker
+            .probe_for_runtime(server.url(), RUNTIME_ANDROID_REMOTE)
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_UNSUPPORTED_SERVER), "got: {error}");
+        assert!(error.contains("runtime"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn desktop_probe_rejects_server_advertising_only_android_remote() {
+        // Directed R0.3 case 3: server supports ONLY android-remote and a
+        // desktop-remote client probes → reject.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let caps = caps_with_modes(r#"["android-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker
+            .probe_for_runtime(server.url(), RUNTIME_DESKTOP_REMOTE)
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_UNSUPPORTED_SERVER), "got: {error}");
+        assert!(error.contains("runtime"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn probe_for_runtime_rejects_non_remote_runtime_id() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|_request: &RecordedRequest| TestResponse::json(200, CAPS))
+            .await;
+        let error = broker
+            .probe_for_runtime(server.url(), "desktop-local")
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_UNSUPPORTED_SERVER), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn android_login_requires_android_remote_advertised() {
+        // Directed R0.3 credential path: an Android broker (expected runtime =
+        // android-remote) must refuse login to a server that only advertises
+        // desktop-remote, BEFORE any credential is sent or persisted.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        broker.set_expected_runtime(RUNTIME_ANDROID_REMOTE).await;
+        let caps = caps_with_modes(r#"["desktop-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => TestResponse::json(201, LOGIN_OK),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("android-login-incompat");
+        let result = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "android", "0.7.0")
+            .await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains(ERR_UNSUPPORTED_SERVER),
+            "login must be refused as unsupported before sending credentials"
+        );
+        // No credential was persisted and the owner password never reached the
+        // login endpoint (probe fails before any credential-bearing request).
+        assert!(!app_data.0.join(ENROLLMENT_FILE).exists());
+        assert!(store.read_refresh("instance-A", "device-1").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn android_login_accepts_server_advertising_only_android_remote() {
+        // Directed R0.3 credential path: an Android broker (expected runtime =
+        // android-remote) logs into a server that advertises android-remote.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        broker.set_expected_runtime(RUNTIME_ANDROID_REMOTE).await;
+        let caps = caps_with_modes(r#"["android-remote"]"#);
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, &caps),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => TestResponse::json(201, LOGIN_OK),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("android-login-ok");
+        let result = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "android", "0.7.0")
+            .await;
+        assert!(result.is_ok(), "android login must succeed: {:?}", result.err());
+        // The refresh credential was persisted to the OS-backed store.
+        assert!(store.read_refresh("instance-A", "device-1").unwrap().is_some());
     }
 
     #[tokio::test]
@@ -2927,6 +4038,171 @@ mod tests {
         assert_eq!(request_count, 2);
     }
 
+    // ------------------------------------------- Gate C/D §4.1 status classes
+
+    #[tokio::test]
+    async fn refresh_401_is_login_expired_and_sets_denied() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => TestResponse::json(401, r#"{"detail":"refresh denied"}"#),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("refresh-401");
+        let enrollment = seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        let error = broker.refresh_session_token(&enrollment).await.unwrap_err();
+        assert!(error.contains(ERR_LOGIN_EXPIRED), "got: {error}");
+        assert!(*broker.state.refresh_denied.lock().await, "401 must set refresh_denied");
+    }
+
+    #[tokio::test]
+    async fn refresh_429_is_not_login_expired_and_recovers() {
+        // Gate C/D §4.1 — a 429 rate limit is transient: it maps to RATE_LIMITED,
+        // does NOT set refresh_denied, does NOT force re-login, and a later
+        // successful refresh still works.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+        let counter = refresh_calls.clone();
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => {
+                    let n = counter.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        TestResponse::json(
+                            429,
+                            r#"{"detail":"too many requests","retry_after":1}"#,
+                        )
+                    } else {
+                        TestResponse::json(200, REFRESH_OK)
+                    }
+                }
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("refresh-429");
+        let enrollment = seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        let error = broker.refresh_session_token(&enrollment).await.unwrap_err();
+        assert!(error.contains(ERR_RATE_LIMITED), "got: {error}");
+        assert!(!*broker.state.refresh_denied.lock().await, "429 must NOT set refresh_denied");
+        // Network/rate-limit recovery: the next refresh succeeds.
+        let refreshed = broker.refresh_session_token(&enrollment).await;
+        assert_eq!(refreshed.unwrap(), "access-refreshed");
+    }
+
+    #[tokio::test]
+    async fn refresh_503_is_not_login_expired() {
+        // Gate C/D §4.1 — a 5xx is a transient server failure: SERVER_UNAVAILABLE,
+        // never LoginExpired, never refresh_denied.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => TestResponse::json(503, "service unavailable"),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("refresh-503");
+        let enrollment = seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        let error = broker.refresh_session_token(&enrollment).await.unwrap_err();
+        assert!(error.contains(ERR_SERVER_UNAVAILABLE), "got: {error}");
+        assert!(!*broker.state.refresh_denied.lock().await, "503 must NOT set refresh_denied");
+    }
+
+    #[tokio::test]
+    async fn refresh_3xx_is_protocol_error() {
+        // Gate C/D §4.1 — redirects stay disabled; a 3xx on refresh is a
+        // protocol violation, not a credential denial.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => TestResponse::json(302, "redirect"),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("refresh-3xx");
+        let enrollment = seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        let error = broker.refresh_session_token(&enrollment).await.unwrap_err();
+        assert!(error.contains(ERR_PROTOCOL), "got: {error}");
+        assert!(!*broker.state.refresh_denied.lock().await, "3xx must NOT set refresh_denied");
+    }
+
+    #[tokio::test]
+    async fn business_401_refresh_retry_recovers_200() {
+        // Gate C/D §4.8 — business request with an old access → 401 → refresh →
+        // retry → 200. Exactly one refresh and two business calls.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+        let counter = refresh_calls.clone();
+        let business_calls = Arc::new(AtomicUsize::new(0));
+        let business_counter = business_calls.clone();
+        let server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    TestResponse::json(200, REFRESH_OK)
+                }
+                // Gate C/D §4.8 — the server rejects the OLD access credential on
+                // the first call; after the refresh provides a NEW one the retry
+                // succeeds. This truly exercises 401 → refresh → retry → 200.
+                "/api/test/data" => {
+                    let n = business_counter.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        TestResponse::json(401, r#"{"detail":"unauthorized"}"#)
+                    } else {
+                        TestResponse::json(200, r#"{"ok":true}"#)
+                    }
+                }
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("retry-recovers");
+        seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        // Seed a locally-valid OLD access credential so the first request 401s.
+        broker.set_session("access-old", 3600).await;
+        let result = broker
+            .api_request(&app_data.0, "/api/test/data", "GET", None, &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().status, 200);
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 1, "exactly one refresh");
+        assert_eq!(business_calls.load(Ordering::SeqCst), 2, "original + one retry");
+    }
+
+    #[tokio::test]
+    async fn keyring_read_backend_failure_is_persistence_not_login_expired() {
+        // Gate C/D §4.5 — a store READ backend failure must be classified as
+        // CREDENTIAL_PERSISTENCE_FAILURE, never "please log in again".
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(compatible_handler()).await;
+        let app_data = TempDir::new("read-fail");
+        let enrollment = seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        store.set_read_fail(true);
+        let error = broker.refresh_session_token(&enrollment).await.unwrap_err();
+        assert!(error.contains(ERR_CREDENTIAL_PERSISTENCE), "got: {error}");
+        assert!(!error.contains(ERR_LOGIN_EXPIRED), "must not demand re-login: {error}");
+    }
+
     // ------------------------------------------------------- P8 persistence
 
     #[tokio::test]
@@ -2981,7 +4257,7 @@ mod tests {
         // The rotated credential survives: the durable PENDING slot holds it
         // (the active write failed), so nothing is staged only in memory.
         assert_eq!(
-            store.read_pending_refresh("instance-A", "device-1").as_deref(),
+            store.read_pending_refresh("instance-A", "device-1").unwrap().as_deref(),
             Some("refresh-rotated-2")
         );
         assert!(broker.state.pending_refresh.lock().await.is_none());
@@ -2997,7 +4273,7 @@ mod tests {
         let second = broker.refresh_session_token(&enrollment).await;
         assert_eq!(second.unwrap(), "access-refreshed");
         assert_eq!(
-            store.read_pending_refresh("instance-A", "device-1").as_deref(),
+            store.read_pending_refresh("instance-A", "device-1").unwrap().as_deref(),
             Some("refresh-rotated-2")
         );
         // Once the store recovers, the next real refresh persists the
@@ -3005,17 +4281,19 @@ mod tests {
         store.set_write_fail(false);
         broker.set_session("", 0).await; // force a real refresh instead of reusing access
         let _ = broker.refresh_session_token(&enrollment).await;
-        assert!(store.read_pending_refresh("instance-A", "device-1").is_none());
+        assert!(store.read_pending_refresh("instance-A", "device-1").unwrap().is_none());
         assert_eq!(
-            store.read_refresh("instance-A", "device-1").as_deref(),
+            store.read_refresh("instance-A", "device-1").unwrap().as_deref(),
             Some("refresh-rotated-2")
         );
     }
 
     #[tokio::test]
     async fn rotation_stages_in_memory_when_every_slot_fails() {
-        // Both durable slots fail: the replacement is staged in memory for this
-        // session (P8) and still rotates successfully.
+        // Gate C/D §4.4 — both durable slots fail: the replacement is staged
+        // in memory for this session and CREDENTIAL_PERSISTENCE_FAILURE is
+        // returned (never a fake durable success). The access credential
+        // stays in memory so the current session can continue.
         let store = Arc::new(MemoryStore::new());
         let broker = broker_with(store.clone());
         let server = TestServer::start(compatible_handler()).await;
@@ -3024,7 +4302,9 @@ mod tests {
         store.set_write_fail(true);
         store.set_pending_write_fail(true);
         let result = broker.refresh_session_token(&enrollment).await;
-        assert_eq!(result.unwrap(), "access-refreshed");
+        let error = result.unwrap_err();
+        assert!(error.contains(ERR_CREDENTIAL_PERSISTENCE), "got: {error}");
+        // The replacement is staged in memory for this session.
         assert_eq!(
             broker.state.pending_refresh.lock().await.as_deref(),
             Some("refresh-rotated-2")
@@ -3033,15 +4313,17 @@ mod tests {
         // enrollment remains in the active slot, and the pending slot is
         // empty), but the in-memory replacement is the effective credential
         // for the remainder of this process.
-        assert!(store.read_pending_refresh("instance-A", "device-1").is_none());
+        assert!(store.read_pending_refresh("instance-A", "device-1").unwrap().is_none());
         assert_eq!(
-            store.read_refresh("instance-A", "device-1").as_deref(),
+            store.read_refresh("instance-A", "device-1").unwrap().as_deref(),
             Some("refresh-seed")
         );
         assert_eq!(
             broker.read_effective_refresh(&enrollment).await.unwrap(),
             "refresh-rotated-2"
         );
+        // The freshly rotated access credential is still usable this session.
+        assert_eq!(broker.session().await.unwrap().access_token, "access-refreshed");
     }
 
     // ---------------------------------------------------------- P9 orphan
@@ -3060,7 +4342,7 @@ mod tests {
         let _ = std::fs::remove_file(&file_path);
         assert!(result.is_err());
         // The freshly written refresh credential must have been cleaned up.
-        assert_eq!(store.read_refresh("instance-A", "device-1"), None);
+        assert_eq!(store.read_refresh("instance-A", "device-1").unwrap(), None);
     }
 
     // --------------------------------------------------------- P15 headers
@@ -3207,6 +4489,98 @@ mod tests {
         assert_eq!(result.unwrap().status, 200);
     }
 
+    // Gate R0.5 — the file-backed streaming upload path is bounded (rejects an
+    // over-limit source before any multipart body is streamed) and accepts a
+    // small file. Uses a sparse file so the over-limit case costs no heap.
+    #[tokio::test]
+    async fn api_upload_file_rejects_over_limit_and_streams_small() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => TestResponse::json(200, REFRESH_OK),
+                "/api/knowledge/sources" => TestResponse::json(200, r#"{"ok":true}"#),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("upload-file");
+        seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        // Over-limit sparse file: metadata length exceeds the bound, so the
+        // upload is rejected before any file bytes are streamed.
+        let big = app_data.0.join("huge.bin");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(MAX_UPLOAD_BYTES as u64 + 1).unwrap();
+        drop(file);
+        let result = broker
+            .api_upload_file(
+                &app_data.0,
+                "/api/knowledge/sources",
+                "file",
+                "huge.bin",
+                &big,
+                "application/octet-stream",
+                &HashMap::new(),
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("upload limit"));
+        // A small file is accepted and forwarded through the multipart stream.
+        let small = app_data.0.join("small.txt");
+        std::fs::write(&small, b"hello file").unwrap();
+        let result = broker
+            .api_upload_file(
+                &app_data.0,
+                "/api/knowledge/sources",
+                "file",
+                "small.txt",
+                &small,
+                "text/plain",
+                &HashMap::new(),
+            )
+            .await;
+        assert_eq!(result.unwrap().status, 200);
+    }
+
+    // Gate R0.6 — the streaming download path writes the HTTP body into the
+    // bounded dest file with correct bytes (never a full base64 Vec).
+    #[tokio::test]
+    async fn download_to_file_streams_into_bounded_dest() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/device/refresh" => TestResponse::json(200, REFRESH_OK),
+                "/artifacts/9/export" => TestResponse {
+                    status: 200,
+                    content_type: "application/pdf",
+                    body: "PDFDATA-BYTES-123".to_string(),
+                    headers: vec![(
+                        "content-disposition".to_string(),
+                        "attachment; filename=\"report.pdf\"".to_string(),
+                    )],
+                },
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("download-file");
+        seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+        let dest = app_data.0.join("out.bin");
+        let downloaded = broker
+            .download_to_file(&app_data.0, "/artifacts/9/export", &dest)
+            .await
+            .unwrap();
+        assert_eq!(downloaded.status, 200);
+        assert!(downloaded.content_type.contains("application/pdf"));
+        let bytes = std::fs::read(&dest).unwrap();
+        assert_eq!(bytes, b"PDFDATA-BYTES-123");
+    }
+
     #[test]
     fn runtime_gate_denies_desktop_local_and_permits_desktop_remote() {
         use crate::runtime_mode::RuntimeMode;
@@ -3273,7 +4647,7 @@ mod tests {
         let result = broker.logout(&app_data.0, true).await.unwrap();
         assert!(result.logged_out);
         assert!(!result.revoked, "failed network revoke must not claim success");
-        assert_eq!(store.read_refresh("instance-A", "device-1"), None);
+        assert_eq!(store.read_refresh("instance-A", "device-1").unwrap(), None);
         assert!(!app_data.0.join(ENROLLMENT_FILE).exists());
 
         // Server revoke succeeds (204) → revoked=true.

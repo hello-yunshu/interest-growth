@@ -1,6 +1,6 @@
 # Interest Growth v0.7 — Implementation Audit
 
-**Audit date:** 2026-08-14
+**Audit dates:** 2026-08-14 (Gate C/D closure rounds) / 2026-08-15 (Android Gate E/F round)
 **Scope:** authenticated self-hosted Core, Docker/proxy deployment, backup/restore, desktop/Android readiness and recorded verification.
 
 ## 1. Outcome
@@ -12,11 +12,12 @@ source-and-test gate level. Gate D (desktop remote mode) is implemented at the
 source-and-test gate level (§D5–D7 UX plus the native remote broker), but it
 is NOT release-proven: no enrollment/login has been exercised against a real
 public-TLS server and no real packaged Windows/macOS regression has run.
-Android (Gate E), direct APK release (Gate F) and cross-device proof (Gate G)
-remain not started at the hardware/toolchain level: no Android project or
-mobile Rust entry point exists and no real remote server or second client has
-been exercised. Gate E's source-level mobile capability contract is
-implemented as vocabulary only (see §2).
+Gate E (Android) is implemented at source and **compiled** for
+`aarch64-linux-android`, and a v2-signed release APK exists (Gate F signing
+half), but no emulator / physical-device run and no upgrade-in-place has been
+executed; Gate G (cross-device proof) remains not started. The per-round
+history below records what was true on each audit date (2026-08-14 and
+2026-08-15).
 
 The four concurrency/recovery boundaries that previously blocked Gate B are
 now closed (see §4): atomic refresh-token rotation, database-enforced owner
@@ -52,6 +53,38 @@ tests grew to 44 and ClientRuntime JS tests to 59; the full regression
 (244+ Python, 59 JS, 44 Rust, native-core verify, RAG upstream pin, web
 lint/build, strict host audit, SOURCE_MANIFEST integrity) is green in the
 same environment.
+
+On 2026-08-14 the Gate C/D §5 acceptance list was executed end-to-end and
+every item passed (see §2 "Gate C/D §5 release-safety acceptance"): refresh
+429/5xx classified as transient (not LoginExpired), remote `APP_ENV`
+fail-closed invariant, version overflow fail-closed parsing, honest secure
+store total-failure reporting, keyring read backend-failure classification,
+direct remote actions driving the unified ConnectionStateMachine, bootstrap
+redirect test genuinely entering the target path, directed 401-recovery and
+20-concurrent-401 single-flight regressions, plus no
+identity-before-credential / header-allowlist / upload-bound / redirect
+regressions. Final counts in this run: 248 Python, 66 ClientRuntime JS, 51
+Rust, web lint/build, self-audit and SOURCE_MANIFEST all green. Per the
+execution prompt, this closes Gate C and Gate D at the source-and-test gate
+level: **Gate C = PASS (source/test)** and **Gate D = PASS (source/test)**.
+They remain not release-proven only for real-runtime evidence (public-TLS
+enrollment and packaged Windows/macOS regression), which is an execution
+boundary, not a source/test gap.
+
+On 2026-08-15 the Android round was executed (this audit's latest recorded
+round): a persistent Docker Android build environment was established, the
+Tauri Android project was initialized with the mobile Rust entry point, the
+Android runtime was implemented at source and **compiled** for the
+`aarch64-linux-android` target (always `android-remote`, no sidecar, no
+desktop keyring/vaults/updater/window plugins, Android-Keystore-backed
+credential store, fail-closed network security), and a **signed universal
+release APK** was produced and signature-verified (v2) with a project-owned
+keystore held outside the repository. Therefore **Gate E = source + compile
+PASS**, and the APK/signing half of **Gate F (signing/checksum/fingerprint)
+is PASS**. The following remain explicit NOT RUN hardware boundaries, not
+inferred passes: Android emulator run, physical-device install/runtime,
+upgrade-in-place, cross-device proof (Gate G) and real public-TLS enrollment
+on Android (see §2 "2026-08-15 Android round" and §5).
 
 ## 2. Implemented in source
 
@@ -195,10 +228,14 @@ round, each with directed tests that uniquely trigger the fixed path:
 - **HIGH — credentials are only sent after a FRESH probe** (TOCTOU closure,
   `remote.rs`): the `PendingEnrollment` probe cache was removed; login and
   bootstrap call `fresh_verified_server()` inside the same call that sends
-  the credential, so a server replaced behind the same URL is detected
-  right before the password/refresh leaves the process. Directed test: probe
-  answers instance-A, login endpoint answers instance-B → refused with
-  IDENTITY_CHANGED and nothing persisted.
+  the credential, so a server that was replaced while a stale probe result was
+  cached is detected before the credential leaves the process. Directed test:
+  probe answers instance-A, login endpoint answers instance-B → refused with
+  IDENTITY_CHANGED and nothing persisted. Scope note (Gate C/D §4.9): this
+  closes the stale-cache window; it does not claim to remove every theoretical
+  TOCTOU between the fresh metadata GET and the login POST. Endpoint
+  cryptographic identity is the TLS certificate/PKI; `server_instance_id` is
+  an application-instance continuity identity, not a substitute for TLS.
 - **HIGH — fail-closed protocol parsing** (`remote.rs`): `ParsedMetadata`
   with `unwrap_or_default` was replaced by strictly-typed parsers for the two
   frozen metadata endpoints. Every required field (including
@@ -248,7 +285,53 @@ round, each with directed tests that uniquely trigger the fixed path:
   honest terminal states and ambiguous failures stay recoverable network
   failures. Errors never contain passwords or tokens.
 
-### Gate E — Android mobile contract (source vocabulary only)
+### Gate C/D §5 release-safety acceptance (2026-08-14, executed end-to-end)
+
+Every item on the execution prompt's §5 acceptance list was run and passed:
+
+- **refresh 429/5xx not misclassified as LoginExpired** — directed Rust tests
+  `refresh_429_is_not_login_expired_and_recovers` and
+  `refresh_503_is_not_login_expired`; only 401/403 flip `auth_expired`.
+- **remote `APP_ENV` fail-closed** — `packages/shared/pg_shared/settings.py`
+  raises `ConfigError` when `APP_ENV=remote` but
+  `PG_REMOTE_AUTH_ENABLED != true`; no unauthenticated remote API can start.
+- **version overflow fail-closed** — `remote.rs` `ParsedVersion` rejects
+  malformed and overflowing components instead of defaulting open; directed
+  test `version_parser_accepts_valid_and_rejects_malformed_or_overflowing`.
+- **secure store total failure not misclaimed crash-safe** — `rotate_refresh`
+  returns `Result` and reports `CREDENTIAL_PERSISTENCE_FAILURE` when every
+  keyring slot fails; tests `rotation_stages_in_memory_when_every_slot_fails`
+  and `refresh_rotation_survives_keyring_write_failure`.
+- **keyring read backend failure correctly classified** — `NoEntry` (no
+  credential) is distinct from locked/unavailable backend failures, so a
+  locked keychain never triggers a false login prompt.
+- **direct remote actions drive the unified state** — `RuntimeConnect.js`
+  routes every native remote action through `runRemoteAction` →
+  `ConnectionStateMachine`; JS tests assert coded verdicts are the single
+  source of truth.
+- **bootstrap redirect test genuinely enters the target path** — the directed
+  test asserts the login endpoint receives the credential-bearing request and
+  the redirect target receives zero requests; `login_never_follows_307_redirect_and_secret_stays_local`.
+- **401 successful-recovery directed test** — business 401 forces a rotation
+  and exactly one retry, then reconnects; `refresh_401_retries_exactly_once_then_login_expired`.
+- **20-concurrent-401 single-flight remains green** — generation-based
+  coalescing produces exactly one rotation + one retry; regression unchanged.
+- **no redirect / identity-before-credential / header-allowlist /
+  upload-bound regressions** — all prior invariants re-verified:
+  `login_never_follows_307_redirect_and_secret_stays_local`,
+  `renderer_dangerous_headers_are_stripped_by_positive_allowlist`,
+  `upload_is_bounded_before_and_after_base64_decode`, and the
+  identity-before-credential login-swap refusal test.
+- **stable error-code taxonomy both sides** — Remote error codes frozen and
+  mirrored in Rust (`remote.rs`) and JS (`remote.js`); mismatch fails tests.
+- **Full gate regression green** — 248 Python, 66 ClientRuntime JS, 51 Rust,
+  web lint/build, self-audit and regenerated SOURCE_MANIFEST.
+
+Result: **Gate C = PASS (source/test)**, **Gate D = PASS (source/test)**;
+release-proven status remains pending only real public-TLS + packaged
+Windows/macOS evidence.
+
+### Gate E — Android mobile contract (source vocabulary)
 
 - Frozen `PLATFORM_CAPABILITIES` vocabulary and a `DESKTOP_ONLY_CAPABILITIES`
   gate in `apps/web/lib/runtime/contract.js`; descriptor tests assert every
@@ -256,8 +339,112 @@ round, each with directed tests that uniquely trigger the fixed path:
   build cannot silently reach a desktop/local path.
 - `android-remote` assigns the renewal credential to Android Keystore and
   declares document picker / share sheet / suspend-resume lifecycle / optional
-  biometric unlock as planned adapters. These are contract vocabulary, not
-  implemented surfaces; no Android project, emulator or device exists.
+  biometric unlock as planned adapters.
+
+### 2026-08-15 Android round (implemented at source + compiled)
+
+This round moved Android from "vocabulary only" to implemented at source and
+compiled for the Android target, using a Docker build environment (see §3).
+Each Gate E §6 item:
+
+- **Android toolchain (Docker)**: `docker/` image `interest-growth-android`
+  (linux/amd64, JDK 17, Android SDK 36 / NDK 27.1, Rust `aarch64-linux-android`
+  target, cargo-ndk, Node + `@tauri-apps/cli` 2.11.4), built against Tencent
+  SDK / rsproxy Rust mirrors with persisted `ig-gradle-cache` and
+  `ig-cargo-home` volumes; invoked via `scripts/android-docker.sh`. The whole
+  release build is driven through `npx tauri android build --apk` (keeps the
+  CLI WebSocket server alive) to avoid the addr-file panic that occurs when
+  `android-studio-script` runs without the CLI server.
+- **§6.2 Tauri Android project + mobile entry point**: `src-tauri/gen/android`
+  initialized; `lib.rs` uses `#[cfg_attr(mobile, tauri::mobile_entry_point)]`;
+  `tauri.conf.json`/capabilities apply to the mobile build. The generated
+  project is **tracked in full** (ADR 0008, Option A — see below), so a clean
+  checkout is directly buildable with no generator re-run and no local
+  symlink/path. `SOURCE_MANIFEST` covers every `gen/android` file (no
+  exclusion added for it).
+- **§6.3 Android runtime is always `android-remote`**: `runtime_mode.rs`
+  exposes `RUNTIME_ID_ANDROID_REMOTE` and `android_remote_mode()`
+  (`cfg(target_os = "android")`); `AndroidRemote` never spawns a sidecar,
+  desktop keyring/vaults/updater/single-instance/window-state are compiled out
+  under `cfg(not(target_os="android"))`; no desktop-only credential path is
+  reachable.
+- **§6.4 Android secure credential store**: `AndroidKeystoreStore` in
+  `remote.rs` wraps `android-native-keyring-store` (Android Keystore-backed,
+  hardware/OS key, encrypted refresh credential persisted to app-private
+  SharedPreferences). It keeps the two-slot active/pending rotation semantics
+  and the honest NoEntry-vs-backend classification of the desktop store; the
+  renderer never sees the refresh credential.
+- **§6.5 Android native remote broker**: reuses the hardened native remote
+  broker (`remote.rs`) — relative-API-path-only, positive header allowlist,
+  bounded uploads, redirect policy `none`, single-flight refresh, identity
+  verified before credentials, stable error-code taxonomy.
+- **§6.6 Android lifecycle**: mobile entry point + suspend/resume path wired;
+  the remote session is recovered from the secure store on resume.
+- **§6.7 Android network security (fail-closed)**: `res/xml/network_security_config.xml`
+  with `cleartextTrafficPermitted=false` and system trust anchors only; no
+  trust-anchor override and no `usesCleartextTraffic=true` in the manifest.
+- **§6.8–§6.11 Android UX / upload / download / external links**: the mobile
+  surface shares the runtime-aware Web UI; upload bounds and download/export
+  reuse the remote transport (not separately exercised on hardware).
+- **§6.12 Provider admin**: no local provider admin surface on Android; the
+  `DESKTOP_ONLY_CAPABILITIES` gate keeps provider-secret commands off the
+  mobile runtime.
+
+Compile evidence: `aarch64-linux-android` release build succeeds
+(`tauri android build --apk --target aarch64`). Emulator and physical-device
+execution were not available in this environment and are NOT RUN.
+
+### 2026-08-15 GitHub Actions / unique-trusted-build closure round (source + tests)
+
+This round implements the "GitHub Actions unique trusted build" prompt
+(`Interest_Growth_v0.7_GitHub_Actions_...执行提示词.md`) at the source,
+script and workflow level. It does **not** claim remote-Actions evidence:
+nothing in this round is PASS beyond what the local source/tests prove. The
+distinction is kept explicit below.
+
+- **BLOCKER-1 closed (source)**: the non-self-contained tracked wrapper
+  `apps/desktop/src-tauri/tauri.js` (a copy of the CLI's `node_modules`
+  wrapper) was removed from Git tracking; Tauri CLI is invoked via the repo
+  package manager (`npx tauri`) everywhere. `scripts/audit_public_repo.py`
+  gained tracked-symlink/path integrity checks: broken symlink, absolute
+  target, target under `node_modules`, target escaping the repository and
+  target resolving under `$HOME` all fail. `git ls-files` in a clean checkout
+  must be fully readable. **Remote-clean-runner evidence NOT RUN.**
+- **ADR 0008 — Android generated source tracking policy (Option A)**: the
+  `gen/android` project is tracked in full; `SOURCE_MANIFEST` covers every
+  tracked `gen/android` file (no exclusion added); audit proves manifest entry
+  set == git tracked file set within scope, so `gen/android` cannot silently
+  drift in/out. **Source + local manifest check; remote Actions NOT RUN.**
+- **BLOCKER-2 closed (source)**: `android-remote` now resolves through the
+  shared `resolveNativeRemote(runtimeId, platform, runtime, adapter)` resolver
+  (extracted from the desktop-remote path) and activates a genuine native
+  `RemoteTransport` with the Android adapter broker — it no longer falls into
+  `inactiveRemoteTransport()`. Android never falls back to desktop-local and
+  never exposes a desktop token/local authHeader; its storage namespace is
+  `android-remote:<server_instance_id>` scoped. Covered by a new
+  `runtime-android.test.mjs` suite (15 cases: active transport, no local
+  fallback, no desktop token, storage namespace, native broker GET, mutation
+  blocked while disconnected, 401→native refresh→exactly one retry,
+  LoginExpired/IdentityChanged/UpdateRequired/UnsupportedServer mappings).
+  **Source + 15 local Node tests; remote Actions NOT RUN.**
+- **Android platform adapter** (`apps/web/lib/runtime/platforms/tauri-android.js`):
+  native remote broker invocation, `openExternal`, lifecycle/suspend-resume
+  notification hooks, and honest NOT IMPLEMENTED stubs for document selection,
+  upload-by-URI, share sheet, back handling and biometric unlock. Capabilities
+  stay `false` where unimplemented; nothing is claimed PASS on Android UX.
+- **FileProvider tightened (§4 / prompt §4)**: `file_paths.xml` exposes only
+  app-owned `cache-path export/` and `files-path share/`; no `external-path`,
+  no `path="."`, no storage root, no canonical/credential/DB paths.
+  `audit_public_repo.py` statically rejects any broadening.
+- **Unified CI scripts** (`scripts/ci/`): `verify_repo.sh` (audit +
+  manifest-scope gate) and `verify_android_apk.sh` (APK static
+  metadata/content verification) are the single verification entry points
+  reused by PR CI, main artifact builds and tag releases — there is no second,
+  laxer verification path.
+- **ci.yml updated**: added `repo-integrity` as a required leading gate,
+  added Android runtime tests to the Web job (`node --test
+  lib/runtime/test/*.test.mjs`), and added an `actionlint` job so the
+  workflows themselves are syntax/schema-checked. **Remote Actions NOT RUN.**
 
 ## 3. Verified in this audit
 
@@ -334,6 +521,84 @@ verification. The real external hostname/certificate path was not exercised.
   unavailable), no Android SDK (`ANDROID_HOME` unset), no Rust Android
   targets, no `cargo-ndk`, no `adb`, no emulator or physical device. Gates E
   (hardware), F and G remain not started at the toolchain level.
+- **Android toolchain inventory checked 2026-08-15 (now provisioned via
+  Docker)**: the host still lacks a native JDK/Android SDK/emulator, but the
+  Docker image `interest-growth-android` (linux/amd64) provides JDK 17,
+  Android SDK 36 + NDK 27.1, `aarch64-linux-android` Rust target, cargo-ndk
+  and Tauri CLI 2.11.4, so Android compile/sign works without host toolchain
+  changes. There is still **no emulator image and no physical device** in
+  this environment; emulator/device execution remains NOT RUN.
+
+### 2026-08-15 Android verification round
+
+- ClientRuntime contract tests: **66 passed** (`node --test
+  lib/runtime/test/*.test.mjs`), including the Android capability vocabulary
+  and the `android-remote` runtime-mode contract, plus the
+  runtime-connect-controller reducer tests.
+- Rust host tests: **52 passed** (`cargo test`), covering runtime-mode
+  decisions (`android-remote` never spawns a sidecar, `AndroidRemote` is not
+  a desktop id), the remote broker integration tests, credential-store
+  NoEntry-vs-backend classification, version parser, connection state and the
+  Android per-server/per-device credential namespace.
+- `aarch64-linux-android` **release compile PASS** via
+  `npx tauri android build --apk --target aarch64` (the CLI WebSocket server
+  stays alive through the Gradle rust build, so no addr-file panic).
+- **Signed release APK produced** (Gate F §8.3): universal release APK,
+  arm64-v8a single canonical `.so`, v2-signed with the project keystore
+  (external to the repo); `apksigner verify --verbose --print-certs` PASS.
+  Full identity/signing/hygiene in `docs/audits/V0_7_ANDROID_APK_RELEASE_VERIFICATION.md`.
+- **APK hygiene (Gate F §8.5) PASS** (static): no Python sidecar, no provider
+  secret / bootstrap token / release private key, no local DB seed, no
+  desktop updater payload, no cleartext config; network security is
+  fail-closed.
+- **NOT RUN (hardware boundaries)**: emulator install/run, physical-device
+  install/runtime, upgrade-in-place, cross-device proof, real public-TLS
+  enrollment on Android.
+
+### 2026-08-15 Phase 6 — manifest regeneration + local verification + workflow closure
+
+Local verification re-run on the assembled branch (source-level only; remote
+Actions evidence still NOT RUN — nothing here claims a remote run).
+
+- **SOURCE_MANIFEST regenerated and verified**: `generate_source_manifest.py`
+  wrote **435 entries**; `--check` PASS. Regenerated *after* staging the new
+  workflow/script/ADR files so the manifest covers the full tracked set
+  (`git ls-files` scope).
+- **`verify_repo.sh` PASS**: `audit_public_repo.py` hygiene PASS (519 tracked
+  paths, symlink/path/credential/FileProvider/manifest-scope checks) and
+  `generate_source_manifest.py --check` PASS. The audit proves manifest entry
+  set == git tracked file set within scope.
+- **Web gate PASS**: `npm run lint` (0 warnings), ClientRuntime
+  `node --test lib/runtime/test/*.test.mjs` → **81 passed / 0 failed**
+  (includes the 15 `android-remote` native-transport tests), static
+  production `npm run build` PASS.
+- **Rust gate PASS**: `cargo test --locked --lib` → **52 passed / 0 failed**
+  (runtime-mode, native broker, credential store, refresh/rotation, error
+  taxonomy).
+- **Python host suite**: not runnable on this host (missing `fastapi`/dev
+  deps — no local venv); CI installs `.[dev]` in a clean runner. Local NOT
+  RUN, not claimed PASS.
+- **Docker integration gate**: script verified syntactically and structurally
+  against the auth contract; a local run was attempted but the base-image
+  pull failed on the configured mirror (`docker.mirrors.ustc.edu.cn` Bad
+  Gateway — host network, not a script defect). Local NOT VERIFIED; must be
+  exercised in Actions.
+- **Workflow YAML parse PASS**: all four `workflows/*.yml` parse cleanly.
+  Fixed two unquoted-colon YAML errors in `release.yml` (step names/runs
+  containing `: `) that would have broken the workflow.
+- **`release.yml` closure fixes**:
+  - `release-gate` now also `needs: android-emulator` (emulator is a required
+    release gate, prompt §31).
+  - `android-signed-build` now generates `SHA256SUMS.txt` from the actual
+    APKs and uploads it with the artifacts.
+  - `publish-release` downloads the artifacts, regenerates `SHA256SUMS.txt`,
+    and auto-generates `V0_7_RELEASE_VERIFICATION.md` via
+    `generate_release_report.py` from this run's real data (run identity,
+    toolchain, asset sizes/SHA-256, gate results, explicit NOT RUN items),
+    then uploads both as release assets — the release body no longer points
+    at checksums/report files that were never produced.
+  - Release assets now = signed arm64 APK + x86_64 debug emulator APK +
+    SHA256SUMS.txt + V0_7_RELEASE_VERIFICATION.md.
 
 ## 4. Gate B status (was "Open release blockers")
 
@@ -383,7 +648,9 @@ failure) leaves the original live state recoverable.
   `bundle_dmg.sh`; no new desktop package is handed off by this audit.
 - No `src-tauri/gen/android` project, `mobile_entry_point`, Android secure
   storage, emulator run, physical-device run or APK exists (Gates E–F not
-  started).
+  started). **Updated 2026-08-15**: the Android project, mobile entry point,
+  Android secure store and a signed release APK now exist; only emulator /
+  physical-device / upgrade-in-place execution remains not started.
 - Cross-device continuity has not been exercised with two independent clients
   (Gate G not started).
 - No real public hostname, valid public certificate or external Nginx runtime
@@ -398,11 +665,15 @@ failure) leaves the original live state recoverable.
    native remote broker and explicit restart boundary; the next step is to
    exercise it against a real public-TLS server and run a real packaged
    Windows/macOS local + remote regression.
-3. Initialize and target-gate Tauri Android (Gate E), reusing the mobile
-   capability contract; gate sidecar, updater, single-instance, window-state
-   and desktop-only credential code.
-4. Verify emulator, physical device, signed APK upgrade and cross-device data
-   (Gates F–G).
+3. Gate E Android is implemented at source and **compiled** for
+   `aarch64-linux-android` with an always-`android-remote` runtime, Android
+   Keystore credential store, fail-closed network security and a v2-signed
+   release APK (Gate F signing/checksum/fingerprint); the next step is
+   hardware execution — run the APK on an Android emulator and a physical
+   device (enrollment/login/refresh/revoke/upload/download/lifecycle).
+4. Verify emulator, physical device, signed APK upgrade-in-place and
+   cross-device data (Gates F–G); upgrade-in-place must be proven on hardware
+   with the same signing key before Gate F can be fully closed.
 
 Release reporting must continue to separate source implementation, automated
 tests, Docker runtime, desktop packages, emulator, physical Android hardware,
