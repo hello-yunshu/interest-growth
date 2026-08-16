@@ -98,7 +98,9 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            set -euo pipefail
+            # run via the runner's /usr/bin/sh (dash), which does NOT support
+            # `set -o pipefail` — keep the script POSIX-sh compatible.
+            set -eu
             PKG=app.psychologygrowth.desktop
             adb install dist/android/interest-growth-android-x86_64-debug.apk
             # Map the host self-hosted API server (port 8000) onto the emulator
