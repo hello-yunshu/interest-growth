@@ -204,7 +204,7 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
             interest-growth-android bash -c \
-              'bash scripts/ci/verify_android_apk.sh --require-aapt dist/android/interest-growth-android-arm64.apk'
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_android_apk.sh --require-aapt dist/android/interest-growth-android-arm64.apk'
           # Stage the x86_64 debug APK for the emulator job.
           X86="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
           if [ -z "${X86}" ]; then echo "no x86_64 debug APK produced" >&2; exit 1; fi
@@ -213,7 +213,7 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
             interest-growth-android bash -c \
-              'apksigner verify --verbose --print-certs /work/dist/android/interest-growth-android-arm64.apk' > "$RUNNER_TEMP/apksigner.txt"
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; apksigner verify --verbose --print-certs /work/dist/android/interest-growth-android-arm64.apk' > "$RUNNER_TEMP/apksigner.txt"
           CERT_SHA="$(grep -E 'SHA-256' "$RUNNER_TEMP/apksigner.txt" | head -1 | sed -E 's/.*SHA-256: //' || true)"
           echo "cert-sha256=${CERT_SHA}" >> "$GITHUB_OUTPUT"
           echo "apk-sha256=$(shasum -a 256 dist/android/interest-growth-android-arm64.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
