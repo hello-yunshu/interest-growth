@@ -129,6 +129,65 @@ Release packaging follows a strict external verification process: generate the Z
 
 The local Apple Silicon application and DMG are verified development/test artifacts. Developer ID signing, Apple notarization and real Windows Setup validation remain target-OS/toolchain/credential dependent and must never be inferred from the local ad-hoc signature.
 
+## v1.0 — Gate R3 (1.0 Release Candidate 1) execution (2026-08-16)
+
+### PR #6 → main merge
+
+- **PR #6** (`feat/v0.7-android-release-closure` → `main`) merged at commit `4aea601` after all required checks green.
+- **Version bump**: `0.7.0` → `1.0.0` across all 21 user-visible source files (pyproject.toml canonical, server/desktop/web/CI/Android/tests). Version consistency check PASS.
+- **main CI** — run `31930156459`: **success**.
+- **main Web E2E** — run `31930156464`: **success**.
+- **main Build Artifacts** — run `31930156486`: **success** (Windows x64 + macOS arm64 + Android verify APK).
+
+### v1.0.0-rc.1 tag → full RC Actions
+
+- **Tag**: `v1.0.0-rc.1` at `4aea601` (main merge commit, tag SHA == build SHA).
+- **Release workflow** — run `31930997639`: **PARTIAL** (see below).
+
+| Job | Result | Notes |
+|---|---|---|
+| Repository integrity gate | PASS | |
+| Python host gate (3.12) | PASS | |
+| Web / ClientRuntime gate | PASS | |
+| Rust host gate | PASS | |
+| Docker remote-server integration | PASS | |
+| Dependency security (pip/npm/cargo) | PASS | |
+| Android signed release APK + static verification | **FAIL** | **External blocker** — KS_B64/KS_PASS/KS_ALIAS/KS_KEY_PASS not set in GitHub secrets |
+| Android emulator runtime gate | SKIPPED | Depends on android-signed-build |
+| Release aggregate gate | SKIPPED | Depends on android-signed-build + emulator |
+| Publish GitHub Release | SKIPPED | Depends on release-gate |
+
+### External blocker: Android release signing keystore
+
+The `android-signed-build` job is **fail-closed by design** (§11.3 §13.1): all four keystore secrets must be present in GitHub Actions Secrets or the release build fails with no debug fallback. This is **correct behavior** — the project must never publish an unsigned or debug-key APK as a release asset.
+
+The same fail-closed design principle applies to Windows Authenticode and macOS Developer ID signing — no ad-hoc fallback, no silent downgrade. These will also fail when `release.yml` reaches those steps.
+
+### RC1 independent audit
+
+Independent code audit of `v1.0.0-rc.1` (commit `4aea601`) focusing on the §47 checklist:
+
+| Area | Result | Evidence |
+|---|---|---|
+| Auth: refresh single-use | **OK** | Atomic conditional consume (`remote_auth.py` L435–452); concurrent winner produces zero-row UPDATE |
+| Auth: device revoke | **OK** | `POST /device/revoke` (`remote_auth.py` L463–493) atomically revokes device + all tokens |
+| Auth: identity change | **OK** | `server_instance_id` validated before sending credentials; identity-swap on login refused |
+| Credential/no secret leak | **OK** | Secrets only from env vars in CI scripts; no tracked .env/.pem/.p12/.jks |
+| Runtime contract | **OK** | SERVER_VERSION=1.0.0, API_VERSION=1, MIN_CLIENT_VERSION=1.0.0, CLIENT_VERSION=1.0.0; isRemoteRuntime consistently |
+| Backup fail-closed | **OK** | `BACKUP_FORMAT_VERSION=1`; rejects future format, wrong product, checksum mismatch (`backup_restore.py` L214–235) |
+| Android cleartext | **OK** | `cleartextTrafficPermitted="false"` (`network_security_config.xml` L16) |
+| Android FileProvider | **OK** | Only `cache/export/` + `files/share/`; no `path="."` (`file_paths.xml` L21–22, statically checked) |
+| Release chain fail-closed | **OK** | `release.yml` tag→SHA binding, android-signed-build fail-closed, aggregate gate depends on all required jobs |
+| Tech debt scan | **OK** | All TODO/FIXME/HACK/TEMP are documented deferred or non-release-blocking |
+
+**Audit conclusion: BLOCKER=0, HIGH=0.** All §47 risk areas are correctly implemented at the source level. The sole release gate failure is the external signing-credential blocker, which is architectural fail-closed behavior, not a code defect.
+
+### RC1 release readiness
+
+- **Code & integration quality**: all deterministic gates (CI, Web E2E, Docker integration, Rust, Python, dependency security) PASS on the exact tag SHA.
+- **Android APK/emulator**: blocked by missing signing keystore secrets. Once secrets are provided, the full release pipeline (signed APK → emulator → aggregate → publish) will run.
+- **Release artifacts**: release.yml publish-release job also requires signing secrets for SBOM, attestation, SHA256SUMS, and verification report generation.
+
 ## Compatibility identifiers intentionally retained
 
 The following remain migration anchors, not current product branding:
