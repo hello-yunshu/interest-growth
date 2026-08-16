@@ -18,10 +18,19 @@ import {
 } from './transports/desktop-local.js';
 import { RemoteTransport, remoteErrorEvent } from './transports/remote.js';
 import * as tauriDesktop from './platforms/tauri-desktop.js';
+import * as tauriAndroid from './platforms/tauri-android.js';
 import * as browser from './platforms/browser.js';
 
-function platformAdapter() {
-  return isDesktopShell() ? tauriDesktop : browser;
+// Gate E §6.8 — platform resolution is no longer "Tauri == desktop".
+// windows/macos + Tauri → tauri-desktop; android + Tauri → tauri-android;
+// anything else → browser. The chosen adapter carries the native broker
+// surface (and host actions) for the resolved runtime.
+function platformAdapter(platform) {
+  if (platform === 'android' && isDesktopShell()) return tauriAndroid;
+  if ((platform === 'windows' || platform === 'macos') && isDesktopShell()) {
+    return tauriDesktop;
+  }
+  return browser;
 }
 
 // Gate C §5.4 — a remote runtime never silently falls back to a local store.
@@ -37,21 +46,25 @@ function inactiveRemoteTransport() {
   };
 }
 
-// Gate D §D4 — build the remote transport for a desktop-remote runtime. The
-// native broker (Rust) owns the origin, the refresh credential and the Bearer
-// header; the renderer only submits relative API paths. Enrollment state is
-// read from the native broker so the descriptor is bound to the real server.
-async function resolveDesktopRemote(platform, runtime) {
-  const descriptor = descriptorFor('desktop-remote', platform);
+// Gate D §D4 / Gate E §6.5 — build the native remote transport for a
+// desktop-remote OR android-remote runtime. The native broker (Rust) owns the
+// origin, the refresh credential and the Bearer header; the renderer only
+// submits relative API paths. Enrollment state is read from the native broker
+// so the descriptor is bound to the real server. The platform adapter
+// (desktop vs Android) is injected so this stays a pure shared resolver with
+// no Tauri import, which is what makes the Android runtime tests real (they
+// cannot be faked with the desktop mock).
+export async function resolveNativeRemote(runtimeId, platform, runtime, adapter) {
+  const descriptor = descriptorFor(runtimeId, platform);
   let status = null;
   try {
-    status = await tauriDesktop.remoteSessionStatus();
+    status = await adapter.remoteSessionStatus();
   } catch {
     status = null;
   }
   const broker = {
-    apiRequest: tauriDesktop.remoteApiRequest,
-    apiUpload: tauriDesktop.remoteApiUpload,
+    apiRequest: adapter.remoteApiRequest,
+    apiUpload: adapter.remoteApiUpload,
   };
   const connection = new ConnectionStateMachine({ initialState: 'Initializing' });
   const transport = new RemoteTransport({ broker, active: true, connection });
@@ -64,8 +77,10 @@ async function resolveDesktopRemote(platform, runtime) {
       apiVersion: status.apiVersion || '',
       minClientVersion: status.minClientVersion || '',
     };
+    // Gate E — the Android storage namespace is server_instance_id scoped just
+    // like desktop-remote, keyed by the runtime id so the two never collide.
     descriptor.storageNamespace = status.serverInstanceId
-      ? `desktop-remote:${status.serverInstanceId}`
+      ? `${runtimeId}:${status.serverInstanceId}`
       : null;
     if (status.connected) {
       connection.handle('BOOTSTRAP_OK');
@@ -77,7 +92,7 @@ async function resolveDesktopRemote(platform, runtime) {
       // state, never LoginExpired. Recover through the native broker instead of
       // guessing. The broker single-flights this against any other caller.
       try {
-        const refreshed = await tauriDesktop.remoteRefreshNow();
+        const refreshed = await adapter.remoteRefreshNow();
         if (refreshed?.connected) connection.handle('BOOTSTRAP_OK');
         else if (refreshed?.authExpired) connection.handle('REFRESH_FAIL');
         else connection.handle('NETWORK_FAIL');
@@ -97,14 +112,20 @@ async function resolve() {
   const runtimeId = isKnownRuntimeId(runtime.runtimeId) ? runtime.runtimeId : 'desktop-local';
   const shell = isDesktopShell();
 
-  if (runtimeId === 'desktop-remote' && shell) {
-    const remote = await resolveDesktopRemote(platform, runtime);
+  // Gate E — desktop-remote and android-remote share the native remote
+  // resolver; only their platform adapter differs. A non-native shell
+  // (browser) never resolves either, so it honestly stays inactive.
+  if (
+    (runtimeId === 'desktop-remote' || runtimeId === 'android-remote') &&
+    shell
+  ) {
+    const remote = await resolveNativeRemote(runtimeId, platform, runtime, platformAdapter(platform));
     return {
       descriptor: remote.descriptor,
       runtime,
       platform,
       connection: remote.connection,
-      adapter: platformAdapter(),
+      adapter: platformAdapter(platform),
       transport: remote.transport,
       storageNamespace: remote.descriptor.storageNamespace,
     };
@@ -131,7 +152,7 @@ async function resolve() {
     runtime,
     platform,
     connection,
-    adapter: platformAdapter(),
+    adapter: platformAdapter(platform),
     transport,
     storageNamespace: descriptor.storageNamespace,
   };

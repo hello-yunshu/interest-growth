@@ -43,4 +43,10 @@ def test_empty_workspace_layout_and_keyboard_editing_are_supported(project_root)
 
 def test_no_numbered_legacy_web_source_copies_remain(project_root):
     web = project_root / "apps/web"
-    assert not [path for path in web.rglob("* 2.js") if "node_modules" not in path.parts]
+    # `.next` and `node_modules` are generated build/vendor output, not legacy
+    # numbered source copies; only real source files are checked.
+    assert not [
+        path
+        for path in web.rglob("* 2.js")
+        if "node_modules" not in path.parts and ".next" not in path.parts
+    ]

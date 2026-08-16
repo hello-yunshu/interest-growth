@@ -10,8 +10,14 @@
 // pending switch does not move the label until a real restart applies it.
 //
 // Frozen runtime ids (Gate C §2.3 / §4).
+import { isRemoteRuntime } from './contract.js';
+// Gate E / R0.2 — re-export the single remote-runtime helper (desktop-remote,
+// android-remote, browser-remote) so feature pages and the controller never
+// branch on the literal desktop-remote string.
+export { isRemoteRuntime };
 export const RUNTIME_LOCAL = 'desktop-local';
 export const RUNTIME_REMOTE = 'desktop-remote';
+export const RUNTIME_ANDROID_REMOTE = 'android-remote';
 
 // Lifecycle statuses are plain strings so the reducer stays a pure function.
 export const PROBE_STATES = ['idle', 'probing', 'ok', 'error'];
@@ -38,7 +44,11 @@ export function initialRuntimeConnectState({
 }
 
 function assertRuntimeId(runtimeId, action) {
-  if (runtimeId !== RUNTIME_LOCAL && runtimeId !== RUNTIME_REMOTE) {
+  if (
+    runtimeId !== RUNTIME_LOCAL &&
+    runtimeId !== RUNTIME_REMOTE &&
+    runtimeId !== RUNTIME_ANDROID_REMOTE
+  ) {
     throw new Error(`unknown runtime id in ${action}: ${runtimeId}`);
   }
 }
@@ -121,11 +131,12 @@ export function runtimeConnectReducer(state, action) {
 
 // Gate D §P10/P25 — data location follows the ACTIVE runtime only. A pending
 // switch is not applied until a real restart, so the label never lies about
-// which dataset this session can touch.
+// which dataset this session can touch. Android is always android-remote, so
+// its data location is self-hosted-server like any other remote runtime.
 export function dataLocationOf(state) {
-  return state.activeRuntimeId === RUNTIME_REMOTE ? 'self-hosted-server' : 'local-device';
+  return isRemoteRuntime(state.activeRuntimeId) ? 'self-hosted-server' : 'local-device';
 }
 
 export function isRemoteActive(state) {
-  return state.activeRuntimeId === RUNTIME_REMOTE;
+  return isRemoteRuntime(state.activeRuntimeId);
 }

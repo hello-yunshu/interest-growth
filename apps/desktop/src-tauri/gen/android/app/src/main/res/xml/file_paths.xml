@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Gate E / v0.7 §4 — Android FileProvider is minimal and fail-closed.
+
+  Only app-owned directories that are genuinely meant to be shared or
+  exported are exposed as a content-URI namespace, and each is scoped to a
+  single app-controlled subdirectory:
+
+    * cache/export/  — transient files the app explicitly stages for export.
+    * files/share/   — durable files the app explicitly stages for sharing.
+
+  The external storage root, the cache root, the files root, canonical data,
+  credentials, internal databases and any other app-private state are NEVER
+  exposed through FileProvider. URI grants stay minimal: no wildcard path
+  means a content URI can only point at a file inside these two directories.
+
+  This file is checked statically (scripts/audit_public_repo.py) so a broad
+  `path="."` or an external-path root cannot be reintroduced.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <cache-path name="export" path="export/" />
+  <files-path name="share" path="share/" />
+</paths>

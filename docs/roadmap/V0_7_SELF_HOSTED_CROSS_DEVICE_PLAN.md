@@ -61,7 +61,7 @@ Gate C starts after the security/data-consistency items above are closed or expl
 - [x] Desktop-remote decision: explicit runtime mode never spawns the sidecar; no silent fallback to a local store; remote failure maps to Offline/LoginExpired/IdentityChanged with mutations disabled.
 - [x] Browser remote stays honest: cookie auth not implemented, so `browser-remote` remains a planned/not-release-proven adapter skeleton; no refresh token in `localStorage`.
 - [x] Gate D §D5–D7 UX source: `RuntimeConnect` (mode selection, server enrollment, owner bootstrap, login/logout, device listing/revoke, connection status) integrated into the System page; provider settings gated to desktop-local; data-location visual distinction in the desktop shell; explicit restart boundary with no silent local/server merge.
-- [x] Gate D final closure round (2026-08-14): business 401 forces a refresh (never reuses the rejected credential even when locally unexpired; generation-based coalescing, exactly one rotation + one retry under 20 concurrent 401s); restart with a stored refresh is NOT LoginExpired (`auth_expired` only after an explicit server denial; automatic native recovery attempt at startup); credentials are sent only after a FRESH native probe (TOCTOU closed, probe results are display cache only); strict fail-closed metadata parsing; single connection-state source of truth via machine `subscribe()`; remote commands gated to active desktop-remote with a frozen HTTP method allowlist; two-slot keyring crash recovery; async session writes; response metadata header passthrough; Offline recoverable; stable error-code taxonomy both sides.
+- [x] Gate D final closure round (2026-08-14): business 401 forces a refresh (never reuses the rejected credential even when locally unexpired; generation-based coalescing, exactly one rotation + one retry under 20 concurrent 401s); restart with a stored refresh is NOT LoginExpired (`auth_expired` only after an explicit server denial; automatic native recovery attempt at startup); credentials are sent only after a FRESH native probe (stale-authorization cache closed; probe results are display cache only; TLS/PKI is the endpoint cryptographic identity and `server_instance_id` is application-instance continuity, §4.9); strict fail-closed metadata parsing; single connection-state source of truth via machine `subscribe()`; remote commands gated to active desktop-remote with a frozen HTTP method allowlist; two-slot keyring crash recovery; async session writes; response metadata header passthrough; Offline recoverable; stable error-code taxonomy both sides; refresh 429/5xx classified as transient (not LoginExpired); remote env fails closed unless remote auth enabled.
 - [ ] Real desktop remote UX against a real public TLS host, real Windows/macOS package regression and real remote-server runtime: not done (Gate D finish).
 
 ## Gate D — Desktop remote mode
@@ -73,6 +73,22 @@ Gate C starts after the security/data-consistency items above are closed or expl
 - [ ] Preserve existing loopback sidecar startup, token rotation, App Data and provider keyring behavior under a real packaged Windows/macOS regression.
 - [ ] Verify Windows/macOS local mode has no regression on real packages.
 - [ ] Exercise enrollment/login against a real public TLS host and remote-server runtime.
+
+### Gate C/D decision (2026-08-14)
+
+The execution prompt's §5 release-safety acceptance list was run end-to-end
+and every item passed (see `docs/audits/V0_7_IMPLEMENTATION_AUDIT.md` §2 "Gate
+C/D §5 release-safety acceptance"): 248 Python, 66 ClientRuntime JS, 51 Rust,
+web lint/build, self-audit and SOURCE_MANIFEST all green. Therefore:
+
+```text
+Gate C = PASS (source/test)
+Gate D = PASS (source/test)
+```
+
+Still NOT release-proven (blocks Gate D release-proven status only): real
+public-TLS enrollment/login and real packaged Windows/macOS regression, which
+require hardware/package execution not present on this build machine.
 
 ## Gate E — Android application
 
@@ -89,52 +105,78 @@ Gate C starts after the security/data-consistency items above are closed or expl
       commands — is recorded in the runtime contract so a mobile build cannot
       silently pull in a desktop/local path.
 
-### Hardware / toolchain work (not started)
+### Toolchain work (2026-08-15, provisioned via Docker)
 
-Toolchain inventory checked 2026-08-14 on the build machine: no Java/JDK
-(`keytool` unavailable), no Android SDK (`ANDROID_HOME` unset, no
-`~/Library/Android/sdk`), no Rust Android targets and no `cargo-ndk`, no `adb`
-and no emulator or physical device. Until this toolchain is provisioned, none
-of the items below can be compiled, signed or executed; this is an explicit
-boundary, not an inferred pass.
+The host machine still has no native JDK/Android SDK/emulator, but a
+persistent Docker build environment now provides the full Android toolchain:
+image `interest-growth-android` (linux/amd64) with JDK 17, Android SDK 36 +
+NDK 27.1, the Rust `aarch64-linux-android` target, cargo-ndk and
+`@tauri-apps/cli` 2.11.4, built against Tencent/rsproxy mirrors with persisted
+`ig-gradle-cache` / `ig-cargo-home` volumes and invoked through
+`scripts/android-docker.sh`. There is still **no emulator image and no
+physical device** in this environment; emulator/device execution is an
+explicit boundary, not an inferred pass.
 
-- [ ] Initialize the Tauri Android project and mobile entry point.
-- [ ] Gate sidecar, updater, single-instance, window-state and desktop-only
-      credential code behind the Android target (inventory above; no Android
-      target exists to compile against yet).
-- [ ] Select mobile-supported secure storage, opener, dialog/document and
-      lifecycle implementations.
-- [ ] Implement remote server enrollment and authentication on Android.
-- [ ] Complete narrow-screen navigation, system Back, keyboard/insets, touch
-      and suspend/resume behavior.
-- [ ] Verify uploads, downloads/exports, Tutor WebSocket reconnect and
-      external links.
-- [ ] Test emulator plus at least one physical Android device.
+- [x] Initialize the Tauri Android project and mobile entry point.
+- [x] Gate sidecar, updater, single-instance, window-state and desktop-only
+      credential code behind the Android target; the Android shell is always
+      `android-remote` (`runtime_mode::android_remote_mode()`) and desktop-only
+      plugins are compiled out under `cfg(not(target_os="android"))`.
+- [x] Select mobile-supported secure storage (Android Keystore via
+      `android-native-keyring-store`) and lifecycle implementations; document
+      picker / share sheet / biometric unlock remain planned adapters.
+- [x] Implement remote server enrollment and authentication on Android
+      (reuses the hardened native remote broker; refresh credential encrypted
+      in the Android Keystore store, never in the renderer).
+- [~] Narrow-screen navigation, system Back, keyboard/insets, touch and
+      suspend/resume behavior: source wired (mobile entry point +
+      suspend/resume recovery); NOT verified on a running device.
+- [~] Uploads / downloads-exports / Tutor WebSocket reconnect / external
+      links: reuse the runtime-aware remote transport; NOT exercised on a
+      running device.
+- [ ] Test emulator plus at least one physical Android device (no emulator
+      image / device available in this environment; Gate E source/compile is
+      PASS, hardware execution is NOT RUN).
 
 ## Gate F — Direct APK release
 
-No APK work is started: there is no Android project, no release keystore and
-no signed APK. The deliverable evidence below remains an explicit boundary.
+Status (2026-08-15): a **signed universal release APK** is produced and
+signature-verified; the release keystore and installation guide exist.
+Upgrade-in-place and hardware installation remain NOT RUN (no device/emulator
+in this environment).
 
-- [ ] Produce a debug-signed APK for internal/ADB testing.
-- [ ] Generate and securely back up a project-owned release keystore outside Git.
-- [ ] Build a release APK signed with that key; no Google Play/AAB dependency.
-- [ ] Record application ID, version name, version code and signing-certificate fingerprint.
-- [ ] Publish SHA-256 checksum and a concise installation/update guide.
-- [ ] Install the first release on hardware, then prove a higher-version APK signed by the same key upgrades in place.
-- [ ] Recheck current Android developer-verification/sideload rules before broad handoff and choose an explicit path: ADB/internal use, current limited-device distribution, verified broad distribution or documented advanced user flow.
+- [x] Produce a debug APK for internal/ADB testing (`app-universal-debug.apk`).
+- [x] Generate and securely back up a project-owned release keystore outside Git
+      (`~/Documents/GitHub/interest-growth-keystore`, mounted read-only into the
+      build container; passwords via gitignored `keystore.properties` /
+      `PG_ANDROID_*` env vars — nothing in Gradle tracked source).
+- [x] Build a release APK signed with that key; no Google Play/AAB dependency.
+- [x] Record application ID (`app.psychologygrowth.desktop`), version name
+      `0.7.0`, version code `7000` and signing-certificate fingerprint
+      (`66871e86…aa66f`) — see `docs/audits/V0_7_ANDROID_APK_RELEASE_VERIFICATION.md`.
+- [x] Publish SHA-256 checksum and a concise installation/update guide —
+      `docs/android/ANDROID_INSTALL_GUIDE.md` (checksum
+      `01ce82e4…92024`).
+- [ ] Install the first release on hardware, then prove a higher-version APK
+      signed by the same key upgrades in place (NOT RUN — no device/emulator).
+- [ ] Recheck current Android developer-verification/sideload rules before broad
+      handoff and choose an explicit path (documented in the install guide;
+      decision still pending hardware validation).
 
 ## Gate G — Cross-device and recovery proof
 
-No cross-device or recovery evidence exists: no second client has run and no
-clean-deployment restore has been exercised on hardware.
+No cross-device or recovery evidence exists: no second client has run on
+hardware and no clean-deployment restore has been exercised on hardware. The
+Android `android-remote` runtime is implemented and compiled (see Gate E), so
+a Client A = desktop-remote + Client B = android-remote matrix is ready to be
+exercised once an Android device/emulator and a real server are available.
 
 - [ ] Mutate representative canonical data on one client and verify it on desktop and Android.
 - [ ] Exercise Area isolation, Evidence/Claim review, Tutor resume and Artifact download across clients.
 - [ ] Revoke one device without breaking other sessions.
 - [ ] Verify authentication expiry/recovery and incompatible-server behavior.
 - [ ] Back up the complete server data unit, restore it into a clean deployment and run integrity smoke tests.
-- [ ] Run existing compile/test/self-audit gates and add remote/Android contract tests.
+- [x] Run existing compile/test/self-audit gates and add remote/Android contract tests (66 ClientRuntime JS + controller tests and 52 Rust host tests, including the Android `android-remote` runtime-mode and per-server/per-device credential-namespace coverage).
 
 ## Deferred
 

@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Gate R2 §17 — single-source-of-truth version consistency check.
+
+Every user-visible version location in the repository must agree with the
+canonical product version declared in ``pyproject.toml``. The frozen 1.0
+runtime/API contracts (API_VERSION, SUPPORTED_API_VERSION, MIN_CLIENT_VERSION,
+backup format) are also asserted so a drift is caught before any RC tag.
+
+Locations checked (all must match the canonical product version):
+
+  * pyproject.toml                    -> project.version           (canonical)
+  * apps/api/pg_api/remote_auth.py    -> SERVER_VERSION / MIN_CLIENT_VERSION
+  * apps/desktop/src-tauri/Cargo.toml -> package.version
+  * apps/desktop/src-tauri/tauri.conf.json -> version
+  * apps/desktop/package.json         -> version
+  * apps/web/package.json             -> version
+  * apps/web/lib/runtime/contract.js  -> CLIENT_VERSION
+
+Frozen contracts (independent of the product version):
+
+  * API_VERSION == "1"  (remote_auth.py)
+  * SUPPORTED_API_VERSION == 1 (contract.js)
+  * BACKUP_FORMAT_VERSION == 1 (pg_api/backup_restore.py)
+
+This script is imported by scripts/verify.py so the check is enforced on every
+CI run; it can also be run standalone with `python scripts/verify_version_consistency.py`.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Python: the canonical product version.
+PYPROJECT = ROOT / "pyproject.toml"
+# Server + API: parsed as text to avoid importing the FastAPI app.
+REMOTE_AUTH = ROOT / "apps/api/pg_api/remote_auth.py"
+BACKUP_RESTORE = ROOT / "apps/api/pg_api/backup_restore.py"
+# Desktop: Rust + Tauri config + package manifests.
+CARGO = ROOT / "apps/desktop/src-tauri/Cargo.toml"
+TAURI_CONF = ROOT / "apps/desktop/src-tauri/tauri.conf.json"
+DESKTOP_PKG = ROOT / "apps/desktop/package.json"
+# Web / ClientRuntime.
+WEB_PKG = ROOT / "apps/web/package.json"
+CONTRACT_JS = ROOT / "apps/web/lib/runtime/contract.js"
+
+API_VERSION = "1"
+BACKUP_FORMAT_VERSION = 1
+
+
+def fail(msg: str) -> int:
+    print("VERSION CONSISTENCY FAIL:", msg)
+    return 1
+
+
+def _match(pattern: str, text: str) -> str | None:
+    found = re.search(pattern, text, flags=re.MULTILINE)
+    return found.group(1).strip() if found else None
+
+
+def main() -> int:
+    problems: list[str] = []
+
+    with PYPROJECT.open("rb") as fh:
+        canonical = tomllib.load(fh)["project"]["version"]
+
+    def require_equal(name: str, value: str | None) -> None:
+        if value is None:
+            problems.append(f"{name}: version not found")
+        elif value != canonical:
+            problems.append(f"{name}: {value!r} != canonical {canonical!r}")
+
+    # --- server / API ---------------------------------------------------- #
+    remote_text = REMOTE_AUTH.read_text(encoding="utf-8")
+    require_equal("remote_auth.SERVER_VERSION", _match(r'SERVER_VERSION\s*=\s*"([^"]+)"', remote_text))
+    require_equal("remote_auth.MIN_CLIENT_VERSION", _match(r'MIN_CLIENT_VERSION\s*=\s*"([^"]+)"', remote_text))
+    api_version = _match(r'API_VERSION\s*=\s*"([^"]+)"', remote_text)
+    if api_version != API_VERSION:
+        problems.append(f"remote_auth.API_VERSION: {api_version!r} != {API_VERSION!r}")
+
+    # --- desktop --------------------------------------------------------- #
+    cargo_text = CARGO.read_text(encoding="utf-8")
+    require_equal("Cargo.toml.package.version", _match(r'^version\s*=\s*"([^"]+)"', cargo_text))
+    tauri_text = TAURI_CONF.read_text(encoding="utf-8")
+    require_equal("tauri.conf.json.version", _match(r'"version"\s*:\s*"([^"]+)"', tauri_text))
+    require_equal("apps/desktop/package.json.version", str(json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))["version"]))
+
+    # --- web / ClientRuntime -------------------------------------------- #
+    require_equal("apps/web/package.json.version", str(json.loads(WEB_PKG.read_text(encoding="utf-8"))["version"]))
+    contract_text = CONTRACT_JS.read_text(encoding="utf-8")
+    require_equal("contract.js.CLIENT_VERSION", _match(r"CLIENT_VERSION\s*=\s*'([^']+)'", contract_text))
+    supported = _match(r"SUPPORTED_API_VERSION\s*=\s*(\d+)", contract_text)
+    if supported is None or int(supported) != int(API_VERSION):
+        problems.append(f"contract.js.SUPPORTED_API_VERSION: {supported!r} != {API_VERSION!r}")
+
+    # --- frozen backup format ------------------------------------------- #
+    backup_text = BACKUP_RESTORE.read_text(encoding="utf-8")
+    backup_version = _match(r"BACKUP_FORMAT_VERSION\s*=\s*(\d+)", backup_text)
+    if backup_version is None or int(backup_version) != BACKUP_FORMAT_VERSION:
+        problems.append(f"backup_restore.BACKUP_FORMAT_VERSION: {backup_version!r} != {BACKUP_FORMAT_VERSION!r}")
+
+    if problems:
+        for problem in problems:
+            print("  -", problem)
+        return 1
+
+    print(f"VERSION CONSISTENCY: OK (canonical {canonical}, API {API_VERSION}, backup format {BACKUP_FORMAT_VERSION})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

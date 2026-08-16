@@ -61,3 +61,101 @@ def test_migration_and_secret_guards_detect_forbidden_truth_and_tokens():
     assert "possible GitHub token" in audit_public_repo.content_findings(
         "config.txt", fake_token
     )
+
+
+def _write_capability(root: Path, rel: Path, data: dict) -> None:
+    target = root / rel
+    target.write_text(__import__("json").dumps(data, indent=2))
+
+
+def test_android_capability_gate_rejects_non_minimal_permissions(tmp_path):
+    # Baseline: the minimal Android capability passes cleanly.
+    root = tmp_path
+    root.mkdir(exist_ok=True)
+    desktop = root / audit_public_repo.DESKTOP_CAPABILITY
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    _write_capability(
+        root,
+        audit_public_repo.ANDROID_CAPABILITY,
+        {
+            "identifier": audit_public_repo.ANDROID_CAPABILITY_IDENTIFIER,
+            "platforms": ["android"],
+            "permissions": ["core:default", "opener:allow-default-urls"],
+        },
+    )
+    _write_capability(
+        root,
+        audit_public_repo.DESKTOP_CAPABILITY,
+        {"identifier": "main-capability", "platforms": ["macOS", "windows", "linux"], "permissions": []},
+    )
+    assert audit_public_repo.android_capability_findings(root) == []
+
+    # Any permission beyond the minimal allowlist fails the denylist gate.
+    _write_capability(
+        root,
+        audit_public_repo.ANDROID_CAPABILITY,
+        {
+            "identifier": audit_public_repo.ANDROID_CAPABILITY_IDENTIFIER,
+            "platforms": ["android"],
+            "permissions": [
+                "core:default",
+                "opener:allow-default-urls",
+                "dialog:allow-save",
+                "window-state:default",
+                "fs:allow-write-file",
+            ],
+        },
+    )
+    findings = audit_public_repo.android_capability_findings(root)
+    assert any("denylist" in f for f in findings), findings
+    assert any("dialog:allow-save" in f and "window-state:default" in f and "fs:allow-write-file" in f for f in findings)
+
+
+def test_android_capability_gate_enforces_platform_isolation(tmp_path):
+    root = tmp_path
+    root.mkdir(exist_ok=True)
+    desktop = root / audit_public_repo.DESKTOP_CAPABILITY
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    android = root / audit_public_repo.ANDROID_CAPABILITY
+    # Android scoped to more than android fails.
+    _write_capability(
+        root,
+        audit_public_repo.ANDROID_CAPABILITY,
+        {
+            "identifier": audit_public_repo.ANDROID_CAPABILITY_IDENTIFIER,
+            "platforms": ["android", "iOS"],
+            "permissions": ["core:default", "opener:allow-default-urls"],
+        },
+    )
+    _write_capability(
+        root,
+        audit_public_repo.DESKTOP_CAPABILITY,
+        {"identifier": "main-capability", "platforms": ["macOS", "windows", "linux"], "permissions": []},
+    )
+    findings = audit_public_repo.android_capability_findings(root)
+    assert any("scoped to exactly" in f for f in findings), findings
+
+    # Desktop capability with no explicit platforms leaks into Android and fails.
+    _write_capability(
+        root,
+        audit_public_repo.ANDROID_CAPABILITY,
+        {
+            "identifier": audit_public_repo.ANDROID_CAPABILITY_IDENTIFIER,
+            "platforms": ["android"],
+            "permissions": ["core:default", "opener:allow-default-urls"],
+        },
+    )
+    _write_capability(
+        root,
+        audit_public_repo.DESKTOP_CAPABILITY,
+        {"identifier": "main-capability", "permissions": []},
+    )
+    findings = audit_public_repo.android_capability_findings(root)
+    assert any("capability isolation" in f for f in findings), findings
+
+
+def test_android_capability_gate_requires_android_file(tmp_path):
+    root = tmp_path
+    root.mkdir(exist_ok=True)
+    findings = audit_public_repo.android_capability_findings(root)
+    assert any("missing Android capability" in f for f in findings), findings

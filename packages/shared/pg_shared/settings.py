@@ -41,6 +41,32 @@ def _data_path(root: str, child: str, fallback: str) -> str:
     return str(Path(root) / child) if root else fallback
 
 
+class ConfigError(RuntimeError):
+    """Raised when the resolved configuration violates a fail-closed invariant."""
+
+
+def validate_settings(settings: Settings) -> None:
+    """Enforce startup configuration invariants (Gate C/D §4.2).
+
+    A `remote` environment MUST authenticate its remote API. Shipping a remote
+    compose with `PG_REMOTE_AUTH_ENABLED=false` would expose every protected
+    route unauthenticated; that is a fail-open configuration and is rejected at
+    startup. `development` / `desktop` are not subject to this remote-only
+    invariant.
+
+    The owner bootstrap token is intentionally NOT a startup block: the
+    bootstrap endpoint already fail-closes when it is empty (no owner can be
+    created, therefore no device can authenticate, therefore protected routes
+    stay closed). Blocking startup here would prevent the empty-default remote
+    compose from even booting into its safe state.
+    """
+    if settings.app_env == "remote" and not settings.remote_auth_enabled:
+        raise ConfigError(
+            "APP_ENV=remote requires PG_REMOTE_AUTH_ENABLED=true; refusing to start "
+            "an unauthenticated remote API"
+        )
+
+
 def get_settings() -> Settings:
     data_root = os.getenv("APP_DATA_ROOT", "").strip()
     database_default = (

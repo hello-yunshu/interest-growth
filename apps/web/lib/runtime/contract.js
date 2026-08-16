@@ -56,7 +56,7 @@ export const SUPPORTED_API_VERSION = 1;
 // The shipping client package version. The compatibility checker requires an
 // explicit version input so a 0.6 client against min_client_version=0.7.0 is
 // honestly judged UpdateRequired (Gate C §8.3) rather than bypassed.
-export const CLIENT_VERSION = '0.7.0';
+export const CLIENT_VERSION = '1.0.0';
 
 // Gate E — frozen capability vocabulary. Every runtime descriptor's
 // `capabilities` object uses exactly these keys; feature pages branch on
@@ -105,6 +105,15 @@ export const DESKTOP_ONLY_CAPABILITIES = Object.freeze([
 
 export function isRuntimeId(value) {
   return RUNTIME_IDS.includes(value);
+}
+
+// Gate E / R0.2 — a remote runtime always shares the self-hosted-server data
+// location and the native broker transport. Feature pages and controllers
+// must use this helper instead of branching on the literal "desktop-remote"
+// string, so android-remote (and the planned browser-remote) are never
+// misclassified as local.
+export function isRemoteRuntime(runtimeId) {
+  return runtimeId === 'desktop-remote' || runtimeId === 'android-remote' || runtimeId === 'browser-remote';
 }
 
 export function isPlatformId(value) {

@@ -115,8 +115,19 @@ def main() -> None:
                 )
             )
         finally:
+            # PyInstaller one-file bootloaders fork a child process that owns
+            # the app's DB handle. Terminating only the parent leaves the child
+            # alive holding psychology_growth.db, so Windows temp-dir cleanup
+            # fails with WinError 32. Kill the whole process tree instead.
             if proc.poll() is None:
-                proc.terminate()
+                if sys.platform == "win32":
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        capture_output=True,
+                        check=False,
+                    )
+                else:
+                    proc.terminate()
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:

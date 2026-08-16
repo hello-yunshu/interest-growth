@@ -6,18 +6,20 @@
 // yet (see remote.js). The renderer never receives a refresh credential.
 import { invoke } from '@tauri-apps/api/core';
 import { isDesktopShell } from '../platform.js';
+import { isRemoteRuntime } from '../contract.js';
 
 export const WEB_API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 
 let runtimePromise = null;
 
 function normalize(runtime) {
-  // The native runtime reports the resolved runtimeId (desktop-local or
-  // desktop-remote). It is passed through so ClientRuntime never infers
-  // "desktop-local" from "isTauri()" alone.
+  // The native runtime reports the resolved runtimeId (desktop-local,
+  // desktop-remote or android-remote). It is passed through so ClientRuntime
+  // never infers "desktop-local" from "isTauri()" alone. Android is always
+  // android-remote, so its data location is self-hosted-server too.
   return {
     runtimeId: runtime.runtimeId || 'desktop-local',
-    dataLocation: runtime.runtimeId === 'desktop-remote' ? 'self-hosted-server' : 'local-device',
+    dataLocation: isRemoteRuntime(runtime.runtimeId) ? 'self-hosted-server' : 'local-device',
     apiBase: runtime.endpoint ? `${runtime.endpoint}/api` : WEB_API_BASE,
     token: runtime.token || '',
     desktop: true,

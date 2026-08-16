@@ -1,0 +1,213 @@
+name: Build Artifacts
+
+# Downloadable test artifacts for main/manual builds. Nothing here creates a
+# GitHub Release; main only uploads Actions artifacts (kept ~14 days).
+# Tag releases are handled by release.yml.
+#
+# Every job reuses the SAME repository scripts that PR CI uses, so there is
+# never a second, laxer verification path (prompt §6 / §30).
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+
+concurrency:
+  group: build-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  android-verify:
+    name: Android verify APK (clean Actions build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build Android toolchain image
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
+        with:
+          context: .
+          file: docker/android/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: interest-growth-android
+          cache-from: type=gha,scope=android-toolchain
+          cache-to: type=gha,mode=max,scope=android-toolchain
+      - name: Build Web static export
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c 'cd apps/web && npm ci && NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run build'
+      - name: Create Android sidecar placeholders for tauri-build
+        # binaries/ is git-ignored; a clean checkout has no sidecar files.
+        # tauri-build's externalBin check requires them to exist even though
+        # the Android runtime is online-first (Native RemoteTransport) and
+        # never launches a local core. Zero-byte placeholders satisfy the
+        # build; the real PyInstaller sidecar is desktop-only.
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+            : > "apps/desktop/src-tauri/binaries/psychology-growth-core-${t}"
+          done
+      - name: Build Android verify APK (debug, unsigned-release-not-claimed)
+        # Debug APK needs no signing secrets. The release buildType is NOT used
+        # here (no signing material) so this artifact is a verify APK only.
+        # The CLI is driven through the local @tauri-apps/cli (npm run tauri)
+        # after npm ci, matching the desktop workflows, so the generated Gradle
+        # android-studio-script resolves the CLI correctly in a clean checkout.
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target aarch64 --debug'
+      - name: Locate verify APK
+        id: apk
+        run: |
+          APK="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
+          if [ -z "${APK}" ]; then
+            echo "no debug APK found" >&2
+            exit 1
+          fi
+          mkdir -p dist/android
+          cp "${APK}" dist/android/interest-growth-v1.0.0-android-arm64-debug.apk
+          echo "path=dist/android/interest-growth-v1.0.0-android-arm64-debug.apk" >> "$GITHUB_OUTPUT"
+      - name: APK static verification
+        run: bash scripts/ci/verify_android_apk.sh "${{ steps.apk.outputs.path }}"
+      - name: Generate SHA256SUMS for artifacts
+        run: python3 scripts/ci/generate_release_checksums.py --out dist/SHA256SUMS.txt dist/android/*.apk
+      - name: Upload Android verify APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: interest-growth-android-arm64-debug
+          path: |
+            dist/android/*.apk
+            dist/SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  windows-build:
+    name: Windows x64 build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: '3.12' }
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+      - name: Install Python build dependencies
+        run: python -m pip install -e ".[desktop]"
+      - name: Install web dependencies
+        run: npm ci --prefix apps/web
+      - name: Install desktop CLI
+        run: npm ci --prefix apps/desktop
+      - name: Build Python sidecar
+        run: python scripts/build_desktop_sidecar.py --target x86_64-pc-windows-msvc
+      - name: Smoke packaged Python sidecar
+        run: python scripts/smoke_desktop_sidecar.py --target x86_64-pc-windows-msvc
+      - name: Build web static export
+        env:
+          NEXT_PUBLIC_API_BASE: http://localhost:8000/api
+        run: npm --prefix apps/web run build
+      - name: Build Windows bundle (unsigned test artifact)
+        run: npm --prefix apps/desktop run build -- --target x86_64-pc-windows-msvc
+      - name: Packaged desktop-local startup smoke (Windows)
+        # R0 §4 — launch the packaged app, assert setup survives (the known
+        # desktop-local startup BLOCKER regression) and the local Core sidecar
+        # is spawned. Place the built sidecar next to the exe as in a bundle.
+        # Process/runtime-health evidence is the accepted bar on headless CI.
+        shell: bash
+        run: |
+          EXE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/interest-growth-desktop.exe"
+          SIDE="$GITHUB_WORKSPACE/apps/desktop/src-tauri/binaries/psychology-growth-core-x86_64-pc-windows-msvc.exe"
+          test -f "$EXE" || { echo "no packaged exe: $EXE" >&2; exit 1; }
+          test -f "$SIDE" || { echo "no sidecar: $SIDE" >&2; exit 1; }
+          cp "$SIDE" "$(dirname "$EXE")/psychology-growth-core.exe"
+          bash scripts/ci/verify_packaged_startup.sh "$EXE" --win
+      - name: Upload unsigned Windows artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: interest-growth-windows-x64-unsigned
+          path: apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**
+          retention-days: 14
+          if-no-files-found: error
+
+  macos-build:
+    name: macOS arm64 build
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: '3.12' }
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          target: aarch64-apple-darwin
+      - name: Install Python build dependencies
+        run: python -m pip install -e ".[desktop]"
+      - name: Install web dependencies
+        run: npm ci --prefix apps/web
+      - name: Install desktop CLI
+        run: npm ci --prefix apps/desktop
+      - name: Build Python sidecar
+        run: python scripts/build_desktop_sidecar.py --target aarch64-apple-darwin
+      - name: Smoke packaged Python sidecar
+        run: python scripts/smoke_desktop_sidecar.py --target aarch64-apple-darwin
+      - name: Build web static export
+        env:
+          NEXT_PUBLIC_API_BASE: http://localhost:8000/api
+        run: npm --prefix apps/web run build
+      - name: Build macOS bundle (ad-hoc test artifact)
+        run: npm --prefix apps/desktop run build -- --target aarch64-apple-darwin
+      - name: Packaged desktop-local startup smoke (macOS)
+        # R0 §4 — launch the packaged .app binary, assert setup survives and
+        # the local Core sidecar is spawned. Process/runtime-health evidence is
+        # the accepted bar on headless CI.
+        run: |
+          APP="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Interest Growth.app"
+          BIN="$APP/Contents/MacOS/interest-growth-desktop"
+          test -d "$APP" || { echo "no .app bundle: $APP" >&2; exit 1; }
+          test -x "$BIN" || { echo "no app binary: $BIN" >&2; exit 1; }
+          bash scripts/ci/verify_packaged_startup.sh "$BIN" --mac
+      - name: Upload ad-hoc macOS artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: interest-growth-macos-arm64-adhoc
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/**
+          retention-days: 14
+          if-no-files-found: error
