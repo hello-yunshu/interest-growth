@@ -8,16 +8,16 @@
 ```
 R0 v0.7 closure        → DONE (see PROJECT_STATUS §Gate R0)
 R1 product completion  → DONE (see PROJECT_STATUS §Gate R1)
-R2 release hardening   → IN PROGRESS (this document tracks it)
-main PR + merge
-v1.0.0-rc.1 tag        → full remote Actions
-independent audit
-fix if needed → next RC
-v1.0.0 tag             → full remote Actions
-sign + verify
-release-gate
-publish GitHub Release
-final audit / report
+R2 release hardening   → DONE (see PROJECT_STATUS §Gate R2)
+main PR + merge        → DONE (PR #6 → main `4aea601`)
+v1.0.0-rc.1 tag        → DONE (`4aea601`); full RC Actions PARTIAL — external signing blocker
+independent audit      → DONE (BLOCKER=0, HIGH=0)
+fix if needed → next RC → BLOCKED on signing secrets
+v1.0.0 tag             → pending (needs signing secrets)
+sign + verify          → pending (external credentials)
+release-gate           → pending
+publish GitHub Release → pending
+final audit / report   → pending
 ```
 
 ## R2 — Release Hardening tracking

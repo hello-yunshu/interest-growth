@@ -3,7 +3,12 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.0 — v1.0.0-rc.1 (in progress)
+## 1.0.0 — v1.0.0-rc.1 (2026-08-16)
+
+**Release evidence**: GitHub Actions run `31930997639` — all deterministic
+gates PASS (CI, Web E2E, Docker integration, Rust, Python, dependency
+security). Android signed release APK is **fail-closed** — signing keystore
+secrets are not configured in the repository (external blocker).
 
 ### 1.0 highlights
 
