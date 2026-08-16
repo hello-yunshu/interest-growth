@@ -47,6 +47,20 @@ jobs:
           tags: interest-growth-android
           cache-from: type=gha,scope=android-toolchain
           cache-to: type=gha,mode=max,scope=android-toolchain
+      - name: Build Web static export
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c 'cd apps/web && npm ci && NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run build'
+      - name: Create Android sidecar placeholders for tauri-build
+        # binaries/ is git-ignored; a clean checkout has no sidecar files.
+        # tauri-build's externalBin check requires them to exist even though
+        # the Android runtime is online-first and never launches a local core.
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+            : > "apps/desktop/src-tauri/binaries/psychology-growth-core-${t}"
+          done
       - name: Build emulator x86_64 debug APK (no signing secrets)
         run: |
           docker run --rm --platform linux/amd64 \
