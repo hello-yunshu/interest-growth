@@ -279,7 +279,7 @@ jobs:
           docker compose -p ig-emulator logs api >&2 || true
           exit 1
       - name: Boot emulator and run real remote vertical slice
-        uses: reactivecircus/android-emulator-runner@cad321644df6d8cf1985a42767272ff068adb9cb # v2.38.0
+        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
         with:
           api-level: 35
           target: google_apis
