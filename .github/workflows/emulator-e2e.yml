@@ -61,11 +61,6 @@ jobs:
           X86="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
           if [ -z "${X86}" ]; then echo "no x86_64 debug APK produced" >&2; exit 1; fi
           cp "${X86}" dist/android/interest-growth-android-x86_64-debug.apk
-      - name: Install emulator system image + create AVD
-        run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "system-images;android-35;google_apis;x86_64" "platform-tools" "emulator" >/dev/null
-          echo "no" | avdmanager create avd -n igtest -k "system-images;android-35;google_apis;x86_64" --force
       - name: Boot self-hosted API server (docker, current commit)
         run: |
           set -euo pipefail
@@ -90,7 +85,11 @@ jobs:
           target: google_apis
           arch: x86_64
           avd-name: igtest
-          force-avd-creation: false
+          force-avd-creation: true
+          # The runner's internal android-avd-manager installs the Android SDK
+          # + system image and creates the AVD on the clean runner (no
+          # ANDROID_SDK_ROOT was configured, so a manual sdkmanager step would
+          # exit 127 before provisioning anything).
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
