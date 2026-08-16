@@ -309,12 +309,17 @@ jobs:
             # be executed as a command. Build the file with printf instead.
             printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-ci"}' > /tmp/ig_e2e.json
             adb push /tmp/ig_e2e.json /data/local/tmp/ig_e2e.json
-            adb shell run-as ${PKG} sh -c 'mkdir -p files && cp /data/local/tmp/ig_e2e.json files/ig_e2e_config.json && chmod 600 files/ig_e2e_config.json'
+            # adb shell + run-as nesting mangles `sh -c 'a && b'` (device sh splits
+            # on &&/spaces), so run three simple run-as commands instead — each
+            # carries exactly one action, no nested shell, no list operators.
+            adb shell run-as ${PKG} mkdir -p files
+            adb shell run-as ${PKG} cp /data/local/tmp/ig_e2e.json files/ig_e2e_config.json
+            adb shell run-as ${PKG} chmod 600 files/ig_e2e_config.json
             # Launch the app; debug setup spawns the debug-only vertical slice.
             adb shell am start -n ${PKG}/.MainActivity
             # Poll the result file (up to ~90s) written by the in-app slice.
             for _ in $(seq 1 45); do
-              RESULT="$(adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true)"
+              RESULT="$(adb shell run-as ${PKG} cat files/ig_e2e_result.json 2>/dev/null || true)"
               if echo "$RESULT" | grep -q '"result": "PASS"'; then
                 echo "emulator real remote vertical slice: PASS"
                 echo "$RESULT"
@@ -329,7 +334,7 @@ jobs:
               sleep 2
             done
             echo "FAIL: vertical slice did not complete in time" >&2
-            adb shell run-as ${PKG} sh -c 'cat files/ig_e2e_result.json 2>/dev/null' 2>/dev/null || true
+            adb shell run-as ${PKG} cat files/ig_e2e_result.json 2>/dev/null || true
             exit 1
 
   security-dependency:
