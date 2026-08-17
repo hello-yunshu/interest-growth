@@ -14,6 +14,9 @@ v1.0.0-rc.1 tag        → DONE (`877734d`); full RC Actions SUCCESS (run `32000
 independent audit      → DONE (BLOCKER=0, HIGH=0)
 signing secrets        → DONE (self-signed keystore configured; fail-closed sign gate PASS)
 RC1 published          → DONE (prerelease; signed APK + SPDX + SHA256SUMS + verification report)
+independent audit RC2  → DONE (HIGH-1/2/3 + credential/reliability/supply-chain MEDIUMs in `c6e3b7a`)
+v1.0.0-rc.2            → FAILED (run `32014725731`; APK+emulator gate) — UI/IPC smoke driver not invoked; never published
+v1.0.0-rc.3            → DONE (`ab2cfc4`, tag `v1.0.0-rc.3`); full RC Actions SUCCESS (run `32016776864`, 18/18 jobs), android UI/IPC smoke PASS, published prerelease
 soak / review          → next
 v1.0.0 tag             → pending (after RC soak/review; non-prerelease)
 sign + verify          → pending (Android keystore ready; Windows/macOS remain external blockers)
