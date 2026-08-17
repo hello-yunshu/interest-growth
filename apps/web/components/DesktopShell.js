@@ -7,6 +7,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { api, getDesktopRuntime, refreshDesktopRuntime, getInterestAreaSelector, setInterestAreaSelector } from '../lib/api';
 import Icon from './Icon';
 import { useRuntimeCopy } from './useRuntimeCopy';
+import { maybeRunUiIpcE2e } from '../lib/runtime/ui-ipc-e2e';
 
 const NAV = [
   { href: '/', label: '今日', icon: 'home', group: 'focus', keywords: 'home dashboard today 首页' },

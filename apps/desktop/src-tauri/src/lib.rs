@@ -24,6 +24,9 @@ mod runtime_mode;
 // module is `cfg(debug_assertions)`-gated and inert in release builds.
 #[cfg(debug_assertions)]
 mod emulator_e2e;
+// Gate R2 §8.2 — Android UI/IPC smoke invoke back-end. Compiled in both build
+// kinds so the invoke_handler list stays valid; bodies are inert in release.
+mod ui_ipc_e2e;
 
 use remote::RemoteBroker;
 #[cfg(not(target_os = "android"))]
@@ -769,6 +772,10 @@ pub fn run() {
             remote::remote_session_status,
             remote::remote_verify_identity,
             remote::remote_logout,
+            // Gate R2 §8.2 — Android UI/IPC smoke invoke channel (inert outside
+            // debug+android).
+            ui_ipc_e2e::ui_ipc_e2e_should_run,
+            ui_ipc_e2e::ui_ipc_e2e_record,
         ]);
     // Gate E §6.3 — the desktop window-lifecycle hook only exists on desktop.
     // The Android host stops the (never-spawned) Core on nothing.
