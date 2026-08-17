@@ -220,3 +220,56 @@ jobs:
       - name: Audit Rust dependencies (high-confidence advisories)
         working-directory: apps/desktop/src-tauri
         run: cargo audit
+
+  # Gate D §17 — stable aggregate name for branch protection.
+  # main requires THIS single job instead of each individual job name, so a
+  # future job rename does not silently weaken the protected-branch status
+  # checks. It is red if any critical PR gate is red.
+  pr-required-gate:
+    name: PR Required Gate (aggregate of all critical PR checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: always()
+    needs:
+      - actionlint
+      - repo-integrity
+      - host
+      - native-core
+      - exact-rag-upstreams
+      - web
+      - rust
+      - security-dependency
+    steps:
+      - name: Enforce aggregate success
+        shell: bash
+        run: |
+          actionlint="${{ needs.actionlint.result }}"
+          repo_integrity="${{ needs.repo-integrity.result }}"
+          host="${{ needs.host.result }}"
+          native_core="${{ needs.native-core.result }}"
+          exact_rag="${{ needs.exact-rag-upstreams.result }}"
+          web="${{ needs.web.result }}"
+          rust="${{ needs.rust.result }}"
+          security_dependency="${{ needs.security-dependency.result }}"
+          failed=""
+          for pair in \
+              "actionlint" "repo-integrity" "host" "native-core" \
+              "exact-rag-upstreams" "web" "rust" "security-dependency"; do
+            case "$pair" in
+              actionlint) r="$actionlint" ;;
+              repo-integrity) r="$repo_integrity" ;;
+              host) r="$host" ;;
+              native-core) r="$native_core" ;;
+              exact-rag-upstreams) r="$exact_rag" ;;
+              web) r="$web" ;;
+              rust) r="$rust" ;;
+              security-dependency) r="$security_dependency" ;;
+            esac
+            if [ "$r" != "success" ]; then failed="${failed} ${pair}=${r}"; fi
+          done
+          if [ -n "$failed" ]; then
+            echo "PR Required Gate FAIL: one or more critical jobs did not succeed:" >&2
+            echo "$failed" >&2
+            exit 1
+          fi
+          echo "PR Required Gate: PASS (all critical jobs succeeded)"

@@ -22,6 +22,7 @@
 package app.psychologygrowth.desktop
 
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -68,6 +69,11 @@ class InterestGrowthPlugin(private val activity: Activity) : Plugin(activity) {
     // between the saveDocumentFromFile command and its activity-result
     // callback. The callback receives a fresh Invoke, so the pending payload
     // is kept here on the plugin instance (single pending save at a time).
+    //
+    // §14 — single-flight: only ONE save dialog may be pending at a time. A
+    // second concurrent saveDocumentFromFile must be rejected (not silently
+    // overwrite the first pending payload in this single slot), or the first
+    // callback would copy from the wrong source.
     private var pendingSaveFromFile: SaveDocumentFromFileArgs? = null
 
     // ------------------------------------------------------------ stageContentUri
@@ -85,6 +91,16 @@ class InterestGrowthPlugin(private val activity: Activity) : Plugin(activity) {
                 throw IllegalArgumentException("maxBytes must be positive")
             }
             val uri = Uri.parse(args.uri)
+            // Gate HIGH-2 — the renderer is NOT a security boundary, so the
+            // native layer must fail closed: only a `content://` URI supplied
+            // by SAF is acceptable. `file://`, `http(s)://`, `android.resource://`,
+            // an empty/malformed scheme are all rejected before any provider
+            // call. This must NEVER be relaxed to grant broad storage access.
+            if (uri.scheme == null || uri.scheme != ContentResolver.SCHEME_CONTENT) {
+                throw IllegalArgumentException(
+                    "only content:// URIs are accepted (got scheme: ${uri.scheme ?: "none"})"
+                )
+            }
             val contentResolver = activity.contentResolver
 
             // Resolve display name and size from the content provider.
@@ -139,6 +155,12 @@ class InterestGrowthPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun saveDocumentFromFile(invoke: Invoke) {
         try {
+            if (pendingSaveFromFile != null) {
+                // §14 — a save dialog is already pending in the single slot.
+                // Reject rather than overwrite, so the first callback never
+                // copies from a source that was replaced by a second request.
+                throw IllegalStateException("a save dialog is already pending")
+            }
             val args = invoke.parseArgs(SaveDocumentFromFileArgs::class.java)
             val src = File(args.sourcePath)
             if (!src.isFile) {
