@@ -481,7 +481,7 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - name: Install Host verification dependencies
         if: needs.release-meta.outputs.is_stable == 'true'
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,rag-graphrag]"
       - name: Standalone Native Core + exact RAG upstreams
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
@@ -630,6 +630,7 @@ jobs:
           docker compose -p ig-cross build api
           docker compose -p ig-cross up -d api
           for _ in $(seq 1 60); do if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then break; fi; sleep 2; done
+          curl -sS -f http://127.0.0.1:8000/api/health >/dev/null || { echo "server failed to become healthy" >&2; docker compose -p ig-cross logs api >&2 || true; exit 1; }
           export BASE="http://127.0.0.1:8000/api"
           export BOOTSTRAP_TOKEN="ci-bootstrap-token-7a1f"
           export OWNER_PASSWORD="Ci-Owner-Password-2026!"
@@ -641,14 +642,16 @@ jobs:
           base = os.environ["BASE"]
           bt = os.environ["BOOTSTRAP_TOKEN"]
           pwd = os.environ["OWNER_PASSWORD"]
-          def req(method, path, body=None, auth=None):
+          def req(method, path, body=None, auth=None, headers=None):
               r = urllib.request.Request(base + path, method=method)
               r.add_header("Content-Type", "application/json")
               if auth: r.add_header("Authorization", "Bearer " + auth)
+              for k, v in (headers or {}).items():
+                  r.add_header(k, v)
               data = json.dumps(body).encode() if body is not None else None
               with urllib.request.urlopen(r, data=data) as resp:
                   return resp.status, json.loads(resp.read() or b"{}")
-          req("POST", "/auth/owner/bootstrap", {"owner_password": pwd}, auth=None)
+          req("POST", "/auth/owner/bootstrap", {"owner_password": pwd}, headers={"X-PG-Owner-Bootstrap-Token": bt})
           # swap header vector (bootstrap token) is not needed for owner login
           s1, dA = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "desktop-remote-A", "platform": "desktop", "app_version": "1.0.0"})
           s2, dB = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "android-remote-B", "platform": "android", "app_version": "1.0.0"})
@@ -719,6 +722,11 @@ jobs:
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
           python -m pip install -e . pyinstaller
+      - name: Install web and desktop npm dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          npm --prefix apps/web ci
+          npm --prefix apps/desktop ci
       - name: Build x64 sidecar + web + desktop package
         if: needs.release-meta.outputs.is_stable == 'true'
         shell: bash
@@ -781,6 +789,11 @@ jobs:
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
           python -m pip install -e . pyinstaller
+      - name: Install web and desktop npm dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          npm --prefix apps/web ci
+          npm --prefix apps/desktop ci
       - name: Build arm64 sidecar + web + desktop package
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
