@@ -23,7 +23,6 @@ class Keyring {
             System.loadLibrary("interest_growth_desktop_lib")
         }
 
-        @JvmStatic
         external fun initializeNdkContext(context: Context)
     }
 }

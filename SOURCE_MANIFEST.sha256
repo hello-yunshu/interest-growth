@@ -92,6 +92,7 @@ db33c2930bdfe30c572042b8ac617d48c5453f7d1294838482f3c7fdeabe9f8f  apps/desktop/s
 6930bcb2c17dfdc11a7bab805b2d1f27999c5af70cc833bd169075cc9453c34a  apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml
 1e25aeed40b0bf3187572dbc94f6801f5c59afca4ad709b5934c5fb677a89817  apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/InterestGrowthPlugin.kt
 c06e636ee086cbf490672bcda0a14b41081fbf2510da4a3cf0f0fdce204c9687  apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/MainActivity.kt
+634d8d156704eec613f20cb7e50dbeea7ef5e786772374f5daeccb8aae361730  apps/desktop/src-tauri/gen/android/app/src/main/java/io/crates/keyring/Keyring.kt
 01d1a6a6c1234eb7fe270d097eb283d72b9c95ae5118886f1b6573aad280f1f7  apps/desktop/src-tauri/gen/android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml
 ed423c73a6f40a4d2909f0901e60527b3a807cd59e1b5593bcaae1808b1c6321  apps/desktop/src-tauri/gen/android/app/src/main/res/drawable/ic_launcher_background.xml
 68466a0a3006f183eb3af4e978d52f50a68087a1aac0880bd16eef3760153bcb  apps/desktop/src-tauri/gen/android/app/src/main/res/layout/activity_main.xml
