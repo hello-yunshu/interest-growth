@@ -65,9 +65,11 @@ jobs:
             esac
           fi
           if [ "$PRE" = "true" ]; then STABLE=false; else STABLE=true; fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=${PRE}" >> "$GITHUB_OUTPUT"
-          echo "is_stable=${STABLE}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=${TAG}"
+            echo "is_prerelease=${PRE}"
+            echo "is_stable=${STABLE}"
+          } >> "$GITHUB_OUTPUT"
 
   repo-integrity:
     name: Repository integrity gate
@@ -104,7 +106,7 @@ jobs:
       - name: Run strict Host cutover audit
         run: python scripts/audit_host_v050.py . --strict
 
-  python-3.11:
+  python-3-11:
     name: Python host gate (3.11)
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -619,7 +621,8 @@ jobs:
           export BOOTSTRAP_TOKEN="ci-bootstrap-token-7a1f"
           export OWNER_PASSWORD="Ci-Owner-Password-2026!"
           # Server instance identity is frozen; recreate can't silently shift it
-          export CI_SERVER_INSTANCE_ID="$(curl -sS "${BASE}/system/capabilities" | python3 -c 'import sys,json;print(json.load(sys.stdin)["server_instance_id"])')"
+          CI_SERVER_INSTANCE_ID="$(curl -sS "${BASE}/system/capabilities" | python3 -c 'import sys,json;print(json.load(sys.stdin)["server_instance_id"])')"
+          export CI_SERVER_INSTANCE_ID
           python3 - <<'PY'
           import json, os, urllib.request
           base = os.environ["BASE"]
@@ -817,7 +820,7 @@ jobs:
     needs:
       - repo-integrity
       - python-host
-      - python-3.11
+      - python-3-11
       - web
       - rust
       - docker-integration
@@ -843,7 +846,7 @@ jobs:
       - release-gate
       - repo-integrity
       - python-host
-      - python-3.11
+      - python-3-11
       - web
       - rust
       - docker-integration
@@ -886,9 +889,11 @@ jobs:
             esac
           fi
           if [ "$PRE" = "true" ]; then STABLE=false; else STABLE=true; fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${PRE}" >> "$GITHUB_OUTPUT"
-          echo "is_stable=${STABLE}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=${TAG}"
+            echo "prerelease=${PRE}"
+            echo "is_stable=${STABLE}"
+          } >> "$GITHUB_OUTPUT"
       - name: "Fail-closed: tag must resolve to the exact build SHA"
         # §16 / R0 — a formal release must never attach artifacts built from a
         # different commit than the tag. For tag pushes GITHUB_SHA is the tag
@@ -980,7 +985,7 @@ jobs:
             --field "ReleaseKind=${{ steps.meta.outputs.is_stable == 'true' && 'STABLE' || 'RC' }}" \
             --test-result "repo-integrity=${{ needs.repo-integrity.result }}" \
             --test-result "python-host(3.12)=${{ needs.python-host.result }}" \
-            --test-result "python-host(3.11)=${{ needs.python-3.11.result }}" \
+            --test-result "python-host(3.11)=${{ needs.python-3-11.result }}" \
             --test-result "web/ClientRuntime=${{ needs.web.result }}" \
             --test-result "rust=${{ needs.rust.result }}" \
             --test-result "docker-integration=${{ needs.docker-integration.result }}" \
