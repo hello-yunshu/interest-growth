@@ -381,7 +381,20 @@ jobs:
             sleep 8
             echo "--- app pid after 8s ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running after 8s"
             echo "--- startup logcat (grep app) ---"; adb logcat -d 2>/dev/null | grep -iE "psychologygrowth|ig-e2e|AndroidRuntime|FATAL EXCEPTION|panicked|panic at|failed to initialize|CleartextNotPermitted|isn.t allow|WebView|chromium" | tail -80 || true
-            for i in $(seq 1 45); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "emulator real remote vertical slice: PASS"; echo "$R"; exit 0; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "emulator real remote vertical slice: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; echo "FAIL: vertical slice did not complete in time"; echo "--- app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running"; echo "--- activity top ---"; adb shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity|mResumedActivity|app.psychologygrowth" | head -20 || true; echo "--- app-private files dir ---"; adb shell run-as app.psychologygrowth.desktop ls -la files 2>&1 || true; echo "--- recent crash/ANR ---"; adb logcat -d -b crash 2>/dev/null | tail -60 || true; echo "--- slice/setup logcat (broad) ---"; adb logcat -d -t 3000 2>/dev/null | grep -iE "ig-e2e|AndroidRuntime|FATAL|CleartextNotPermitted|psychologygrowth|panicked|panic|Setup|setup|Keystore|keyring|tauri|abort|Signal|signal|SIGSEGV|SIGABRT|minidump|Native crash|Ion|error" | tail -120 || true; echo "--- end diagnostics ---"; exit 1
+            for i in $(seq 1 45); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "emulator real remote vertical slice: PASS"; echo "$R"; echo PASS > /tmp/ig_native_status; break; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "emulator real remote vertical slice: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; if [ ! -f /tmp/ig_native_status ]; then echo "FAIL: vertical slice did not complete in time"; echo "--- app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running"; echo "--- activity top ---"; adb shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity|mResumedActivity|app.psychologygrowth" | head -20 || true; echo "--- app-private files dir ---"; adb shell run-as app.psychologygrowth.desktop ls -la files 2>&1 || true; echo "--- recent crash/ANR ---"; adb logcat -d -b crash 2>/dev/null | tail -60 || true; echo "--- slice/setup logcat (broad) ---"; adb logcat -d -t 3000 2>/dev/null | grep -iE "ig-e2e|AndroidRuntime|FATAL|CleartextNotPermitted|psychologygrowth|panicked|panic|Setup|setup|Keystore|keyring|tauri|abort|Signal|signal|SIGSEGV|SIGABRT|minidump|Native crash|Ion|error" | tail -120 || true; echo "--- end diagnostics ---"; exit 1; fi
+            # --- UI/IPC smoke phase (§8.2) ---
+            # The native slice PASSed (marker written). Now drive the REAL
+            # WebView chain: Renderer -> ClientRuntime -> Tauri invoke -> Rust
+            # broker -> server, recorded to files/ig_uiipc_result.json.
+            adb shell run-as app.psychologygrowth.desktop rm -f files/ig_e2e_config.json
+            printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-uiipc-ci"}' > /tmp/ig_uiipc.json
+            adb push /tmp/ig_uiipc.json /data/local/tmp/ig_uiipc.json
+            adb shell run-as app.psychologygrowth.desktop cp /data/local/tmp/ig_uiipc.json files/ig_uiipc_config.json
+            adb shell run-as app.psychologygrowth.desktop chmod 600 files/ig_uiipc_config.json
+            adb shell am force-stop app.psychologygrowth.desktop
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            sleep 12
+            for i in $(seq 1 60); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_uiipc_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "android UI/IPC smoke: PASS"; echo "$R"; exit 0; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "android UI/IPC smoke: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; echo "FAIL: UI/IPC smoke did not complete in time"; adb shell run-as app.psychologygrowth.desktop ls -la files 2>&1 || true; echo "--- uiipc logcat ---"; adb logcat -d -t 2000 2>/dev/null | grep -iE "uiipc|ui-ipc|tauri|AndroidRuntime|FATAL|WebView|chromium|panic|error|CleartextNotPermitted" | tail -120 || true; exit 1
 
   security-dependency:
     name: Dependency security (pip / npm / cargo)
@@ -992,6 +1005,7 @@ jobs:
             --test-result "security-dependency=${{ needs.security-dependency.result }}" \
             --test-result "android-signed-build=${{ needs.android-signed-build.result }}" \
             --test-result "android-emulator=${{ needs.android-emulator.result }}" \
+            --test-result "android-ui-ipc-e2e=${{ needs.android-emulator.result }}" \
             --test-result "${ST_EXTENDED}" \
             --test-result "${ST_UPGRADE}" \
             --test-result "${ST_CROSS}" \
