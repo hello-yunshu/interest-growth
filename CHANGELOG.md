@@ -3,12 +3,19 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.0 — v1.0.0-rc.1 (2026-08-16)
+## 1.0.0 — v1.0.0-rc.1 (2026-08-17)
 
-**Release evidence**: GitHub Actions run `31930997639` — all deterministic
-gates PASS (CI, Web E2E, Docker integration, Rust, Python, dependency
-security). Android signed release APK is **fail-closed** — signing keystore
-secrets are not configured in the repository (external blocker).
+**Published**: v1.0.0 release candidate 1, prerelease, at
+https://github.com/hello-yunshu/interest-growth/releases with a signed
+Android arm64 APK, SPDX SBOM, SHA256SUMS and a verification report.
+
+**Release evidence**: GitHub Actions run `32000632965` — all gates PASS on
+the tag commit (`877734d`, tag SHA == build SHA): repository integrity,
+Python host, Web/ClientRuntime, Rust, Docker integration, dependency
+security, **Android signed release APK + static verification** (signing
+keystore secrets now configured; APK Signature Scheme v2), and the **Android
+emulator real remote vertical slice** (login → … → logout_revoke, all
+`ok=true`, `result=PASS`), then publish.
 
 ### 1.0 highlights
 

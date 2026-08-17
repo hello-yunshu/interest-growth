@@ -10,11 +10,13 @@ R0 v0.7 closure        → DONE (see PROJECT_STATUS §Gate R0)
 R1 product completion  → DONE (see PROJECT_STATUS §Gate R1)
 R2 release hardening   → DONE (see PROJECT_STATUS §Gate R2)
 main PR + merge        → DONE (PR #6 → main `4aea601`)
-v1.0.0-rc.1 tag        → DONE (`4aea601`); full RC Actions PARTIAL — external signing blocker
+v1.0.0-rc.1 tag        → DONE (`877734d`); full RC Actions SUCCESS (run `32000632965`)
 independent audit      → DONE (BLOCKER=0, HIGH=0)
-fix if needed → next RC → BLOCKED on signing secrets
-v1.0.0 tag             → pending (needs signing secrets)
-sign + verify          → pending (external credentials)
+signing secrets        → DONE (self-signed keystore configured; fail-closed sign gate PASS)
+RC1 published          → DONE (prerelease; signed APK + SPDX + SHA256SUMS + verification report)
+soak / review          → next
+v1.0.0 tag             → pending (after RC soak/review; non-prerelease)
+sign + verify          → pending (Android keystore ready; Windows/macOS remain external blockers)
 release-gate           → pending
 publish GitHub Release → pending
 final audit / report   → pending
