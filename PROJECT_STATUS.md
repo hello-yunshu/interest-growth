@@ -45,7 +45,7 @@ v0.6 Host integration is implemented. Product packaging/runtime verification is 
 - Gate E mobile adaptation contract: implemented at source level — frozen `PLATFORM_CAPABILITIES` vocabulary and a `DESKTOP_ONLY_CAPABILITIES` gate (sidecar, token, vaults, updater, window controls, provider secrets) asserted false on every non-desktop runtime; `android-remote` assigns the renewal credential to Android Keystore and declares document picker / share sheet / suspend-resume lifecycle / biometric unlock as planned adapters.
 - Gate E Android runtime + secure store + lifecycle + network security (2026-08-15): implemented at source and compiled for the Android target. The Android shell is always `android-remote` (`runtime_mode::android_remote_mode()`, no sidecar, no desktop keyring/vaults/updater/window plugins, desktop-only plugins compiled out under `cfg(not(target_os="android"))`); the renewal credential uses the Android-Keystore-backed store (`AndroidKeystoreStore`, two-slot active/pending with the same per-server/per-device namespace and honest NoEntry-vs-backend classification as desktop); release Android network security is fail-closed (`network_security_config.xml`, `cleartextTrafficPermitted=false`, no trust-anchor override). `aarch64-linux-android` release build compiles (`tauri android build --apk --target aarch64`).
 - Android toolchain + signed release APK (Gates E/F): established a persistent Docker Android build environment (JDK 17, Android SDK 36/NDK 27, Rust Android targets, cargo-ndk, Tauri CLI 2.11.4, Tencent/rsproxy mirrors, persisted Gradle/Cargo volumes). A **signed universal release APK** is produced (`app-universal-release.apk`, arm64-v8a, 25 MB, APK Signature Scheme v2, cert SHA-256 `66871e86…aa66f`, APK SHA-256 `01ce82e4…92024`); APK hygiene checked (no Python sidecar, no secrets, no bootstrap token, no desktop updater, single canonical `.so` per ABI).
-- Android emulator / physical device / upgrade-in-place / cross-device proof (Gates E–F–G): **NOT RUN** — no Android emulator image and no physical device are available in the current environment; these remain an explicit hardware boundary and must not be inferred as PASS. Real public-TLS-server enrollment and packaged desktop regression also remain to be exercised.
+- Android emulator / physical device / upgrade-in-place / cross-device proof (Gates E–F–G): the Android emulator real remote vertical slice **PASSES in clean remote Actions** (x86_64 system image via `reactivecircus/android-emulator-runner`, see Gate R3 evidence below); a physical device remains an explicit hardware boundary. Real public-TLS-server enrollment and packaged desktop regression also remain to be exercised.
 - 2026-08-15 regression: 66 ClientRuntime JS tests (contract) + controller tests passed (`node --test lib/runtime/test/*.test.mjs`), 52 Rust host tests passed (`cargo test` — runtime-mode, remote broker, credential-store classification, version parser, connection state, Android namespace), `aarch64-linux-android` release build compiled and the signed APK passed `apksigner verify --verbose --print-certs` (v2).
 
 ## v1.0 — Gate R0 (v0.7 Closure) execution (2026-08-16)
@@ -141,8 +141,8 @@ The local Apple Silicon application and DMG are verified development/test artifa
 
 ### v1.0.0-rc.1 tag → full RC Actions
 
-- **Tag**: `v1.0.0-rc.1` at `4aea601` (main merge commit, tag SHA == build SHA).
-- **Release workflow** — run `31930997639`: **PARTIAL** (see below).
+- **Tag**: `v1.0.0-rc.1` at `877734d` (main tip after emulator/SBOM fixes, tag SHA == build SHA).
+- **Release workflow** — run `32000632965`: **success** (preceded by two fixed runs, see below).
 
 | Job | Result | Notes |
 |---|---|---|
@@ -152,16 +152,25 @@ The local Apple Silicon application and DMG are verified development/test artifa
 | Rust host gate | PASS | |
 | Docker remote-server integration | PASS | |
 | Dependency security (pip/npm/cargo) | PASS | |
-| Android signed release APK + static verification | **FAIL** | **External blocker** — KS_B64/KS_PASS/KS_ALIAS/KS_KEY_PASS not set in GitHub secrets |
-| Android emulator runtime gate | SKIPPED | Depends on android-signed-build |
-| Release aggregate gate | SKIPPED | Depends on android-signed-build + emulator |
-| Publish GitHub Release | SKIPPED | Depends on release-gate |
+| Android signed release APK + static verification | PASS | **Signing secrets are now present** — fail-closed gate passed; signed arm64 release APK produced and statically verified |
+| Android emulator runtime gate | PASS | x86_64 emulator real remote vertical slice: `login→…→logout_revoke` all `ok=true`, `result=PASS` |
+| Release aggregate gate | PASS | All required gates green |
+| Publish GitHub Release | success | RC1 release created (see below) |
 
-### External blocker: Android release signing keystore
+### Release signing keystore (external blocker resolved)
 
-The `android-signed-build` job is **fail-closed by design** (§11.3 §13.1): all four keystore secrets must be present in GitHub Actions Secrets or the release build fails with no debug fallback. This is **correct behavior** — the project must never publish an unsigned or debug-key APK as a release asset.
+A self-signed Android release keystore was generated (`keytool`) and encoded — `PG_ANDROID_KEYSTORE_B64`, `PG_ANDROID_STORE_PASSWORD`, `PG_ANDROID_KEY_ALIAS`, `PG_ANDROID_KEY_PASSWORD` are set in GitHub Actions Secrets. The `android-signed-build` job's fail-closed sign check (§11.3 §13.1) now passes and produces a **signed** release APK (APK Signature Scheme v2), with the public certificate SHA-256 reported non-secret.
 
-The same fail-closed design principle applies to Windows Authenticode and macOS Developer ID signing — no ad-hoc fallback, no silent downgrade. These will also fail when `release.yml` reaches those steps.
+Iteration notes that led to the green run:
+
+- **emulator-e2e / release integration** — injected `PG_REMOTE_AUTH_ENABLED/PG_OWNER_BOOTSTRAP_TOKEN/APP_ENV=remote` into the compose `env_file` (`.env`) so the self-hosted API server reports consistent remote-auth metadata and the broker's fail-closed check connects (`16a8e39`).
+- **publish SBOM** — `anchore/sbom-action` (syft v1.x) forces a `dir:` source that cannot resolve a single APK path; pointed it at the containing `dist/android` directory so the SPDX SBOM generates (`877734d`).
+- **publish release body** — corrected reference/text from v0.7 to v1.0.0 (`V1_0_RELEASE_VERIFICATION.md`).
+- **one transient emulator flake** (`NETWORK_UNAVAILABLE` on the `login` slice step — the same server address had just answered `probe`/`bootstrap_owner`) — did not recur on rerun; the identical build then passed the full slice including `logout_revoke`.
+
+### RC1 published
+
+**Release `v1.0.0-rc.1` is published** as a **prerelease** at https://github.com/hello-yunshu/interest-growth/releases with assets: `interest-growth-android-arm64.apk`, `interest-growth-android-arm64.spdx.json`, `SHA256SUMS.txt`, `V1_0_RELEASE_VERIFICATION.md`.
 
 ### RC1 independent audit
 
@@ -180,13 +189,16 @@ Independent code audit of `v1.0.0-rc.1` (commit `4aea601`) focusing on the §47 
 | Release chain fail-closed | **OK** | `release.yml` tag→SHA binding, android-signed-build fail-closed, aggregate gate depends on all required jobs |
 | Tech debt scan | **OK** | All TODO/FIXME/HACK/TEMP are documented deferred or non-release-blocking |
 
-**Audit conclusion: BLOCKER=0, HIGH=0.** All §47 risk areas are correctly implemented at the source level. The sole release gate failure is the external signing-credential blocker, which is architectural fail-closed behavior, not a code defect.
+**Audit conclusion: BLOCKER=0, HIGH=0.** All §47 risk areas are correctly implemented at the source level. The former sole release-gate blocker (missing signing keystore) is resolved; the release pipeline now completes end-to-end.
 
-### RC1 release readiness
+### RC1 result
 
-- **Code & integration quality**: all deterministic gates (CI, Web E2E, Docker integration, Rust, Python, dependency security) PASS on the exact tag SHA.
-- **Android APK/emulator**: blocked by missing signing keystore secrets. Once secrets are provided, the full release pipeline (signed APK → emulator → aggregate → publish) will run.
-- **Release artifacts**: release.yml publish-release job also requires signing secrets for SBOM, attestation, SHA256SUMS, and verification report generation.
+- **Code & integration quality**: all deterministic gates (CI, Web E2E, Docker integration, Rust, Python, dependency security) PASS on the exact tag SHA = build SHA (`877734d`).
+- **Android signed APK + emulator**: PASS — signed arm64 release APK built/verified; x86_64 emulator real remote vertical slice PASS.
+- **Release published**: `v1.0.0-rc.1` prerelease published with signed APK + SPDX SBOM + SHA256SUMS + verification report (see `### RC1 published`).
+- **Windows/macOS desktop**: not published as release assets; Windows Authenticode and macOS Developer ID/notarization remain documented  external blockers (fail-closed, no ad-hoc fallback).
+
+**R3 exit criteria met.** Next: **Gate R4 (1.0 Stable)** — after RC1 soak/review, re-tag at `v1.0.0` (non-prerelease) and confirm the same green pipeline publishes the Stable release.
 
 ## Compatibility identifiers intentionally retained
 
