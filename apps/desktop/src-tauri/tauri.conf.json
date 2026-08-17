@@ -33,6 +33,9 @@
     "active": true,
     "targets": "all",
     "category": "Education",
+    "android": {
+      "versionCode": 1000001
+    },
     "shortDescription": "Local-first multi-interest learning and practice workspace",
     "longDescription": "Interest Growth is an independent, local-first desktop workspace for cultivating multiple interests through curiosity, learning, practice, research, reflection and expression. Psychology is the default Domain Pack.",
     "externalBin": [
