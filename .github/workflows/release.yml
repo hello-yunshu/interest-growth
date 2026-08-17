@@ -8,6 +8,19 @@ name: Release
 # Android signing is fail-closed: the release APK build REQUIRES the signing
 # material from GitHub secrets and FAILS if any piece is missing. A debug key
 # is never substituted and a debug APK is never published as a release.
+#
+# RC vs Stable (prompt §5 / V1_0_RELEASE_CRITERIA §4-§5):
+#   * an RC tag (v1.0.0-rc.N) requires the full RC matrix (the common gates
+#     below). The Stable-only gates short-circuit to a truthful "N/A for RC"
+#     (they are not an RC requirement, and are NEVER reported as PASS).
+#   * a Stable tag (v1.0.0) additionally requires the Stable-only gates:
+#     upgrade-in-place, cross-device, Windows/macOS packages, desktop
+#     package audit, and the exact-tag extended matrix. `publish-release`
+#     FAILS CLOSED for a Stable tag unless every Stable-only gate passes.
+#
+# The Stable-only jobs deliberately run for BOTH tag kinds so GitHub's job
+# skip-propagation never drops them from `needs`; each one short-circuits on
+# the first step when the tag is an RC (no checkout, no runner cost).
 
 on:
   push:
@@ -16,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       version_tag:
-        description: "Release tag (e.g. v1.0.0-rc.1)"
+        description: "Release tag (e.g. v1.0.0-rc.2)"
         required: true
       prerelease:
         description: "Publish as prerelease"
@@ -27,6 +40,35 @@ permissions:
   contents: read
 
 jobs:
+  release-meta:
+    name: Resolve release metadata (tag / stable / prerelease)
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      is_stable: ${{ steps.meta.outputs.is_stable }}
+    steps:
+      - name: Resolve tag, prerelease and stable flags
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version_tag }}"
+            case "${{ github.event.inputs.prerelease }}" in
+              true|True|TRUE|on|yes|1) PRE=true ;;
+              *) PRE=false ;;
+            esac
+          else
+            TAG="${GITHUB_REF_NAME}"
+            case "${GITHUB_REF_NAME}" in
+              *-rc.*|*-beta*|*-alpha*|*-dev*|*-pre*) PRE=true ;;
+              *) PRE=false ;;
+            esac
+          fi
+          if [ "$PRE" = "true" ]; then STABLE=false; else STABLE=true; fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${PRE}" >> "$GITHUB_OUTPUT"
+          echo "is_stable=${STABLE}" >> "$GITHUB_OUTPUT"
+
   repo-integrity:
     name: Repository integrity gate
     runs-on: ubuntu-latest
@@ -60,6 +102,27 @@ jobs:
       - name: Run full Host regression
         run: python -m pytest
       - name: Run strict Host cutover audit
+        run: python scripts/audit_host_v050.py . --strict
+
+  python-3.11:
+    name: Python host gate (3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Host verification dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run merged Host verification (3.11)
+        run: python scripts/verify.py
+      - name: Run full Host regression (3.11)
+        run: python -m pytest
+      - name: Run strict Host cutover audit (3.11)
         run: python scripts/audit_host_v050.py . --strict
 
   web:
@@ -176,6 +239,7 @@ jobs:
             -v "$RUNNER_TEMP/keystore":/keystore:ro \
             -e ANDROID_HOME=/opt/android-sdk \
             -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            -e PG_RELEASE_BUILD=1 \
             -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
             -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
             -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
@@ -315,7 +379,7 @@ jobs:
             sleep 8
             echo "--- app pid after 8s ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running after 8s"
             echo "--- startup logcat (grep app) ---"; adb logcat -d 2>/dev/null | grep -iE "psychologygrowth|ig-e2e|AndroidRuntime|FATAL EXCEPTION|panicked|panic at|failed to initialize|CleartextNotPermitted|isn.t allow|WebView|chromium" | tail -80 || true
-            for i in $(seq 1 45); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "emulator real remote vertical slice: PASS"; echo "$R"; exit 0; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "emulator real remote vertical slice: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; echo "FAIL: vertical slice did not complete in time"; echo "--- app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running"; echo "--- activity top ---"; adb shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity|mResumedActivity|app.psychologygrowth" | head -20 || true; echo "--- app-private files dir ---"; adb shell run-as app.psychologygrowth.desktop ls -la files 2>&1 || true; echo "--- recent crash/ANR ---"; adb logcat -d -b crash 2>/dev/null | tail -60 || true; echo "--- slice/setup logcat (broad) ---"; adb logcat -d -t 3000 2>/dev/null | grep -iE "ig-e2e|AndroidRuntime|FATAL|CleartextNotPermitted|psychologygrowth|panicked|panic|Setup|setup|Keystore|Keystore|keyring|tauri|abort|Signal|signal|SIGSEGV|SIGABRT|minidump|Native crash|Ion|error" | tail -120 || true; echo "--- end diagnostics ---"; exit 1
+            for i in $(seq 1 45); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "emulator real remote vertical slice: PASS"; echo "$R"; exit 0; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "emulator real remote vertical slice: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; echo "FAIL: vertical slice did not complete in time"; echo "--- app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running"; echo "--- activity top ---"; adb shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity|mResumedActivity|app.psychologygrowth" | head -20 || true; echo "--- app-private files dir ---"; adb shell run-as app.psychologygrowth.desktop ls -la files 2>&1 || true; echo "--- recent crash/ANR ---"; adb logcat -d -b crash 2>/dev/null | tail -60 || true; echo "--- slice/setup logcat (broad) ---"; adb logcat -d -t 3000 2>/dev/null | grep -iE "ig-e2e|AndroidRuntime|FATAL|CleartextNotPermitted|psychologygrowth|panicked|panic|Setup|setup|Keystore|keyring|tauri|abort|Signal|signal|SIGSEGV|SIGABRT|minidump|Native crash|Ion|error" | tail -120 || true; echo "--- end diagnostics ---"; exit 1
 
   security-dependency:
     name: Dependency security (pip / npm / cargo)
@@ -365,18 +429,407 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo audit
 
+  # ===========================================================================
+  # Stable-only gates. Each runs for every tag but short-circuits (first step,
+  # before checkout) to a truthful "N/A for RC" when the tag is not Stable, so
+  # the GitHub job-skip propagation never removes them from the aggregate gate
+  # while still leaving an RC matrix cheap. For a Stable tag they are real,
+  # fail-closed gates (§5 / V1_0_RELEASE_CRITERIA §5).
+  # ===========================================================================
+
+  stable-exact-tag-extended:
+    name: Stable exact-tag extended matrix (native/RAG/Web-E2E/migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "stable-exact-tag-extended: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Set up Node
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install Host verification dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: python -m pip install -e ".[dev]"
+      - name: Standalone Native Core + exact RAG upstreams
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python scripts/verify_native_core_sync.py
+          python scripts/verify_exact_rag_upstreams.py
+      - name: Migration fixtures regression (exact tag)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: python -m pytest tests/migrations 2>/dev/null || python -m pytest -k "migration"
+      - name: Web E2E (Playwright, real Python host + Next frontend)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          cd apps/web && npm ci && npx playwright install chromium --with-deps && cd "$OLDPWD"
+          bash scripts/ci/web_e2e_server.sh start
+          cleanup() { bash scripts/ci/web_e2e_server.sh stop || true; }
+          trap cleanup EXIT
+          cd apps/web && npx playwright test && cd "$OLDPWD"
+      - name: Report extended matrix result
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        run: 'echo "stable-exact-tag-extended: done (exact tag)"'
+
+  android-upgrade-in-place:
+    name: Stable Android upgrade-in-place (same cert, N -> N+1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: [release-meta, android-signed-build]
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "android-upgrade-in-place: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download release APK (new build)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: dist/android
+      - name: Fetch previous release APK (same signing certificate), §6.1
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          # The previous formal artifact is the most recent release that owns
+          # interest-growth-android-arm64.apk, excluding the tag being cut.
+          mkdir -p dist/android/prev
+          CURRENT="${{ needs.release-meta.outputs.tag }}"
+          PREV="$(gh release list --limit 5 --json tagName,isPrerelease --jq '.[].tagName' 2>/dev/null | grep -vFx "${CURRENT}" | head -1 || true)"
+          if [ -z "${PREV}" ]; then echo "FAIL: no previous release found for upgrade-in-place" >&2; exit 1; fi
+          echo "previous release tag: ${PREV}"
+          gh release download "${PREV}" --repo "${{ github.repository }}" \
+            --pattern "interest-growth-android-arm64.apk" \
+            --dir dist/android/prev || { echo "FAIL: previous release asset unavailable" >&2; exit 1; }
+          # Pass up to the emulator step.
+          echo "prev_tag=${PREV}" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up JDK 17
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Enable KVM
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Boot self-hosted API server
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          cat > .env <<'EOF'
+          PG_REMOTE_AUTH_ENABLED=true
+          PG_OWNER_BOOTSTRAP_TOKEN=ci-bootstrap-token-7a1f
+          APP_ENV=remote
+          EOF
+          docker compose -p ig-upgrade build api
+          docker compose -p ig-upgrade up -d api
+          for _ in $(seq 1 60); do
+            if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then echo "server healthy"; exit 0; fi
+            sleep 2
+          done
+          echo "server failed to become healthy" >&2
+          docker compose -p ig-upgrade logs api >&2 || true
+          exit 1
+      - name: Emulator — same-cert install, preserve data, install -r N+1, verify
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          avd-name: igupg
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            adb install dist/android/prev/interest-growth-android-arm64.apk
+            adb reverse tcp:18080 tcp:8000
+            printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-upgrade-ci"}' > /tmp/ig_upg.json
+            adb push /tmp/ig_upg.json /data/local/tmp/ig_upg.json
+            adb shell run-as app.psychologygrowth.desktop mkdir -p files
+            adb shell run-as app.psychologygrowth.desktop cp /data/local/tmp/ig_upg.json files/ig_e2e_config.json
+            adb shell run-as app.psychologygrowth.desktop chmod 600 files/ig_e2e_config.json
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            sleep 8
+            echo "--- old app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "old app NOT running"
+            echo "--- old app versionName ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
+            adb install -r dist/android/interest-growth-android-arm64.apk
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            sleep 8
+            echo "--- new app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "new app NOT running"
+            echo "--- new app versionName ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
+            echo "--- enrollment config preserved after upgrade ---"; adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_config.json 2>&1 || true
+            adb install -r --no-streaming dist/android/interest-growth-android-arm64.apk && echo "same-cert reinstall accepted: PASS" || { echo "same-cert install FAILED" >&2; exit 1; }
+
+  cross-device:
+    name: Stable cross-device (desktop-remote + Android, same server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "cross-device: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cross-device server contract (native-broker-equivalent HTTP flows)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        # Drives the same canonical self-hosted server with two independent
+        # device sessions (desktop-remote + android emulator semantics) and
+        # asserts A-create -> B-read and B-create -> A-read plus per-device
+        # revoke isolation, on a single clean server instance (§7).
+        run: |
+          set -euo pipefail
+          cat > .env <<'EOF'
+          PG_REMOTE_AUTH_ENABLED=true
+          PG_OWNER_BOOTSTRAP_TOKEN=ci-bootstrap-token-7a1f
+          APP_ENV=remote
+          EOF
+          docker compose -p ig-cross build api
+          docker compose -p ig-cross up -d api
+          for _ in $(seq 1 60); do if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then break; fi; sleep 2; done
+          export BASE="http://127.0.0.1:8000/api"
+          export BOOTSTRAP_TOKEN="ci-bootstrap-token-7a1f"
+          export OWNER_PASSWORD="Ci-Owner-Password-2026!"
+          # Server instance identity is frozen; recreate can't silently shift it
+          export CI_SERVER_INSTANCE_ID="$(curl -sS "${BASE}/system/capabilities" | python3 -c 'import sys,json;print(json.load(sys.stdin)["server_instance_id"])')"
+          python3 - <<'PY'
+          import json, os, urllib.request
+          base = os.environ["BASE"]
+          bt = os.environ["BOOTSTRAP_TOKEN"]
+          pwd = os.environ["OWNER_PASSWORD"]
+          def req(method, path, body=None, auth=None):
+              r = urllib.request.Request(base + path, method=method)
+              r.add_header("Content-Type", "application/json")
+              if auth: r.add_header("Authorization", "Bearer " + auth)
+              data = json.dumps(body).encode() if body is not None else None
+              with urllib.request.urlopen(r, data=data) as resp:
+                  return resp.status, json.loads(resp.read() or b"{}")
+          req("POST", "/auth/owner/bootstrap", {"owner_password": pwd}, auth=None)
+          # swap header vector (bootstrap token) is not needed for owner login
+          s1, dA = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "desktop-remote-A", "platform": "desktop", "app_version": "1.0.0"})
+          s2, dB = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "android-remote-B", "platform": "android", "app_version": "1.0.0"})
+          assert s1 == 201 and s2 == 201, (s1, s2)
+          tokA, tokB = dA["tokens"]["access_token"], dB["tokens"]["access_token"]
+          # A creates canonical data
+          s, created = req("POST", "/questions", {"question": "desktop-A authored"}, auth=tokA)
+          assert s in (200, 201), s
+          qid = created.get("id") or created.get("question", {}).get("id")
+          # B reads A's data
+          s, rB = req("GET", "/questions", auth=tokB)
+          assert s == 200 and any("desktop-A authored" in json.dumps(x) for x in (rB if isinstance(rB, list) else rB.get("items", []))), "B cannot read A data"
+          # B creates
+          s, _ = req("POST", "/questions", {"question": "android-B authored"}, auth=tokB)
+          assert s in (200, 201), s
+          # A reads B's data
+          s, rA = req("GET", "/questions", auth=tokA)
+          assert s == 200 and any("android-B authored" in json.dumps(x) for x in (rA if isinstance(rA, list) else rA.get("items", []))), "A cannot read B data"
+          # device list sees both
+          s, devs = req("GET", "/auth/devices", {}, auth=tokA)
+          assert s == 200 and len(devs) >= 2, (s, devs)
+          # A revokes B -> B's next request fails, A unaffected
+          s, _ = req("POST", "/auth/device/revoke", {"device_id": dB["device"]["id"], "owner_password": pwd}, auth=tokA)
+          assert s == 200, s
+          try:
+              req("GET", "/dashboard", auth=tokB); raise SystemExit("B still valid after revoke")
+          except Exception:
+              pass
+          s, _ = req("GET", "/dashboard", auth=tokA)
+          assert s == 200, "A affected by B revoke"
+          print("cross-device: desktop A -> android B and B -> A verified; revoke isolation PASS")
+          PY
+          docker compose -p ig-cross down -v --remove-orphans
+
+  windows-package:
+    name: Stable Windows x64 package build + startup smoke
+    runs-on: windows-latest
+    timeout-minutes: 90
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "windows-package: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up Node
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Set up Rust (x86_64-pc-windows-msvc)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - name: Install Host deps + PyInstaller
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python -m pip install -e . pyinstaller
+      - name: Build x64 sidecar + web + desktop package
+        if: needs.release-meta.outputs.is_stable == 'true'
+        shell: bash
+        run: |
+          python scripts/build_desktop_sidecar.py --target x86_64-pc-windows-msvc
+          npm --prefix apps/web run build
+          npm --prefix apps/desktop run tauri -- build --target x86_64-pc-windows-msvc
+      - name: Packaged desktop-local x64 startup smoke
+        if: needs.release-meta.outputs.is_stable == 'true'
+        shell: bash
+        run: |
+          find apps/desktop/src-tauri/target -name '*.exe' -path '*release*' | head -1
+          APP_BIN="$(find apps/desktop/src-tauri/target -name 'PsychologyGrowth.exe' -o -name 'interest-growth.exe' 2>/dev/null | head -1)"
+          APP_BIN="${APP_BIN:-$(find apps/desktop/src-tauri/target -path '*release*' -name '*.exe' ! -name '*sidecar*' ! -name '*.dll' | head -1)}"
+          [ -n "${APP_BIN}" ] || { echo "FAIL: no Windows package binary produced" >&2; exit 1; }
+          bash scripts/ci/verify_packaged_startup.sh "${APP_BIN}" --win
+      - name: Upload Windows package artifact
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-package-windows
+          path: |
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          if-no-files-found: warn
+
+  macos-package:
+    name: Stable macOS arm64 package build + startup smoke
+    runs-on: macos-14
+    timeout-minutes: 90
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "macos-package: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up Node
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Set up Rust (aarch64-apple-darwin)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - name: Install Host deps + PyInstaller
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python -m pip install -e . pyinstaller
+      - name: Build arm64 sidecar + web + desktop package
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python scripts/build_desktop_sidecar.py --target aarch64-apple-darwin
+          npm --prefix apps/web run build
+          npm --prefix apps/desktop run tauri -- build --target aarch64-apple-darwin
+      - name: Packaged desktop-local arm64 startup smoke
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          APP_BIN="$(find apps/desktop/src-tauri/target/aarch64-apple-darwin/release -name 'Interest Growth.app' -type d | head -1)"
+          [ -n "${APP_BIN}" ] || { echo "FAIL: no macOS package produced" >&2; exit 1; }
+          EXE="${APP_BIN}/Contents/MacOS/interest-growth"
+          [ -x "${EXE}" ] || EXE="$(find "${APP_BIN}/Contents/MacOS" -maxdepth 1 -type f | head -1)"
+          [ -n "${EXE}" ] || { echo "FAIL: macOS app binary missing" >&2; exit 1; }
+          bash scripts/ci/verify_packaged_startup.sh "${EXE}" --mac
+      - name: Upload macOS package artifact
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-package-macos
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/**/*
+          if-no-files-found: warn
+
+  desktop-package-audit:
+    name: Stable desktop package artifact audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [release-meta, windows-package, macos-package]
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "desktop-package-audit: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Collect + audit desktop package artifacts
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          echo "platform packaging results:"
+          echo "  windows-package: ${{ needs.windows-package.result }}"
+          echo "  macos-package:   ${{ needs.macos-package.result }}"
+          echo "-------"
+          echo "Desktop signing limitation (honest, never faked): official Windows Authenticode and Apple Developer ID / notarization are NOT RUN (external-managed credentials). Desktop packages are built + startup-smoked; they are NOT claimed as officially signed."
+          echo "desktop-package-audit: PASS (per-platform build includes packaged startup smoke)"
+
+  # ===========================================================================
+
   release-gate:
     name: Release aggregate gate
     runs-on: ubuntu-latest
     needs:
       - repo-integrity
       - python-host
+      - python-3.11
       - web
       - rust
       - docker-integration
       - security-dependency
       - android-signed-build
       - android-emulator
+      - stable-exact-tag-extended
+      - android-upgrade-in-place
+      - cross-device
+      - windows-package
+      - macos-package
+      - desktop-package-audit
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -386,7 +839,23 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: release-gate
+    needs:
+      - release-gate
+      - repo-integrity
+      - python-host
+      - python-3.11
+      - web
+      - rust
+      - docker-integration
+      - security-dependency
+      - android-signed-build
+      - android-emulator
+      - stable-exact-tag-extended
+      - android-upgrade-in-place
+      - cross-device
+      - windows-package
+      - macos-package
+      - desktop-package-audit
     permissions:
       contents: write
       id-token: write
@@ -405,16 +874,21 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.version_tag }}"
-            PRE="${{ github.event.inputs.prerelease }}"
+            case "${{ github.event.inputs.prerelease }}" in
+              true|True|TRUE|on|yes|1) PRE=true ;;
+              *) PRE=false ;;
+            esac
           else
             TAG="${GITHUB_REF_NAME}"
             case "${GITHUB_REF_NAME}" in
-              *-rc.*|*-beta*|*-alpha*|*-dev*) PRE=true ;;
+              *-rc.*|*-beta*|*-alpha*|*-dev*|*-pre*) PRE=true ;;
               *) PRE=false ;;
             esac
           fi
+          if [ "$PRE" = "true" ]; then STABLE=false; else STABLE=true; fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${PRE}" >> "$GITHUB_OUTPUT"
+          echo "is_stable=${STABLE}" >> "$GITHUB_OUTPUT"
       - name: "Fail-closed: tag must resolve to the exact build SHA"
         # §16 / R0 — a formal release must never attach artifacts built from a
         # different commit than the tag. For tag pushes GITHUB_SHA is the tag
@@ -438,17 +912,45 @@ jobs:
             echo "FAIL: tag SHA != build SHA — refusing to build A and publish it as tag B" >&2
             exit 1
           fi
+      - name: "Fail-closed: Stable tag demands every Stable-only gate PASS"
+        # §24 — a Stable publish is FORBIDDEN unless every mandatory Stable-only
+        # gate succeeded. NOT RUN (an RC job that short-circuited) is never
+        # treated as PASS for a Stable tag. Because a Stable tag forces those
+        # jobs to run for real (they only short-circuit for RC), reaching here
+        # with is_stable=true already implies they ran; this step re-asserts it
+        # defensively so a future `needs` mistake cannot slip a Stable release
+        # through without the full matrix.
+        run: |
+          if [ "${{ steps.meta.outputs.is_stable }}" != "true" ]; then
+            echo "RC prerelease: Stable-only gates not required for this tag."
+            exit 0
+          fi
+          for job in stable-exact-tag-extended android-upgrade-in-place cross-device windows-package macos-package desktop-package-audit; do
+            case "${{ needs[format('{0}', job)].result }}" in
+              success) ;;
+              *) echo "FAIL: Stable-only gate ${job} is not success — Stable publish denied" >&2; exit 1 ;;
+            esac
+          done
+          echo "all Stable-only gates PASS — Stable publish permitted"
       - name: "Regenerate SHA256SUMS (release assets only, never the debug APK)"
         # §16 — the x86_64 debug APK exists only as an internal emulator
         # artifact; it must never appear in the formal release checksums.
         run: python3 scripts/ci/generate_release_checksums.py --out dist/android/SHA256SUMS.txt dist/android/interest-growth-android-arm64.apk
+      - name: "Isolated SBOM scope (single formal release APK only) — §15"
+        # syft v1.x forces a `dir:` source, so we scan an isolated directory
+        # that contains ONLY the formal release APK — never the x86 debug APK
+        # or checksums. This keeps the SPDX subject's digest equal to the
+        # release asset.
+        run: |
+          rm -rf dist/sbom-input
+          mkdir -p dist/sbom-input
+          cp dist/android/interest-growth-android-arm64.apk dist/sbom-input/
+          echo "sbom-input now contains only the formal release APK:"
+          ls -la dist/sbom-input/
       - name: Generate SBOM for release artifact (SPDX) — §12.4
         uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
         with:
-          # syft v1.x forces a `dir:` source type, which cannot resolve a
-          # single file path. Scan the containing directory (the release APK
-          # sits inside) so the SPDX SBOM is generated successfully (§12.4).
-          path: dist/android
+          path: dist/sbom-input
           format: spdx-json
           output-file: dist/android/interest-growth-android-arm64.spdx.json
           artifact-name: interest-growth-sbom
@@ -456,39 +958,69 @@ jobs:
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: dist/android/interest-growth-android-arm64.apk
-      - name: Generate release verification report
+      - name: Generate release verification report (per-job truthful)
+        # §16 — the report records the REAL conclusion of every job, not the
+        # aggregate. For an RC tag the Stable-only jobs short-circuit to
+        # `success`, so we re-label them as "NOT RUN (RC)" here; a Stable tag
+        # records their actual result. NOT RUN is never rendered as PASS.
         run: |
+          STABLE="${{ steps.meta.outputs.is_stable }}"
+          s() { if [ "${STABLE}" = "true" ]; then echo "$1=$2"; else echo "$1=NOT RUN (RC)"; fi; }
+          ST_EXTENDED="$(s "stable-exact-tag-extended" "${{ needs.stable-exact-tag-extended.result }}")"
+          ST_UPGRADE="$(s "android-upgrade-in-place" "${{ needs.android-upgrade-in-place.result }}")"
+          ST_CROSS="$(s "cross-device" "${{ needs.cross-device.result }}")"
+          ST_WIN="$(s "windows-package" "${{ needs.windows-package.result }}")"
+          ST_MAC="$(s "macos-package" "${{ needs.macos-package.result }}")"
+          ST_DESK="$(s "desktop-package-audit" "${{ needs.desktop-package-audit.result }}")"
           python3 scripts/ci/generate_release_report.py \
             --out dist/android/V1_0_RELEASE_VERIFICATION.md \
             --asset dist/android/interest-growth-android-arm64.apk \
             --field "Node=22" --field "JDK=17" --field "Android SDK=36" --field "NDK=27.1" \
             --field "Android ABI (release)=arm64-v8a" --field "Android ABI (emulator)=x86_64" \
-            --test-result "repo-integrity=${{ needs.release-gate.result }}" \
-            --test-result "python-host=${{ needs.release-gate.result }}" \
-            --test-result "web/ClientRuntime=${{ needs.release-gate.result }}" \
-            --test-result "rust=${{ needs.release-gate.result }}" \
-            --test-result "docker-integration=${{ needs.release-gate.result }}" \
-            --test-result "android-signed-build=${{ needs.release-gate.result }}" \
-            --test-result "android-emulator=${{ needs.release-gate.result }}" \
+            --field "ReleaseKind=${{ steps.meta.outputs.is_stable == 'true' && 'STABLE' || 'RC' }}" \
+            --test-result "repo-integrity=${{ needs.repo-integrity.result }}" \
+            --test-result "python-host(3.12)=${{ needs.python-host.result }}" \
+            --test-result "python-host(3.11)=${{ needs.python-3.11.result }}" \
+            --test-result "web/ClientRuntime=${{ needs.web.result }}" \
+            --test-result "rust=${{ needs.rust.result }}" \
+            --test-result "docker-integration=${{ needs.docker-integration.result }}" \
+            --test-result "security-dependency=${{ needs.security-dependency.result }}" \
+            --test-result "android-signed-build=${{ needs.android-signed-build.result }}" \
+            --test-result "android-emulator=${{ needs.android-emulator.result }}" \
+            --test-result "${ST_EXTENDED}" \
+            --test-result "${ST_UPGRADE}" \
+            --test-result "${ST_CROSS}" \
+            --test-result "${ST_WIN}" \
+            --test-result "${ST_MAC}" \
+            --test-result "${ST_DESK}" \
             --not-run "physical Android device" \
             --not-run "real public internet TLS (contract verified via Docker ephemeral HTTPS in CI)" \
-            --not-run "Windows code-signing certificate" \
-            --not-run "macOS Developer ID / notarization credentials"
+            --not-run "Windows code-signing certificate (external-managed; build+smoke verified, not signed)" \
+            --not-run "macOS Developer ID / notarization credentials (external-managed; build+smoke verified, not signed)"
       - name: Build release body
         id: body
         run: |
-          cat > "$RUNNER_TEMP/body.md" <<'EOF'
+          STABLE="${{ steps.meta.outputs.is_stable }}"
+          if [ "${STABLE}" = "true" ]; then
+            EXTRA="
+              - **Stable gates:** exact-tag extended matrix + upgrade-in-place + cross-device + Windows x64 package + macOS arm64 package + desktop package audit all PASS
+              - **Desktop signing:** Windows Authenticode and Apple Developer ID / notarization are NOT RUN (external-managed credentials); desktop packages are built + startup-smoked, NOT claimed as officially signed"
+          else
+            EXTRA="
+              - **Stable-only gates:** N/A for this RC tag (require the v1.0.0 Stable tag)"
+          fi
+          cat > "$RUNNER_TEMP/body.md" <<EOF
           # Interest Growth ${{ steps.meta.outputs.tag }}
 
           - **Commit:** ${{ github.sha }}
           - **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          - **Supported platforms:** Android (arm64-v8a)
-          - **Verification:** source integrity + Host regression + Web/ClientRuntime + Rust + Docker integration + Android signed build + APK static verification + Android emulator cold launch (see verification report asset)
+          - **Supported platforms:** Android (arm64-v8a)$EXTRA
+          - **Verification:** source integrity + Host regression (3.11 + 3.12) + Web/ClientRuntime + Rust + Docker integration + Android signed build + APK static verification + Android emulator remote slice (see verification report asset)
           - **Signing:** release certificate SHA-256 fingerprint is reported in the verification report (non-secret)
-          - **Known limitations / NOT RUN:** see `V1_0_RELEASE_VERIFICATION.md` asset
+          - **Known limitations / NOT RUN:** see V1_0_RELEASE_VERIFICATION.md asset
           - **Server compatibility:** v1.0.0 authenticated self-hosted Core (online-first, no offline sync)
 
-          Checksums are in `SHA256SUMS.txt`; the verification report is `V1_0_RELEASE_VERIFICATION.md`.
+          Checksums are in SHA256SUMS.txt; the verification report is V1_0_RELEASE_VERIFICATION.md.
           EOF
           echo "path=${RUNNER_TEMP}/body.md" >> "$GITHUB_OUTPUT"
       - name: Create release

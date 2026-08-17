@@ -98,6 +98,126 @@ pub fn remote_error(code: &str, message: impl Into<String>) -> String {
     serde_json::json!({ "code": code, "message": message.into() }).to_string()
 }
 
+// ------------------------------------------------------ HTTP status taxonomy
+
+/// Endpoint classes used by the unified HTTP status classifier (HIGH-1). Each
+/// producer maps a non-success HTTP status to the frozen taxonomy in ONE
+/// place, so no per-endpoint hand-written `if status != ...` can drift into
+/// mis-classifying a transient 429/5xx as a permanent credential/protocol
+/// failure (which previously produced `429 -> UnsupportedServer` on metadata
+/// and `429/500/503 -> LOGIN_EXPIRED` on login).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EndpointKind {
+    /// Unauthenticated server metadata (capabilities / server-info). No
+    /// credential is involved, so an auth status here is a protocol error.
+    Metadata,
+    /// Owner login / bootstrap. Success status is 201.
+    Login,
+    /// Device refresh. Success status is 200; 401/403 is a real credential
+    /// denial (LoginExpired).
+    Refresh,
+    /// Authenticated business calls (success 200; 401 handled separately in
+    /// `send_with_auth`). Kept so the classifier is the single source.
+    Business,
+}
+
+impl EndpointKind {
+    fn expected_success(self) -> u16 {
+        match self {
+            EndpointKind::Login => 201,
+            EndpointKind::Metadata
+            | EndpointKind::Refresh
+            | EndpointKind::Business => 200,
+        }
+    }
+}
+
+/// Unify non-success HTTP status -> frozen taxonomy code (HIGH-1).
+///
+/// Returns `Ok(())` when `status` equals the endpoint's success code,
+/// otherwise the correct taxonomy code:
+///
+/// - `429`                     -> RATE_LIMITED
+/// - `500..=599`               -> SERVER_UNAVAILABLE
+/// - `401 | 403`               -> LOGIN_EXPIRED (Refresh/Login/Business) or
+///                                PROTOCOL_ERROR (Metadata, no credential)
+/// - `300..=399` and everything else -> PROTOCOL_ERROR
+///
+/// `429` and `5xx` are transient and are NEVER mapped to LOGIN_EXPIRED,
+/// UNSUPPORTED_SERVER or another terminal state.
+fn classify_http_status(kind: EndpointKind, status: u16) -> Result<(), &'static str> {
+    if status == kind.expected_success() {
+        return Ok(());
+    }
+    match status {
+        429 => Err(ERR_RATE_LIMITED),
+        500..=599 => Err(ERR_SERVER_UNAVAILABLE),
+        401 | 403 if kind != EndpointKind::Metadata => Err(ERR_LOGIN_EXPIRED),
+        300..=399 => Err(ERR_PROTOCOL),
+        _ => Err(ERR_PROTOCOL),
+    }
+}
+
+// §11 — durable refresh slot generation envelope.
+//
+// Every durable refresh rotation stamps the credential with a monotonically
+// increasing `gen` so the two-slot crash-recovery design can PROVE that a
+// stale PENDING value can never shadow a promoted ACTIVE value:
+//
+//   * WAL crash window (pending written, active not): pending.gen > active.gen
+//     -> the reader prefers pending (it is the newest un-promoted intent).
+//   * Stale-pending case (an earlier pending write failed, then active got
+//     promoted, then the clear also failed): the leftover pending is a legacy
+//     raw token parsed as gen 0 (or an older gen) while the promoted active
+//     has a strictly higher gen -> the reader prefers active.
+//
+// The active slot keeps the legacy raw-token form for existing rc1 installs
+// (a raw value decodes as gen 0 and is still the reader's fallback).
+const REFRESH_ENVELOPE_PREFIX: &str = "gen:";
+
+/// Encode a rotation replacement with an explicit generation.
+fn encode_refresh_envelope(gen: u64, token: &str) -> String {
+    format!("{REFRESH_ENVELOPE_PREFIX}{gen}\n{token}")
+}
+
+/// Decode a stored durable slot value into `(generation, token)`. A legacy raw
+/// token (no envelope) decodes as generation `0` with the whole value as the
+/// token, so existing installs remain readable without migration.
+fn decode_refresh_envelope(value: &str) -> (u64, &str) {
+    let value = value.trim();
+    if let Some(rest) = value.strip_prefix(REFRESH_ENVELOPE_PREFIX) {
+        if let Some((gen_str, token)) = rest.split_once('\n') {
+            if gen_str.trim().parse::<u64>().is_ok() && !token.is_empty() {
+                return (gen_str.trim().parse::<u64>().unwrap_or(0), token);
+            }
+        }
+    }
+    (0, value)
+}
+
+/// Classify a durable slot read: `Ok(Some((gen, token)))` on a readable non-empty
+/// value, `Ok(None)` for an absent/empty slot, and a persistence failure for a
+/// classified store error (a locked/unavailable backend is NEVER "no credential").
+fn read_refresh_slot(
+    result: Result<Option<String>, CredentialStoreError>,
+) -> Result<Option<(u64, String)>, String> {
+    match result {
+        Ok(Some(value)) if !value.trim().is_empty() => {
+            let (gen, token) = decode_refresh_envelope(&value);
+            if token.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some((gen, token.to_string())))
+            }
+        }
+        Ok(_) => Ok(None),
+        Err(error) => Err(remote_error(
+            ERR_CREDENTIAL_PERSISTENCE,
+            format!("secure store is unavailable: {error}"),
+        )),
+    }
+}
+
 // Gate D §P15 — the ONLY request headers a renderer may set on the native
 // remote transport. Content-Type is decided natively by the body kind and
 // Authorization is always native.
@@ -932,12 +1052,23 @@ impl RemoteBroker {
                 remote_error(ERR_NETWORK_UNAVAILABLE, format!("cannot reach server: {error}"))
             })?;
         let status = response.status().as_u16();
-        if status != 200 {
-            return Err(remote_error(
-                ERR_PROTOCOL,
+        // HIGH-1 — metadata is not credential-bound: a 429 is RATE_LIMITED and
+        // a 5xx is SERVER_UNAVAILABLE (both transient), never UnsupportedServer.
+        // Only 3xx / other / malformed bodies are PROTOCOL_ERROR.
+        classify_http_status(EndpointKind::Metadata, status).map_err(|code| match status {
+            429 => remote_error(
+                code,
+                "server metadata endpoint is rate limiting this client; retry later",
+            ),
+            500..=599 => remote_error(
+                code,
+                format!("server metadata endpoint is unavailable (HTTP {status})"),
+            ),
+            _ => remote_error(
+                code,
                 format!("server metadata endpoint returned HTTP {status}"),
-            ));
-        }
+            ),
+        })?;
         response
             .json()
             .await
@@ -1182,31 +1313,40 @@ impl RemoteBroker {
         // Gate C/D §4.5 — a store read that fails because the backend is
         // locked/unavailable is a persistence failure, NOT a missing
         // credential; only NoEntry means "please log in again".
-        match self
-            .store
-            .read_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id)
-        {
-            Ok(Some(token)) if !token.is_empty() => return Ok(token),
-            Ok(_) => {}
-            Err(error) => {
-                return Err(remote_error(
-                    ERR_CREDENTIAL_PERSISTENCE,
-                    format!("secure store is unavailable: {error}"),
-                ))
+        //
+        // §11 — generation-aware two-slot selection. Read BOTH durable slots
+        // and prefer the credential with the HIGHEST generation; on a tie (both
+        // still gen 0 / un-promoted intent) prefer the ACTIVE slot. This is
+        // what proves a stale PENDING leftover can never shadow a promoted
+        // ACTIVE credential even when a prior clear_pending crashed: the
+        // promoted active always carries a strictly higher generation.
+        let pending = read_refresh_slot(self.store.read_pending_refresh(
+            &enrollment.server_instance_id,
+            &enrollment.device_id,
+        ))?;
+        let active = read_refresh_slot(self.store.read_refresh(
+            &enrollment.server_instance_id,
+            &enrollment.device_id,
+        ))?;
+        let best = match (pending, active) {
+            (Some(p), Some(a)) => {
+                // Higher generation wins; a tie prefers ACTIVE (the committed slot).
+                if a.0 > p.0 {
+                    Some(a)
+                } else {
+                    Some(p)
+                }
             }
-        }
-        match self
-            .store
-            .read_refresh(&enrollment.server_instance_id, &enrollment.device_id)
-        {
-            Ok(Some(token)) if !token.is_empty() => Ok(token),
-            Ok(_) => Err(remote_error(
+            // WAL crash: only the pending intent holds the newest value.
+            (Some(p), None) => Some(p),
+            (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        match best {
+            Some((_, token)) => Ok(token),
+            None => Err(remote_error(
                 ERR_LOGIN_EXPIRED,
                 "no remote refresh credential stored; please log in again",
-            )),
-            Err(error) => Err(remote_error(
-                ERR_CREDENTIAL_PERSISTENCE,
-                format!("secure store is unavailable: {error}"),
             )),
         }
     }
@@ -1223,19 +1363,51 @@ impl RemoteBroker {
         enrollment: &RemoteEnrollment,
         next: &str,
     ) -> Result<(), String> {
+        // §11 — the next generation is one past the highest currently readable
+        // durable slot, so the envelope is monotonically increasing across
+        // restarts and a freshly promoted ACTIVE always out-ranks any leftover
+        // stale PENDING. Reads here are best-effort: a read failure never fails
+        // the rotation, it just yields gen 0 (legacy) for that slot.
+        let slot_gen = |read: Result<Option<String>, CredentialStoreError>| {
+            read_refresh_slot(read.or_else(|_| Ok(None)))
+                .unwrap_or(None)
+                .map(|(g, _)| g)
+                .unwrap_or(0)
+        };
+        let next_gen = slot_gen(self.store.read_pending_refresh(
+            &enrollment.server_instance_id,
+            &enrollment.device_id,
+        ))
+        .max(slot_gen(self.store.read_refresh(
+            &enrollment.server_instance_id,
+            &enrollment.device_id,
+        )))
+        .saturating_add(1);
+        let envelope = encode_refresh_envelope(next_gen, next);
         let pending_ok = self
             .store
-            .write_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id, next)
+            .write_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id, &envelope)
             .is_ok();
         let active_ok = self
             .store
-            .write_refresh(&enrollment.server_instance_id, &enrollment.device_id, next)
+            .write_refresh(&enrollment.server_instance_id, &enrollment.device_id, &envelope)
             .is_ok();
         if active_ok {
-            // Promoted: the pending slot is now redundant.
-            let _ = self
+            // Promoted: the pending slot is now redundant. On a clear failure,
+            // repair it to the SAME envelope so it can never hold an older
+            // credential than the active slot (the read's generation selection
+            // closes the case regardless, this is belt-and-suspenders).
+            if self
                 .store
-                .clear_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id);
+                .clear_pending_refresh(&enrollment.server_instance_id, &enrollment.device_id)
+                .is_err()
+            {
+                let _ = self.store.write_pending_refresh(
+                    &enrollment.server_instance_id,
+                    &enrollment.device_id,
+                    &envelope,
+                );
+            }
             *self.state.pending_refresh.lock().await = None;
             return Ok(());
         }
@@ -1279,49 +1451,50 @@ impl RemoteBroker {
                 )
             })?;
         let status = response.status().as_u16();
-        // Gate C/D §4.1 — classify the refresh outcome by HTTP status. Only an
-        // explicit 401/403 is a credential denial (LoginExpired). 429 and 5xx
-        // are transient server/network conditions and must NOT invalidate the
-        // credential or force a re-login.
+        // Gate C/D §4.1 / HIGH-1 — classify the refresh outcome by HTTP status
+        // through the ONE unified classifier. Only an explicit 401/403 is a
+        // credential denial (LoginExpired). 429 and 5xx are transient
+        // server/network conditions and must NOT invalidate the credential or
+        // force a re-login.
         *self.state.refresh_denied.lock().await = false;
-        if status == 401 || status == 403 {
-            // A 401/denial here means the refresh credential itself is
-            // invalid/rotated/revoked. Do not loop: mark LoginExpired.
-            *self.state.refresh_denied.lock().await = true;
-            let detail = response
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|payload| {
-                    payload
-                        .get("detail")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| "refresh denied".to_string());
-            return Err(remote_error(
-                ERR_LOGIN_EXPIRED,
-                format!("refresh denied: {detail}"),
-            ));
-        }
-        if status == 429 {
-            return Err(remote_error(
-                ERR_RATE_LIMITED,
-                "refresh endpoint is rate limiting this client; retry later",
-            ));
-        }
-        if (300..400).contains(&status) {
-            // Redirects stay disabled on the transport; a 3xx here is a
-            // protocol violation, not a credential problem.
-            return Err(remote_error(
-                ERR_PROTOCOL,
-                format!("refresh endpoint returned an unexpected redirect ({status})"),
-            ));
-        }
-        if status != 200 {
+        if let Err(code) = classify_http_status(EndpointKind::Refresh, status) {
+            if status == 401 || status == 403 {
+                // A 401/denial here means the refresh credential itself is
+                // invalid/rotated/revoked. Do not loop: mark LoginExpired.
+                *self.state.refresh_denied.lock().await = true;
+                let detail = response
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|payload| {
+                        payload
+                            .get("detail")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| "refresh denied".to_string());
+                return Err(remote_error(
+                    code,
+                    format!("refresh denied: {detail}"),
+                ));
+            }
+            if status == 429 {
+                return Err(remote_error(
+                    code,
+                    "refresh endpoint is rate limiting this client; retry later",
+                ));
+            }
+            if (300..400).contains(&status) {
+                // Redirects stay disabled on the transport; a 3xx here is a
+                // protocol violation, not a credential problem.
+                return Err(remote_error(
+                    code,
+                    format!("refresh endpoint returned an unexpected redirect ({status})"),
+                ));
+            }
             // 5xx (and any other server-side failure) is transient.
             return Err(remote_error(
-                ERR_SERVER_UNAVAILABLE,
+                code,
                 format!("refresh endpoint is unavailable ({status})"),
             ));
         }
@@ -1823,22 +1996,29 @@ impl RemoteBroker {
                 )
             })?;
         let status = response.status().as_u16();
+        // HIGH-1 — a non-201 login is classified through the ONE unified
+        // taxonomy: 401/403 is a real credential denial, 429 -> RATE_LIMITED,
+        // 5xx -> SERVER_UNAVAILABLE. A transient 429/503 must never be turned
+        // into LoginExpired.
+        if let Err(code) = classify_http_status(EndpointKind::Login, status) {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or(serde_json::json!({}));
+            let detail = body
+                .get("detail")
+                .and_then(|value| value.as_str())
+                .unwrap_or("login failed");
+            return Err(remote_error(code, format!("login failed: {detail}")));
+        }
+        // status == 201 — the success body must parse and carry every required
+        // field; a malformed 201 is a PROTOCOL_ERROR.
         let body: serde_json::Value = response
             .json()
             .await
             .map_err(|error| {
                 remote_error(ERR_PROTOCOL, format!("invalid login response: {error}"))
             })?;
-        if status != 201 {
-            let detail = body
-                .get("detail")
-                .and_then(|value| value.as_str())
-                .unwrap_or("login failed");
-            return Err(remote_error(
-                ERR_LOGIN_EXPIRED,
-                format!("login failed: {detail}"),
-            ));
-        }
         let device = body.get("device").cloned().unwrap_or_default();
         let server_block = body.get("server").cloned().unwrap_or_default();
         let tokens = body.get("tokens").cloned().unwrap_or_default();
@@ -1856,6 +2036,39 @@ impl RemoteBroker {
                 "server identity changed during login; re-verify the server before enrolling",
             ));
         }
+        // §12 — enrollment compatibility metadata is bound to the FRESH verified
+        // server (the native preflight result), never to defaulted/untrusted
+        // values echoed by the login body. Any metadata the login body does
+        // carry must agree with the verified server, otherwise the enrollment
+        // is rejected (IDENTITY_CHANGED / PROTOCOL_ERROR) instead of silently
+        // persisting conflicting or empty values.
+        let binding = |key: &str, verified: &str| -> Result<String, String> {
+            match server_block.get(key).and_then(|v| v.as_str()) {
+                Some(value) if !value.is_empty() => {
+                    if verified.is_empty() {
+                        return Err(remote_error(
+                            ERR_PROTOCOL,
+                            format!("verified server lacks required metadata field `{key}`"),
+                        ));
+                    }
+                    if value != verified {
+                        return Err(remote_error(
+                            ERR_IDENTITY_CHANGED,
+                            format!("login server metadata `{key}` conflicts with the verified server"),
+                        ));
+                    }
+                    Ok(value.to_string())
+                }
+                // Login body omitted the field → use the verified value (never leave
+                // an empty string persisted).
+                _ => Ok(verified.to_string()),
+            }
+        };
+        let product = binding("product", &server.product)?;
+        let api_version = binding("api_version", &server.api_version)?;
+        let server_version = binding("server_version", &server.server_version)?;
+        let min_client_version = binding("min_client_version", &server.min_client_version)?;
+        let display_name = binding("server_display_name", &server.server_display_name)?;
         let device_id = device
             .get("id")
             .and_then(|value| value.as_str())
@@ -1890,31 +2103,11 @@ impl RemoteBroker {
         let enrollment = RemoteEnrollment {
             normalized_origin: normalized,
             server_instance_id: server_instance_id.clone(),
-            server_display_name: server_block
-                .get("server_display_name")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            product: server_block
-                .get("product")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            api_version: server_block
-                .get("api_version")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            server_version: server_block
-                .get("server_version")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            min_client_version: server_block
-                .get("min_client_version")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string(),
+            server_display_name: display_name,
+            product,
+            api_version,
+            server_version,
+            min_client_version,
             device_id: device_id.clone(),
             device_name: device_name_resolved.clone(),
             platform: platform.trim().to_string(),
@@ -2004,15 +2197,15 @@ impl RemoteBroker {
             .json()
             .await
             .unwrap_or(serde_json::json!({ "detail": "bootstrap failed" }));
-        if status != 201 {
+        // HIGH-1 — a non-201 bootstrap is classified through the ONE unified
+        // taxonomy too: 401/403 is a bootstrap-token / auth denial, 429 is
+        // RATE_LIMITED, 5xx is SERVER_UNAVAILABLE, 3xx/other is PROTOCOL_ERROR.
+        if let Err(code) = classify_http_status(EndpointKind::Login, status) {
             let detail = payload
                 .get("detail")
                 .and_then(|value| value.as_str())
                 .unwrap_or("bootstrap failed");
-            return Err(remote_error(
-                ERR_PROTOCOL,
-                format!("bootstrap failed: {detail}"),
-            ));
+            return Err(remote_error(code, format!("bootstrap failed: {detail}")));
         }
         Ok(payload)
     }
@@ -2731,6 +2924,12 @@ pub async fn remote_api_upload_by_uri(
     fields: Option<HashMap<String, String>>,
 ) -> Result<RemoteApiResponse, String> {
     ensure_remote_mode(app.state::<DesktopState>().mode)?;
+    // Gate HIGH-2 — the renderer may never ask the native layer to read an
+    // arbitrary URI. Only `content://` (supplied by SAF) is acceptable;
+    // `file://`, `http(s)://`, `android.resource://`, empty/malformed schemes
+    // are rejected here at the native boundary (defense in depth with the
+    // Kotlin gate).
+    crate::android_bridge::assert_content_only_uri(&uri)?;
     // Stage the SAF content URI into a bounded app-private cache file. The
     // Kotlin layer aborts the copy if it would exceed the product limit, so
     // no unbounded buffer is ever built (Gate R0.5).
@@ -2788,9 +2987,18 @@ pub async fn remote_save_export(
     // export is never materialised as a full base64/Rust Vec.
     let cache_dir = app.path().app_cache_dir().map_err(|error| error.to_string())?;
     let dest = cache_dir.join(format!("export-{}.tmp", uuid::Uuid::new_v4().simple()));
+    // §13 — a RAII cleanup guard guarantees the bounded temp file is removed on
+    // EVERY exit path (download error, HTTP throw, user cancel, SAF failure,
+    // activity-callback error), never just on the happy path.
+    struct TempGuard(std::path::PathBuf);
+    impl Drop for TempGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _guard = TempGuard(dest.clone());
     let downloaded = broker.download_to_file(&app_data, &path, &dest).await?;
     if downloaded.status >= 400 {
-        let _ = std::fs::remove_file(&dest);
         return Err(remote_error(
             ERR_SERVER_UNAVAILABLE,
             format!("artifact download failed with status {}", downloaded.status),
@@ -2820,8 +3028,8 @@ pub async fn remote_save_export(
         &content_type,
     )
     .await?;
-    // Always clean up the bounded temp file after the SAF copy completes.
-    let _ = std::fs::remove_file(&dest);
+    // The guard removes the bounded temp file after the SAF copy completes
+    // (or if the user cancels / the copy errors).
     Ok(serde_json::json!({
         "uri": saved.uri,
         "size": saved.size,
@@ -2905,6 +3113,7 @@ mod tests {
         values: Arc<StdMutex<HashMap<String, String>>>,
         write_fail: Arc<AtomicBool>,
         pending_write_fail: Arc<AtomicBool>,
+        clear_fail: Arc<AtomicBool>,
         read_fail: Arc<AtomicBool>,
     }
 
@@ -2918,9 +3127,29 @@ mod tests {
         fn set_pending_write_fail(&self, fail: bool) {
             self.pending_write_fail.store(fail, Ordering::SeqCst);
         }
+        fn set_clear_fail(&self, fail: bool) {
+            self.clear_fail.store(fail, Ordering::SeqCst);
+        }
         fn set_read_fail(&self, fail: bool) {
             self.read_fail.store(fail, Ordering::SeqCst);
         }
+    }
+
+    /// Read a durable slot and strip the §11 generation envelope so tests assert
+    /// the effective token, not the storage format.
+    fn stored_slot_token(
+        store: &MemoryStore,
+        server: &str,
+        device: &str,
+        active: bool,
+    ) -> Option<String> {
+        let raw = if active {
+            store.read_refresh(server, device)
+        } else {
+            store.read_pending_refresh(server, device)
+        }
+        .unwrap();
+        raw.map(|v| decode_refresh_envelope(&v).1.to_string())
     }
 
     impl CredentialStore for MemoryStore {
@@ -2985,6 +3214,9 @@ mod tests {
             Ok(())
         }
         fn clear_pending_refresh(&self, server_instance_id: &str, device_id: &str) -> Result<(), String> {
+            if self.clear_fail.load(Ordering::SeqCst) {
+                return Err("injected pending clear failure".into());
+            }
             self.values
                 .lock()
                 .unwrap()
@@ -4142,6 +4374,426 @@ mod tests {
         assert!(!*broker.state.refresh_denied.lock().await, "3xx must NOT set refresh_denied");
     }
 
+    // ----------------------------------------- HIGH-1: producer taxonomy.
+
+    #[tokio::test]
+    async fn metadata_probe_429_is_rate_limited() {
+        // The metadata producer is not credential-bound: a 429 is RATE_LIMITED,
+        // never UnsupportedServer / PROTOCOL_ERROR (which previously made a 429
+        // look like an incompatible server).
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => {
+                    TestResponse::json(429, r#"{"detail":"too many requests"}"#)
+                }
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker.probe_desktop_remote(server.url()).await.unwrap_err();
+        assert!(error.contains(ERR_RATE_LIMITED), "got: {error}");
+        assert!(!error.contains(ERR_UNSUPPORTED_SERVER), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn metadata_probe_5xx_is_server_unavailable() {
+        for status in [500u16, 503] {
+            let store = Arc::new(MemoryStore::new());
+            let broker = broker_with(store.clone());
+            let server = TestServer::start(move |request: &RecordedRequest| {
+                match request.path.as_str() {
+                    "/api/system/capabilities" => TestResponse::json(status, "boom"),
+                    "/api/auth/server-info" => TestResponse::json(200, INFO),
+                    _ => TestResponse::json(404, "{}"),
+                }
+            })
+            .await;
+            let error = broker.probe_desktop_remote(server.url()).await.unwrap_err();
+            assert!(error.contains(ERR_SERVER_UNAVAILABLE), "{status} got: {error}");
+            assert!(!error.contains(ERR_UNSUPPORTED_SERVER), "{status} got: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_probe_3xx_is_protocol_error() {
+        for status in [301u16, 302, 307, 308] {
+            let store = Arc::new(MemoryStore::new());
+            let broker = broker_with(store.clone());
+            let server = TestServer::start(move |request: &RecordedRequest| {
+                match request.path.as_str() {
+                    "/api/system/capabilities" => {
+                        TestResponse::redirect(status, "/api/system/capabilities/start")
+                    }
+                    "/api/auth/server-info" => TestResponse::json(200, INFO),
+                    _ => TestResponse::json(404, "{}"),
+                }
+            })
+            .await;
+            let error = broker.probe_desktop_remote(server.url()).await.unwrap_err();
+            assert!(error.contains(ERR_PROTOCOL), "{status} got: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_probe_200_malformed_json_is_protocol_error() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, "not-json{{{"),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker.probe_desktop_remote(server.url()).await.unwrap_err();
+        assert!(error.contains(ERR_PROTOCOL), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn metadata_probe_200_missing_field_is_protocol_error() {
+        // A 200 with a JSON body that misses a required metadata field must
+        // fail closed as PROTOCOL_ERROR (never a defaulted pass).
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, r#"{"product":"interest-growth"}"#),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker.probe_desktop_remote(server.url()).await.unwrap_err();
+        assert!(error.contains(ERR_PROTOCOL), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_201_valid_succeeds() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => TestResponse::json(201, LOGIN_OK),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("login-ok");
+        let result = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "macos", "0.7.0")
+            .await;
+        assert!(result.is_ok(), "valid 201 login must succeed");
+        // Enrollment and refresh credential are persisted.
+        assert!(app_data.0.join(ENROLLMENT_FILE).exists());
+        assert!(store.read_refresh("instance-A", "device-1").unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn login_429_is_rate_limited_not_login_expired() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => {
+                    TestResponse::json(429, r#"{"detail":"too many login attempts"}"#)
+                }
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("login-429");
+        let error = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "macos", "0.7.0")
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_RATE_LIMITED), "got: {error}");
+        assert!(!error.contains(ERR_LOGIN_EXPIRED), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_5xx_is_server_unavailable_not_login_expired() {
+        for status in [500u16, 503] {
+            let store = Arc::new(MemoryStore::new());
+            let broker = broker_with(store.clone());
+            let server = TestServer::start(move |request: &RecordedRequest| {
+                match request.path.as_str() {
+                    "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                    "/api/auth/server-info" => TestResponse::json(200, INFO),
+                    "/api/auth/owner/login" => TestResponse::json(status, "boom"),
+                    _ => TestResponse::json(404, "{}"),
+                }
+            })
+            .await;
+            let app_data = TempDir::new("login-5xx");
+            let error = broker
+                .login(&app_data.0, server.url(), "correct-horse", "device", "macos", "0.7.0")
+                .await
+                .unwrap_err();
+            assert!(error.contains(ERR_SERVER_UNAVAILABLE), "{status} got: {error}");
+            assert!(!error.contains(ERR_LOGIN_EXPIRED), "{status} got: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn login_401_403_is_credential_denial() {
+        for status in [401u16, 403] {
+            let store = Arc::new(MemoryStore::new());
+            let broker = broker_with(store.clone());
+            let server = TestServer::start(move |request: &RecordedRequest| {
+                match request.path.as_str() {
+                    "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                    "/api/auth/server-info" => TestResponse::json(200, INFO),
+                    "/api/auth/owner/login" => {
+                        TestResponse::json(status, r#"{"detail":"invalid owner password"}"#)
+                    }
+                    _ => TestResponse::json(404, "{}"),
+                }
+            })
+            .await;
+            let app_data = TempDir::new("login-auth");
+            let error = broker
+                .login(&app_data.0, server.url(), "wrong-horse", "device", "macos", "0.7.0")
+                .await
+                .unwrap_err();
+            assert!(error.contains(ERR_LOGIN_EXPIRED), "{status} got: {error}");
+            assert!(!error.contains("wrong-horse"), "{status} error must not leak the password");
+        }
+    }
+
+    #[tokio::test]
+    async fn login_redirect_is_protocol_error() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => {
+                    TestResponse::redirect(302, "/api/auth/owner/login/evil")
+                }
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("login-redirect");
+        let error = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "macos", "0.7.0")
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_PROTOCOL), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_malformed_201_body_is_protocol_error() {
+        // A 201 with a non-JSON body is PROTOCOL_ERROR, never a silently
+        // defaulted credential.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => TestResponse::json(201, "not valid json"),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("login-malformed");
+        let error = broker
+            .login(&app_data.0, server.url(), "correct-horse", "device", "macos", "0.7.0")
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_PROTOCOL), "got: {error}");
+    }
+
+    // ----------------------------------------- §12: login metadata binding.
+    // The enrollment's compatibility metadata must come from the FRESH verified
+    // server; any metadata the login body echoes must AGREE, else the login is
+    // rejected instead of persisting conflicting/empty values.
+
+    async fn login_with_server_block(server_block: String) -> Result<RemoteEnrollment, String> {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let test_server = TestServer::start(move |request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => TestResponse::json(200, CAPS),
+                "/api/auth/server-info" => TestResponse::json(200, INFO),
+                "/api/auth/owner/login" => {
+                    let body = format!(
+                        r#"{{"device":{{"id":"device-1","name":"test-device"}},"tokens":{{"access_token":"access-1","refresh_token":"refresh-rotated-1","expires_in":300}},"server":{server_block}}}"#
+                    );
+                    TestResponse::json(201, &body)
+                }
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let app_data = TempDir::new("login-meta");
+        broker
+            .login(
+                &app_data.0,
+                test_server.url(),
+                "correct-horse",
+                "device",
+                "macos",
+                "0.7.0",
+            )
+            .await
+            .map_err(|error| error)?;
+        load_enrollment(&app_data.0)
+            .ok_or_else(|| "enrollment file was not persisted".to_string())
+    }
+
+    #[tokio::test]
+    async fn login_conflicting_product_is_identity_changed() {
+        let block = r#"{"product":"acme-other","server_version":"0.7.0","api_version":"1","min_client_version":"0.7.0","server_instance_id":"instance-A","server_display_name":"Test Server"}"#;
+        let error = login_with_server_block(block.into()).await.unwrap_err();
+        assert!(error.contains(ERR_IDENTITY_CHANGED), "got: {error}");
+        assert!(error.contains("product"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_conflicting_api_version_is_identity_changed() {
+        let block = r#"{"product":"interest-growth","server_version":"0.7.0","api_version":"999","min_client_version":"0.7.0","server_instance_id":"instance-A","server_display_name":"Test Server"}"#;
+        let error = login_with_server_block(block.into()).await.unwrap_err();
+        assert!(error.contains(ERR_IDENTITY_CHANGED), "got: {error}");
+        assert!(error.contains("api_version"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_conflicting_min_client_is_identity_changed() {
+        let block = r#"{"product":"interest-growth","server_version":"0.7.0","api_version":"1","min_client_version":"9.9.9","server_instance_id":"instance-A","server_display_name":"Test Server"}"#;
+        let error = login_with_server_block(block.into()).await.unwrap_err();
+        assert!(error.contains(ERR_IDENTITY_CHANGED), "got: {error}");
+        assert!(error.contains("min_client_version"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_conflicting_server_version_is_identity_changed() {
+        let block = r#"{"product":"interest-growth","server_version":"1.0.9","api_version":"1","min_client_version":"0.7.0","server_instance_id":"instance-A","server_display_name":"Test Server"}"#;
+        let error = login_with_server_block(block.into()).await.unwrap_err();
+        assert!(error.contains(ERR_IDENTITY_CHANGED), "got: {error}");
+        assert!(error.contains("server_version"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_conflicting_display_name_is_identity_changed() {
+        let block = r#"{"product":"interest-growth","server_version":"0.7.0","api_version":"1","min_client_version":"0.7.0","server_instance_id":"instance-A","server_display_name":"Evil Mirror"}"#;
+        let error = login_with_server_block(block.into()).await.unwrap_err();
+        assert!(error.contains(ERR_IDENTITY_CHANGED), "got: {error}");
+        assert!(error.contains("server_display_name"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn login_missing_login_body_metadata_uses_verified_values() {
+        // The login body omits the compatibility metadata entirely; the
+        // enrollment must fall back to the verified preflight values (never an
+        // empty string), and the refresh credential is persisted.
+        let block = r#"{"server_instance_id":"instance-A"}"#;
+        let enrollment = login_with_server_block(block.into()).await.expect("must succeed");
+        assert_eq!(enrollment.product, "interest-growth");
+        assert_eq!(enrollment.api_version, "1");
+        assert_eq!(enrollment.server_version, "0.7.0");
+        assert_eq!(enrollment.min_client_version, "0.7.0");
+        assert_eq!(enrollment.server_display_name, "Test Server");
+        assert!(!enrollment.product.is_empty() && !enrollment.server_display_name.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_429_is_rate_limited() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => {
+                    TestResponse::json(200, &caps_with(&[("auth.owner_configured", "false")]))
+                }
+                "/api/auth/server-info" => {
+                    TestResponse::json(200, &caps_with(&[("auth.owner_configured", "false")]))
+                }
+                "/api/auth/owner/bootstrap" => {
+                    TestResponse::json(429, r#"{"detail":"too many requests"}"#)
+                }
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker
+            .bootstrap_owner(server.url(), "correct-horse", "bootstrap-secret")
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_RATE_LIMITED), "got: {error}");
+        assert!(!error.contains(ERR_PROTOCOL), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_5xx_is_server_unavailable() {
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(|request: &RecordedRequest| {
+            match request.path.as_str() {
+                "/api/system/capabilities" => {
+                    TestResponse::json(200, &caps_with(&[("auth.owner_configured", "false")]))
+                }
+                "/api/auth/server-info" => {
+                    TestResponse::json(200, &caps_with(&[("auth.owner_configured", "false")]))
+                }
+                "/api/auth/owner/bootstrap" => TestResponse::json(503, "boom"),
+                _ => TestResponse::json(404, "{}"),
+            }
+        })
+        .await;
+        let error = broker
+            .bootstrap_owner(server.url(), "correct-horse", "bootstrap-secret")
+            .await
+            .unwrap_err();
+        assert!(error.contains(ERR_SERVER_UNAVAILABLE), "got: {error}");
+        assert!(!error.contains(ERR_PROTOCOL), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_401_403_is_credential_denial() {
+        for status in [401u16, 403] {
+            let store = Arc::new(MemoryStore::new());
+            let broker = broker_with(store.clone());
+            let server = TestServer::start(move |request: &RecordedRequest| {
+                match request.path.as_str() {
+                    "/api/system/capabilities" => {
+                        TestResponse::json(
+                            200,
+                            &caps_with(&[("auth.owner_configured", "false")]),
+                        )
+                    }
+                    "/api/auth/server-info" => {
+                        TestResponse::json(
+                            200,
+                            &caps_with(&[("auth.owner_configured", "false")]),
+                        )
+                    }
+                    "/api/auth/owner/bootstrap" => {
+                        TestResponse::json(status, r#"{"detail":"bootstrap token rejected"}"#)
+                    }
+                    _ => TestResponse::json(404, "{}"),
+                }
+            })
+            .await;
+            let error = broker
+                .bootstrap_owner(server.url(), "correct-horse", "bootstrap-secret")
+                .await
+                .unwrap_err();
+            assert!(error.contains(ERR_LOGIN_EXPIRED), "{status} got: {error}");
+            assert!(!error.contains("bootstrap-secret"), "{status} error must not leak the token");
+        }
+    }
+
     #[tokio::test]
     async fn business_401_refresh_retry_recovers_200() {
         // Gate C/D §4.8 — business request with an old access → 401 → refresh →
@@ -4257,12 +4909,12 @@ mod tests {
         // The rotated credential survives: the durable PENDING slot holds it
         // (the active write failed), so nothing is staged only in memory.
         assert_eq!(
-            store.read_pending_refresh("instance-A", "device-1").unwrap().as_deref(),
+            stored_slot_token(&store, "instance-A", "device-1", false).as_deref(),
             Some("refresh-rotated-2")
         );
         assert!(broker.state.pending_refresh.lock().await.is_none());
         // Crash recovery: a fresh broker over the same store reads the pending
-        // slot as the effective credential (read prefers pending).
+        // slot as the effective credential (read prefers the higher generation).
         let restarted = broker_with(store.clone());
         assert_eq!(
             restarted.read_effective_refresh(&enrollment).await.unwrap(),
@@ -4273,7 +4925,7 @@ mod tests {
         let second = broker.refresh_session_token(&enrollment).await;
         assert_eq!(second.unwrap(), "access-refreshed");
         assert_eq!(
-            store.read_pending_refresh("instance-A", "device-1").unwrap().as_deref(),
+            stored_slot_token(&store, "instance-A", "device-1", false).as_deref(),
             Some("refresh-rotated-2")
         );
         // Once the store recovers, the next real refresh persists the
@@ -4283,8 +4935,55 @@ mod tests {
         let _ = broker.refresh_session_token(&enrollment).await;
         assert!(store.read_pending_refresh("instance-A", "device-1").unwrap().is_none());
         assert_eq!(
-            store.read_refresh("instance-A", "device-1").unwrap().as_deref(),
+            stored_slot_token(&store, "instance-A", "device-1", true).as_deref(),
             Some("refresh-rotated-2")
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_pending_never_shadows_promoted_active() {
+        // §11 — simulate the double-failure that previously left a STALE pending
+        // token that shadowed a promoted active credential: the pending write of
+        // a rotated replacement fails, the active promotion succeeds, and the
+        // subsequent clear also fails. Restart must still read the promoted
+        // ACTIVE (highest generation), never the stale older pending value.
+        let store = Arc::new(MemoryStore::new());
+        let broker = broker_with(store.clone());
+        let server = TestServer::start(compatible_handler()).await;
+        let app_data = TempDir::new("stale-pending");
+        let enrollment = seed_enrollment(&app_data.0, server.url(), "instance-A", "device-1", store.as_ref());
+
+        // Seed a deliberately STALE pending value that predates the seed active
+        // (e.g. a leftover from a prior crashed rotation carrying the old token).
+        store
+            .write_pending_refresh("instance-A", "device-1", "stale-pending-leak")
+            .unwrap();
+
+        // Rotate: pending write fails (stale stays), active promotion succeeds,
+        // then the clear of pending also fails.
+        store.set_pending_write_fail(true);
+        store.set_clear_fail(true);
+        let result = broker.refresh_session_token(&enrollment).await;
+        assert!(result.is_ok(), "rotation must succeed via the active slot: {result:?}");
+        store.set_pending_write_fail(false);
+        store.set_clear_fail(false);
+
+        // Active now holds the promoted replacement; the stale pending leaked.
+        assert_eq!(
+            stored_slot_token(&store, "instance-A", "device-1", true).as_deref(),
+            Some("refresh-rotated-2")
+        );
+        assert_eq!(
+            stored_slot_token(&store, "instance-A", "device-1", false).as_deref(),
+            Some("stale-pending-leak")
+        );
+
+        // Restart (fresh process state) MUST read the promoted active, never the
+        // stale pending.
+        let restarted = broker_with(store.clone());
+        assert_eq!(
+            restarted.read_effective_refresh(&enrollment).await.unwrap(),
+            "refresh-rotated-2"
         );
     }
 

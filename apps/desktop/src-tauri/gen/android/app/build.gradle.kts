@@ -17,9 +17,12 @@ val tauriProperties = Properties().apply {
 // source. They come from (in priority order):
 //   1. a gitignored `keystore.properties` next to this file, or
 //   2. environment variables (storeFile/storePassword/keyAlias/keyPassword).
-// If none are present the release build type simply has no explicit signing
-// config and Android falls back to the debug keystore (NOT a release cert) —
-// the CI/verify steps detect that and never claim a signed release.
+// Formal release assembly (PG_RELEASE_BUILD=1, set by the release workflow)
+// is FAIL-CLOSED at the Gradle layer: if any signing field is missing the
+// build aborts rather than silently falling back to the debug keystore.
+// Local/debug development (PG_RELEASE_BUILD unset) may build unsigned and
+// rely on the later apksigner/verify checks — the debug keystore is never a
+// release cert.
 val keystoreProps = Properties().apply {
     val propFile = file("keystore.properties")
     if (propFile.exists()) {
@@ -75,9 +78,27 @@ android {
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
                     .toList().toTypedArray()
             )
-            if (releaseStoreFile != null && releaseStorePassword != null &&
+            // Gate F §18 — formal release assembly fails closed at the Gradle
+            // layer. PG_RELEASE_BUILD=1 is set only by the release workflow on
+            // the signed arm64 build; a missing signing field there is a hard
+            // abort, never a silent fallback to the debug keystore.
+            if (System.getenv("PG_RELEASE_BUILD") == "1") {
+                val allSigningFieldsPresent = releaseStoreFile != null &&
+                    releaseStorePassword != null &&
+                    releaseKeyAlias != null &&
+                    releaseKeyPassword != null
+                check(allSigningFieldsPresent) {
+                    "PG_RELEASE_BUILD=1 (formal release) but release signing " +
+                        "fields are missing; a release MUST NOT fall back to the " +
+                        "debug keystore. Provide PG_ANDROID_STORE_FILE/PASSWORD/" +
+                        "KEY_ALIAS/KEY_PASSWORD (or gitignored keystore.properties)."
+                }
+                signingConfig = signingConfigs.getByName("release")
+            } else if (releaseStoreFile != null && releaseStorePassword != null &&
                 releaseKeyAlias != null && releaseKeyPassword != null
             ) {
+                // Local/dev: sign when credentials are available, otherwise
+                // leave unsigned for later apksigner/verify checks.
                 signingConfig = signingConfigs.getByName("release")
             }
         }

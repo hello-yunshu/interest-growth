@@ -55,6 +55,23 @@ pub struct SavedDocument {
     pub size: i64,
 }
 
+/// Gate HIGH-2 — a SAF upload source URI must be a `content://` URI. This is a
+/// pure, host-testable mirror of the Kotlin `InterestGrowthPlugin` gate: the
+/// renderer is NOT a security boundary, so the native command fail-closes
+/// before a `file://`, `http(s)://`, `android.resource://`, empty or malformed
+/// scheme can ever reach the ContentResolver.
+pub(crate) fn assert_content_only_uri(uri: &str) -> Result<(), String> {
+    let (scheme, rest) = uri.split_once(':').unwrap_or(("", ""));
+    let looks_like_content = scheme == "content" && rest.starts_with("//");
+    if looks_like_content {
+        return Ok(());
+    }
+    Err(crate::remote::remote_error(
+        crate::remote::ERR_PROTOCOL,
+        "only content:// URIs are accepted for SAF uploads",
+    ))
+}
+
 /// Holds the registered Android plugin handle so native commands can invoke
 /// Kotlin (SAF) without re-resolving the plugin per call.
 #[cfg(target_os = "android")]
@@ -181,4 +198,45 @@ pub async fn save_document_from_file(
     _mime_type: &str,
 ) -> Result<SavedDocument, String> {
     Err("SAF document writes are only available on the Android build".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assert_content_only_uri;
+    use crate::remote::ERR_PROTOCOL;
+
+    #[test]
+    fn content_uri_accepted() {
+        // A valid SAF content URI (with an authority) is accepted.
+        assert!(assert_content_only_uri("content://com.android.providers.media/1").is_ok());
+        assert!(assert_content_only_uri("content://media/external/file/42?flag=x").is_ok());
+    }
+
+    #[test]
+    fn file_uri_rejected() {
+        let error = assert_content_only_uri("file:///etc/passwd").unwrap_err();
+        assert!(error.contains(ERR_PROTOCOL));
+    }
+
+    #[test]
+    fn http_https_uri_rejected() {
+        for uri in ["http://host/x", "https://host/x"] {
+            let error = assert_content_only_uri(uri).unwrap_err();
+            assert!(error.contains(ERR_PROTOCOL), "{uri} must be rejected");
+        }
+    }
+
+    #[test]
+    fn resource_uri_rejected() {
+        let error = assert_content_only_uri("android.resource://pkg/drawable/x").unwrap_err();
+        assert!(error.contains(ERR_PROTOCOL));
+    }
+
+    #[test]
+    fn empty_or_malformed_scheme_rejected() {
+        for uri in ["", "/abs/path", "relative", "content:", "content:/single", "CONtent://x"] {
+            let error = assert_content_only_uri(uri).unwrap_err();
+            assert!(error.contains(ERR_PROTOCOL), "{uri:?} must be rejected");
+        }
+    }
 }

@@ -169,6 +169,17 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
           const machine = machineRef.current;
           if (!machine) return;
           try {
+            // §9 — resume != Connected. Even when the local access token has
+            // not expired yet, the server may have been replaced or dropped
+            // while backgrounded, so a REAL remote re-evaluation always runs on
+            // foreground return. Identity probe first: a replaced server is a
+            // blocking IdentityChanged, never a silent Connected.
+            const identity = await remoteVerifyIdentity();
+            if (!active) return;
+            if (identity?.identityChanged) {
+              machine.handle('IDENTITY_MISMATCH');
+              return;
+            }
             const status = await remoteSessionStatus();
             if (!active) return;
             if (status?.enrolled && status?.connected) {
@@ -229,7 +240,14 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
           pendingRuntimeId: modeInfo?.pendingRuntimeId,
         });
       } catch {
-        if (active) dispatch({ type: 'MODE_LOADED', activeRuntimeId: 'desktop-local' });
+        // §10 — Android never falls back to desktop-local. The native broker
+        // is the single runtime source of truth on Android; a failed mode query
+        // must not silently redirect the renderer into a local runtime (which
+        // would surface a local/remote switch and restart-required UX).
+        if (active) {
+          const safeFallback = runtime?.platform === 'android' ? 'android-remote' : 'desktop-local';
+          dispatch({ type: 'MODE_LOADED', activeRuntimeId: safeFallback });
+        }
       }
       try {
         const status = await remoteSessionStatus();
