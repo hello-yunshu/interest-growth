@@ -445,7 +445,10 @@ jobs:
       - name: Generate SBOM for release artifact (SPDX) — §12.4
         uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
         with:
-          path: dist/android/interest-growth-android-arm64.apk
+          # syft v1.x forces a `dir:` source type, which cannot resolve a
+          # single file path. Scan the containing directory (the release APK
+          # sits inside) so the SPDX SBOM is generated successfully (§12.4).
+          path: dist/android
           format: spdx-json
           output-file: dist/android/interest-growth-android-arm64.spdx.json
           artifact-name: interest-growth-sbom
@@ -475,17 +478,17 @@ jobs:
         id: body
         run: |
           cat > "$RUNNER_TEMP/body.md" <<'EOF'
-          # Interest Growth v0.7
+          # Interest Growth ${{ steps.meta.outputs.tag }}
 
           - **Commit:** ${{ github.sha }}
           - **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           - **Supported platforms:** Android (arm64-v8a)
           - **Verification:** source integrity + Host regression + Web/ClientRuntime + Rust + Docker integration + Android signed build + APK static verification + Android emulator cold launch (see verification report asset)
           - **Signing:** release certificate SHA-256 fingerprint is reported in the verification report (non-secret)
-          - **Known limitations / NOT RUN:** see `V0_7_RELEASE_VERIFICATION.md` asset
-          - **Server compatibility:** v0.7 authenticated self-hosted Core (online-first, no offline sync)
+          - **Known limitations / NOT RUN:** see `V1_0_RELEASE_VERIFICATION.md` asset
+          - **Server compatibility:** v1.0.0 authenticated self-hosted Core (online-first, no offline sync)
 
-          Checksums are in `SHA256SUMS.txt`; the verification report is `V0_7_RELEASE_VERIFICATION.md`.
+          Checksums are in `SHA256SUMS.txt`; the verification report is `V1_0_RELEASE_VERIFICATION.md`.
           EOF
           echo "path=${RUNNER_TEMP}/body.md" >> "$GITHUB_OUTPUT"
       - name: Create release
