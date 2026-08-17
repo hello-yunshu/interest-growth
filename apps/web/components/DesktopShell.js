@@ -137,6 +137,7 @@ export default function DesktopShell({ children }) {
       if (active) { setCurrentArea(selected.area || null); setAreaReady(true); }
     }).catch(() => { if (active) setAreaReady(true); });
     if (isTauri()) import('@tauri-apps/api/event').then(({ listen }) => listen('core-terminated', async () => { try { const value = await refreshDesktopRuntime(); if (active) setRuntime(value); } catch { if (active) setRuntime(current => ({ ...current, status: 'error' })); } })).then(fn => { unlisten = fn; }).catch(() => {});
+    maybeRunUiIpcE2e().catch(console.error);
     return () => { active = false; if (unlisten) unlisten(); };
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = theme; window.localStorage.setItem('interest-growth.theme', theme); }, [theme]);
