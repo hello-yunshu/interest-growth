@@ -24,6 +24,11 @@ mod runtime_mode;
 // module is `cfg(debug_assertions)`-gated and inert in release builds.
 #[cfg(debug_assertions)]
 mod emulator_e2e;
+// Gate R2 §10.3 / R4 §10 layer-2 — Desktop A native broker harness for the
+// true Native cross-device gate. `desktop-native-harness` feature only; never
+// part of a default (product) build.
+#[cfg(feature = "desktop-native-harness")]
+mod cross_device_harness;
 // Gate R2 §8.2 — Android UI/IPC smoke invoke back-end. Compiled in both build
 // kinds so the invoke_handler list stays valid; bodies are inert in release.
 mod ui_ipc_e2e;
@@ -651,6 +656,43 @@ fn restart_desktop_core(
             let failed = runtime_error(&app, &error, state.mode);
             *state.runtime.lock().map_err(|_| "desktop state poisoned")? = failed;
             Err(error)
+        }
+    }
+}
+
+// Gate R2 §10.3 / R4 §10 layer-2 — Desktop A native broker harness entry.
+// The CI cross-device job builds the `desktop_native_harness` binary
+// (required-features = ["desktop-native-harness"]) and runs it against a real
+// Docker server to prove cross-device sync with a real Android emulator. The
+// harness is feature-gated and inert in every product build. `config_json` is
+// the `HarnessConfig` document (phase a_create / b_revoke). Returns the
+// process exit code: 0 = PASS, 1 = FAIL, 2 = harness error.
+#[cfg(feature = "desktop-native-harness")]
+pub fn run_desktop_native_harness(config_json: &str) -> i32 {
+    let config: cross_device_harness::HarnessConfig = match serde_json::from_str(config_json) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("desktop_native_harness: invalid config: {error}");
+            return 2;
+        }
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("desktop_native_harness: cannot start runtime: {error}");
+            return 2;
+        }
+    };
+    match runtime.block_on(cross_device_harness::run_harness(config)) {
+        Ok(report) => {
+            let pass = report.get("result").and_then(|value| value.as_str()) == Some("PASS");
+            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            println!("HARNESS RESULT={}", if pass { "PASS" } else { "FAIL" });
+            if pass { 0 } else { 1 }
+        }
+        Err(error) => {
+            eprintln!("desktop_native_harness: FAIL: {error}");
+            1
         }
     }
 }

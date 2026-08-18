@@ -604,8 +604,11 @@ jobs:
   cross-device:
     name: Stable cross-device (desktop-remote + Android, same server)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: release-meta
+    timeout-minutes: 120
+    # android-signed-build provides the x86_64 DEBUG APK (emulator_e2e is
+    # compiled in via cfg(debug_assertions)); the layer-2 Native gate runs the
+    # Desktop A Rust harness and the real Android emulator on ONE clean server.
+    needs: [release-meta, android-signed-build]
     steps:
       - name: Stable-only gate — N/A for RC tag
         if: needs.release-meta.outputs.is_stable != 'true'
@@ -710,6 +713,165 @@ jobs:
           print("server multi-device: A->B and B->A exact-id reads verified; revoke isolation PASS")
           PY
           docker compose -p ig-cross down -v --remove-orphans
+
+      # =========================================================================
+      # Layer 2 — true Native cross-device gate (prompt §10 layer-2). ONE clean
+      # Docker server; Desktop A is a REAL native desktop-remote broker (the
+      # desktop_native_harness binary, NOT a raw HTTP client) and Android B is a
+      # REAL Android emulator running the native android-remote broker
+      # (emulator_e2e.rs, compiled into the x86_64 DEBUG APK). Evidence levels:
+      # DESKTOP_NATIVE_BROKER + ANDROID_EMULATOR_NATIVE_BROKER + CROSS_DEVICE.
+      # =========================================================================
+      - name: Download emulator x86_64 debug APK
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: dist/android
+      - name: Set up JDK 17
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Enable KVM
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Set up Rust
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - name: Install Tauri Linux system dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Build Desktop A native harness binary (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          cd apps/desktop/src-tauri
+          # tauri-build validates every externalBin file; a placeholder satisfies
+          # the build (the real PyInstaller sidecar is built per target).
+          mkdir -p binaries
+          : > binaries/psychology-growth-core-x86_64-unknown-linux-gnu
+          cargo build --locked --bin desktop_native_harness --features desktop-native-harness
+          ls -la target/debug/desktop_native_harness
+      - name: Boot server for Native cross-device gate (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          # Same env_file requirement as the other jobs (see android-emulator
+          # comment): the remote-auth config MUST live in .env, not shell env.
+          cat > .env <<'EOF'
+          PG_REMOTE_AUTH_ENABLED=true
+          PG_OWNER_BOOTSTRAP_TOKEN=ci-bootstrap-token-7a1f
+          APP_ENV=remote
+          EOF
+          docker compose -p ig-cross-native build api
+          docker compose -p ig-cross-native up -d api
+          for _ in $(seq 1 60); do if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then break; fi; sleep 2; done
+          curl -sS -f http://127.0.0.1:8000/api/health >/dev/null || { echo "server failed to become healthy" >&2; docker compose -p ig-cross-native logs api >&2 || true; exit 1; }
+          echo "server healthy on 127.0.0.1:8000 (project ig-cross-native, clean volume)"
+      - name: Prepare Desktop A harness + Android B slice configs (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ig_harness
+          cp apps/desktop/src-tauri/target/debug/desktop_native_harness /tmp/ig_harness/desktop_native_harness
+          # Desktop A phase a_create: real probe -> bootstrap -> login/enroll ->
+          # create A's marker. Enrollment + refresh credential persist under the
+          # default appDataDir/storeFile so b_revoke reuses A's session.
+          cat > /tmp/ig_harness/a_create.json <<'JSON'
+          {
+            "phase": "a_create",
+            "origin": "http://127.0.0.1:8000",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "desktop-native-A",
+            "createMarker": "desktop-native-A authored"
+          }
+          JSON
+          # Desktop A phase b_revoke: B->A exact read, device list A+B, revoke B,
+          # A unaffected, server records B revoked.
+          cat > /tmp/ig_harness/b_revoke.json <<'JSON'
+          {
+            "phase": "b_revoke",
+            "origin": "http://127.0.0.1:8000",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "desktop-native-A",
+            "expectBQuestion": "android-emulator-B authored",
+            "expectBDeviceName": "android-emulator-cross-b"
+          }
+          JSON
+          # Android B slice 1 (emulator app launch): enroll + keepDevice + exact
+          # A->B read of A's marker + B creates its own marker + stays active.
+          cat > /tmp/ig_harness/b_slice1.json <<'JSON'
+          {
+            "origin": "http://127.0.0.1:18080",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "android-emulator-cross-b",
+            "expectAQuestion": "desktop-native-A authored",
+            "createMarker": "android-emulator-B authored",
+            "keepDevice": true
+          }
+          JSON
+          # Android B slice 2 (second app launch, after A revoked B): the stored
+          # credential is DENIED on an authenticated mutation, then B re-enrolls
+          # (recovery) and re-reads A's marker.
+          cat > /tmp/ig_harness/b_slice2.json <<'JSON'
+          {
+            "origin": "http://127.0.0.1:18080",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "android-emulator-cross-b",
+            "expectAQuestion": "desktop-native-A authored",
+            "expectRevoked": true
+          }
+          JSON
+          echo "configs written:"; ls -la /tmp/ig_harness
+      - name: Desktop A — phase a_create (native desktop-remote broker)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          OUT="$(/tmp/ig_harness/desktop_native_harness --config /tmp/ig_harness/a_create.json)"
+          printf '%s\n' "$OUT"
+          printf '%s' "$OUT" | grep -q 'HARNESS RESULT=PASS' || { echo "Desktop A a_create did not report PASS" >&2; exit 1; }
+          echo "Desktop A a_create: PASS"
+      - name: Boot Android emulator — B slices + A revoke orchestration (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          avd-name: igtest
+          force-avd-creation: true
+          # Same emulator flags as the android-emulator job (headless CI).
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          # The orchestrator script runs on the HOST (adb on PATH) and drives:
+          #   B slice 1 (enroll + A->B exact read + keepDevice)
+          #   Desktop A b_revoke (host binary, same server)
+          #   B slice 2 (expectRevoked + recovery cross-read)
+          script: bash ${{ github.workspace }}/scripts/ci/cross_device_emulator_slices.sh
+        env:
+          IG_HARNESS_BIN: /tmp/ig_harness/desktop_native_harness
+          IG_B_REVOKE_CFG: /tmp/ig_harness/b_revoke.json
+          IG_B_SLICE1_CFG: /tmp/ig_harness/b_slice1.json
+          IG_B_SLICE2_CFG: /tmp/ig_harness/b_slice2.json
+          IG_APK: ${{ github.workspace }}/dist/android/interest-growth-android-x86_64-debug.apk
+          IG_PKG: app.psychologygrowth.desktop
+      - name: Teardown Native cross-device server
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        run: docker compose -p ig-cross-native down -v --remove-orphans
 
   windows-package:
     name: Stable Windows x64 package build + startup smoke

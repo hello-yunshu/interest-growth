@@ -586,6 +586,132 @@ impl CredentialStore for KeyringStore {
     }
 }
 
+/// Gate C/D §4.5 — file-backed credential store for HEADLESS harness only
+/// (`desktop-native-harness` feature). The production desktop build always uses
+/// the OS keyring (`KeyringStore`); Android always uses the Keystore. This
+/// plaintext file store exists solely so the CI cross-device gate can run a
+/// REAL `RemoteBroker` on a headless Linux runner that has no keyring daemon.
+/// It is explicitly NOT a production credential store and must never be
+/// selected by product code. The token is written with the platform temp-file
+/// pattern (write + rename) and the file mode is tightened to 0600.
+#[cfg(all(feature = "desktop-native-harness", not(target_os = "android")))]
+pub struct FileCredentialStore {
+    path: std::path::PathBuf,
+}
+
+#[cfg(all(feature = "desktop-native-harness", not(target_os = "android")))]
+impl FileCredentialStore {
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+        }
+    }
+
+    fn read_slot(&self, username: &str) -> Result<Option<String>, CredentialStoreError> {
+        let map = read_store_map(&self.path)?;
+        Ok(map.get(username).cloned().filter(|value| !value.trim().is_empty()))
+    }
+
+    fn write_slot(&self, username: &str, token: &str) -> Result<(), String> {
+        write_store_slot(&self.path, username, token.to_string())
+    }
+
+    fn delete_slot(&self, username: &str) -> Result<(), String> {
+        remove_store_slot(&self.path, username)
+    }
+}
+
+#[cfg(all(feature = "desktop-native-harness", not(target_os = "android")))]
+impl CredentialStore for FileCredentialStore {
+    fn read_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError> {
+        self.read_slot(&active_username(server_instance_id, device_id))
+    }
+
+    fn read_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, CredentialStoreError> {
+        self.read_slot(&pending_username(server_instance_id, device_id))
+    }
+
+    fn write_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+        token: &str,
+    ) -> Result<(), String> {
+        self.write_slot(&active_username(server_instance_id, device_id), token)
+    }
+
+    fn write_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+        token: &str,
+    ) -> Result<(), String> {
+        self.write_slot(&pending_username(server_instance_id, device_id), token)
+    }
+
+    fn clear_pending_refresh(
+        &self,
+        server_instance_id: &str,
+        device_id: &str,
+    ) -> Result<(), String> {
+        self.delete_slot(&pending_username(server_instance_id, device_id))
+    }
+
+    fn delete_refresh(&self, server_instance_id: &str, device_id: &str) -> Result<(), String> {
+        self.delete_slot(&active_username(server_instance_id, device_id))?;
+        self.delete_slot(&pending_username(server_instance_id, device_id))
+    }
+}
+
+/// Read the whole plaintext store map. A missing file is an empty map (all
+/// reads return `Ok(None)`), never an error — the store itself failing to load
+/// is classified as `Other` so it can never be mistaken for "no credential".
+#[cfg(all(feature = "desktop-native-harness", not(target_os = "android")))]
+fn read_store_map(path: &std::path::Path) -> Result<HashMap<String, String>, CredentialStoreError> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) if raw.trim().is_empty() => Ok(HashMap::new()),
+        Ok(raw) => serde_json::from_str(&raw)
+            .map_err(|error| CredentialStoreError::Other(format!("store corrupt: {error}"))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(error) => Err(CredentialStoreError::Other(format!("store unreadable: {error}"))),
+    }
+}
+
+#[cfg(all(feature = "desktop-native-harness", not(target_os = "android")))]
+fn write_store_slot(path: &std::path::Path, username: &str, value: String) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut map = read_store_map(path).map_err(|error| error.to_string())?;
+    map.insert(username.to_string(), value);
+    let payload = serde_json::to_vec_pretty(&map).map_err(|error| error.to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let temp = path.with_extension("tmp");
+    std::fs::write(&temp, payload).map_err(|error| error.to_string())?;
+    let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
+    std::fs::rename(&temp, path).map_err(|error| error.to_string())
+}
+
+#[cfg(all(feature = "desktop-native-harness", not(target_os = "android")))]
+fn remove_store_slot(path: &std::path::Path, username: &str) -> Result<(), String> {
+    let mut map = read_store_map(path).map_err(|error| error.to_string())?;
+    if map.remove(username).is_some() {
+        let payload = serde_json::to_vec_pretty(&map).map_err(|error| error.to_string())?;
+        let temp = path.with_extension("tmp");
+        std::fs::write(&temp, payload).map_err(|error| error.to_string())?;
+        std::fs::rename(&temp, path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Gate E §6.4 — Android OS-backed secure credential store. Wraps the Android
 /// Keystore-backed store (android-native-keyring-store): the refresh credential
 /// is encrypted and persisted to app-private SharedPreferences with the key
