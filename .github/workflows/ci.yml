@@ -144,7 +144,9 @@ jobs:
   rust:
     name: Rust source gate (cargo check/test --locked --lib)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Tauri system deps + web export + cargo check/test (incl. the harness
+    # feature check) needs headroom over the old 30m budget.
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,10 +161,9 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Install Tauri Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        # Bounded apt with canonical mirror pinning — the default azure
+        # mirror hangs intermittently; see scripts/ci/install_tauri_system_deps.sh.
+        run: bash scripts/ci/install_tauri_system_deps.sh
       - name: Build web static export (required by tauri frontendDist)
         working-directory: apps/web
         env:

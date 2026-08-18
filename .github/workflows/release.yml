@@ -161,10 +161,9 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Install Tauri Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        # Bounded apt with canonical mirror pinning — the default azure
+        # mirror hangs intermittently; see scripts/ci/install_tauri_system_deps.sh.
+        run: bash scripts/ci/install_tauri_system_deps.sh
       - name: Verify Rust (check + test --locked --lib)
         run: bash scripts/ci/verify_rust.sh
 
@@ -747,10 +746,9 @@ jobs:
           toolchain: stable
       - name: Install Tauri Linux system dependencies
         if: needs.release-meta.outputs.is_stable == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        # Bounded apt with canonical mirror pinning — the default azure
+        # mirror hangs intermittently; see scripts/ci/install_tauri_system_deps.sh.
+        run: bash scripts/ci/install_tauri_system_deps.sh
       - name: Build Desktop A native harness binary (§10, layer 2)
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
