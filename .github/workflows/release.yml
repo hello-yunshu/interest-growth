@@ -481,12 +481,13 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - name: Install Host verification dependencies
         if: needs.release-meta.outputs.is_stable == 'true'
-        run: python -m pip install -e ".[dev,rag-graphrag]"
-      - name: Standalone Native Core + exact RAG upstreams
+        run: python -m pip install -e ".[dev]"
+      - name: Standalone Native Core sync
         if: needs.release-meta.outputs.is_stable == 'true'
-        run: |
-          python scripts/verify_native_core_sync.py
-          python scripts/verify_exact_rag_upstreams.py
+        run: python scripts/verify_native_core_sync.py
+      - name: Exact RAG upstreams (shared install + verify, §9)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: bash scripts/ci/verify_rag_upstreams.sh
       - name: Migration fixtures regression (exact tag)
         if: needs.release-meta.outputs.is_stable == 'true'
         run: python -m pytest tests/migrations 2>/dev/null || python -m pytest -k "migration"
@@ -614,12 +615,14 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Cross-device server contract (native-broker-equivalent HTTP flows)
+      - name: Server multi-device canonical-state integration (§10, layer 1)
         if: needs.release-meta.outputs.is_stable == 'true'
-        # Drives the same canonical self-hosted server with two independent
-        # device sessions (desktop-remote + android emulator semantics) and
-        # asserts A-create -> B-read and B-create -> A-read plus per-device
-        # revoke isolation, on a single clean server instance (§7).
+        # Server-level canonical-state proof only (evidence level SERVER_
+        # MULTI_DEVICE): two independent device sessions on one clean server
+        # assert A-create -> B-read and B-create -> A-read by EXACT object ID
+        # (not fuzzy substring) plus per-device revoke isolation. The real
+        # Native cross-device gate (desktop-remote Rust broker + Android
+        # emulator) is the layer-2 step below.
         run: |
           set -euo pipefail
           cat > .env <<'EOF'
@@ -652,24 +655,46 @@ jobs:
               with urllib.request.urlopen(r, data=data) as resp:
                   return resp.status, json.loads(resp.read() or b"{}")
           req("POST", "/auth/owner/bootstrap", {"owner_password": pwd}, headers={"X-PG-Owner-Bootstrap-Token": bt})
-          # swap header vector (bootstrap token) is not needed for owner login
           s1, dA = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "desktop-remote-A", "platform": "desktop", "app_version": "1.0.0"})
           s2, dB = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "android-remote-B", "platform": "android", "app_version": "1.0.0"})
           assert s1 == 201 and s2 == 201, (s1, s2)
           tokA, tokB = dA["tokens"]["access_token"], dB["tokens"]["access_token"]
-          # A creates canonical data
+
+          def obj_id(created):
+              # The create response may return the object at top level or nested.
+              return created.get("id") or created.get("question", {}).get("id")
+
+          def find_by_id(payload, target_id, expect_question=None):
+              # GET /questions returns {"questions": [...]} (exact contract).
+              items = payload.get("questions") if isinstance(payload, dict) else payload
+              if not isinstance(items, list):
+                  raise AssertionError(f"expected 'questions' list, got {type(payload).__name__}")
+              for item in items:
+                  if str(item.get("id")) == str(target_id):
+                      if expect_question is not None and item.get("question") != expect_question:
+                          raise AssertionError(
+                              f"id {target_id} matched but question differs: "
+                              f"{item.get('question')!r} != {expect_question!r}"
+                          )
+                      return True
+              return False
+
+          # A creates canonical data -> B reads it by EXACT id.
           s, created = req("POST", "/questions", {"question": "desktop-A authored"}, auth=tokA)
           assert s in (200, 201), s
-          qid = created.get("id") or created.get("question", {}).get("id")
-          # B reads A's data
+          qidA = obj_id(created)
+          assert qidA is not None, f"POST /questions returned no id: {created}"
           s, rB = req("GET", "/questions", auth=tokB)
-          assert s == 200 and any("desktop-A authored" in json.dumps(x) for x in (rB if isinstance(rB, list) else rB.get("items", []))), "B cannot read A data"
-          # B creates
-          s, _ = req("POST", "/questions", {"question": "android-B authored"}, auth=tokB)
+          assert s == 200, s
+          assert find_by_id(rB, qidA, "desktop-A authored"), "B cannot read A data by id"
+          # B creates canonical data -> A reads it by EXACT id.
+          s, createdB = req("POST", "/questions", {"question": "android-B authored"}, auth=tokB)
           assert s in (200, 201), s
-          # A reads B's data
+          qidB = obj_id(createdB)
+          assert qidB is not None, f"POST /questions returned no id: {createdB}"
           s, rA = req("GET", "/questions", auth=tokA)
-          assert s == 200 and any("android-B authored" in json.dumps(x) for x in (rA if isinstance(rA, list) else rA.get("items", []))), "A cannot read B data"
+          assert s == 200, s
+          assert find_by_id(rA, qidB, "android-B authored"), "A cannot read B data by id"
           # device list sees both
           s, devs = req("GET", "/auth/devices", {}, auth=tokA)
           assert s == 200 and len(devs) >= 2, (s, devs)
@@ -682,7 +707,7 @@ jobs:
               pass
           s, _ = req("GET", "/dashboard", auth=tokA)
           assert s == 200, "A affected by B revoke"
-          print("cross-device: desktop A -> android B and B -> A verified; revoke isolation PASS")
+          print("server multi-device: A->B and B->A exact-id reads verified; revoke isolation PASS")
           PY
           docker compose -p ig-cross down -v --remove-orphans
 
@@ -738,10 +763,11 @@ jobs:
         if: needs.release-meta.outputs.is_stable == 'true'
         shell: bash
         run: |
-          find apps/desktop/src-tauri/target -name '*.exe' -path '*release*' | head -1
-          APP_BIN="$(find apps/desktop/src-tauri/target -name 'PsychologyGrowth.exe' -o -name 'interest-growth.exe' 2>/dev/null | head -1)"
-          APP_BIN="${APP_BIN:-$(find apps/desktop/src-tauri/target -path '*release*' -name '*.exe' ! -name '*sidecar*' ! -name '*.dll' | head -1)}"
-          [ -n "${APP_BIN}" ] || { echo "FAIL: no Windows package binary produced" >&2; exit 1; }
+          # Deterministic resolver (§7): reads the Cargo [package].name and
+          # returns the exact main binary (interest-growth-desktop.exe). It
+          # rejects build-script-* / sidecar / helpers and FAILS on ambiguity
+          # instead of masking it with `find ... | head -1`.
+          APP_BIN="$(python scripts/ci/resolve_desktop_app_binary.py --triple x86_64-pc-windows-msvc)"
           bash scripts/ci/verify_packaged_startup.sh "${APP_BIN}" --win
       - name: Upload Windows package artifact
         if: always() && needs.release-meta.outputs.is_stable == 'true'
@@ -803,12 +829,11 @@ jobs:
       - name: Packaged desktop-local arm64 startup smoke
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
-          APP_BIN="$(find apps/desktop/src-tauri/target/aarch64-apple-darwin/release -name 'Interest Growth.app' -type d | head -1)"
-          [ -n "${APP_BIN}" ] || { echo "FAIL: no macOS package produced" >&2; exit 1; }
-          EXE="${APP_BIN}/Contents/MacOS/interest-growth"
-          [ -x "${EXE}" ] || EXE="$(find "${APP_BIN}/Contents/MacOS" -maxdepth 1 -type f | head -1)"
-          [ -n "${EXE}" ] || { echo "FAIL: macOS app binary missing" >&2; exit 1; }
-          bash scripts/ci/verify_packaged_startup.sh "${EXE}" --mac
+          # Deterministic resolver (§8): resolves the exact bundle executable
+          # (Interest Growth.app/Contents/MacOS/interest-growth-desktop), never
+          # a `find | head -1` fallback onto the psychology-growth-core sidecar.
+          APP_BIN="$(python3 scripts/ci/resolve_desktop_app_binary.py --triple aarch64-apple-darwin)"
+          bash scripts/ci/verify_packaged_startup.sh "${APP_BIN}" --mac
       - name: Upload macOS package artifact
         if: always() && needs.release-meta.outputs.is_stable == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
