@@ -183,6 +183,7 @@ jobs:
     timeout-minutes: 120
     outputs:
       apk-arm64: dist/android/interest-growth-android-arm64.apk
+      apk-x86_64-release: dist/android/interest-growth-android-x86_64-release.apk
       cert-sha256: ${{ steps.signinfo.outputs.cert-sha256 }}
     steps:
       - name: Check out source
@@ -246,6 +247,66 @@ jobs:
             -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
             -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
             interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target aarch64'
+      - name: Stage arm64 release APK (before x86_64 release overwrites it)
+        # `tauri android build` for arm64 and x86_64 both write to the SAME
+        # apk/universal/release/app-universal-release.apk path. Copy the arm64
+        # release APK now so the x86_64 release build below cannot clobber the
+        # official artifact.
+        run: |
+          mkdir -p dist/android
+          APK="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | head -1)"
+          if [ -z "${APK}" ]; then echo "no arm64 release APK produced" >&2; exit 1; fi
+          cp "${APK}" dist/android/interest-growth-android-arm64.apk
+          echo "staged arm64 release APK: $(stat -f '%z' dist/android/interest-growth-android-arm64.apk 2>/dev/null || stat -c '%s' dist/android/interest-growth-android-arm64.apk) bytes"
+      - name: Build CI-only signed release APK (x86_64, same cert, non-debuggable)
+        # Android upgrade-in-place (Phase 4) runs on an x86_64 emulator, so the
+        # "current" side of the N -> N+1 proof must be a x86_64 RELEASE APK
+        # signed with the SAME production cert and non-debuggable (same
+        # PG_RELEASE_BUILD=1 fail-closed signing as the arm64 release). It is
+        # CI-only: uploaded as an artifact, never published as a release asset,
+        # never included in the final published checksums.
+        #
+        # Phase 4c — black-box WebView CDP enrollment (no run-as) on this
+        # throwaway APK: flip CiFlags.ENABLE_WEBVIEW_REMOTE_DEBUGGING to true
+        # for this build ONLY, then restore the committed false so the release
+        # artifact, the subsequent debug build and the source manifest are
+        # unaffected. Enablement does NOT set android:debuggable, so the APK is
+        # still non-debuggable (verify_upgrade_apk_pair.sh proves it).
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD":/work -w /work \
+            -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
+            -v "$RUNNER_TEMP/keystore":/keystore:ro \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            -e PG_RELEASE_BUILD=1 \
+            -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
+            -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
+            -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
+            -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
+            interest-growth-android bash -c '
+              set -euo pipefail
+              cd apps/desktop
+              npm ci
+              F=src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/CiFlags.kt
+              cp "$F" /tmp/CiFlags.orig
+              trap "cp /tmp/CiFlags.orig \"$F\"" EXIT
+              sed -i "s/ENABLE_WEBVIEW_REMOTE_DEBUGGING: Boolean = false/ENABLE_WEBVIEW_REMOTE_DEBUGGING: Boolean = true/" "$F"
+              grep -q "ENABLE_WEBVIEW_REMOTE_DEBUGGING: Boolean = true" "$F" || { echo "FAIL: CiFlags enablement not applied" >&2; exit 1; }
+              npm run tauri -- android build --apk --target x86_64
+            '
+      - name: Enforce restored CiFlags default before further builds
+        # Defensive: the container trap restores on EXIT, but if the runner is
+        # killed mid-step the shared mount could keep CiFlags=true. Fail-closed
+        # here so a stale flag can never leak into the debug APK or source
+        # manifest. Also regenerates nothing (we only restore committed bytes).
+        run: |
+          F=apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/CiFlags.kt
+          grep -q "ENABLE_WEBVIEW_REMOTE_DEBUGGING: Boolean = false" "$F" \
+            || { echo "FAIL: CiFlags.kt default is not restored (leaked true)" >&2; git --no-pager diff --stat "$F" || true; exit 1; }
+          git --no-pager diff --exit-code -- "$F" >/dev/null 2>&1 \
+            || { echo "restoring committed CiFlags.kt"; git checkout -- "$F"; }
+          echo "CiFlags.kt default restored (false)"
       - name: Build emulator x86_64 verify APK (debug, no signing secrets)
         # The emulator runs x86_64, so it installs the x86_64 debug APK (not
         # the arm64 release APK). Debug build needs no signing material.
@@ -256,35 +317,47 @@ jobs:
             -e ANDROID_HOME=/opt/android-sdk \
             -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
             interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target x86_64 --debug'
-      - name: Stage release APK and run static verification
+      - name: Stage x86_64 APKs and run static verification
         id: signinfo
         run: |
           mkdir -p dist/android
-          APK="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | head -1)"
-          if [ -z "${APK}" ]; then echo "no release APK produced" >&2; exit 1; fi
-          cp "${APK}" dist/android/interest-growth-android-arm64.apk
+          # The universal/release path now holds the x86_64 release APK (the
+          # arm64 one was staged earlier, before this build overwrote it).
+          X86REL="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | head -1)"
+          if [ -z "${X86REL}" ]; then echo "no x86_64 release APK produced" >&2; exit 1; fi
+          cp "${X86REL}" dist/android/interest-growth-android-x86_64-release.apk
+          # Stage the x86_64 debug APK for the emulator job.
+          X86DBG="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
+          if [ -z "${X86DBG}" ]; then echo "no x86_64 debug APK produced" >&2; exit 1; fi
+          cp "${X86DBG}" dist/android/interest-growth-android-x86_64-debug.apk
           # Static verification runs inside the Android toolchain so aapt2 is
           # on PATH; --require-aapt makes a missing metadata tool FAIL rather
-          # than skip (Gate R2 §13.1).
+          # than skip (Gate R2 §13.1). Both release APKs (arm64 + CI x86_64)
+          # are verified; the debug APK is exercised by the emulator gate.
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
             interest-growth-android bash -c \
-              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_android_apk.sh --require-aapt dist/android/interest-growth-android-arm64.apk'
-          # Stage the x86_64 debug APK for the emulator job.
-          X86="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
-          if [ -z "${X86}" ]; then echo "no x86_64 debug APK produced" >&2; exit 1; fi
-          cp "${X86}" dist/android/interest-growth-android-x86_64-debug.apk
-          # Verify release signature (v2) and capture the public cert fingerprint.
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_android_apk.sh --require-aapt dist/android/interest-growth-android-arm64.apk dist/android/interest-growth-android-x86_64-release.apk'
+          # Verify release signatures (v2) and capture the public cert
+          # fingerprint for BOTH release APKs — they must share ONE cert, or
+          # same-cert upgrade-in-place would be impossible (Phase 4b preflight).
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
             interest-growth-android bash -c \
-              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; apksigner verify --verbose --print-certs /work/dist/android/interest-growth-android-arm64.apk' > "$RUNNER_TEMP/apksigner.txt"
-          CERT_SHA="$(grep -E 'SHA-256' "$RUNNER_TEMP/apksigner.txt" | head -1 | sed -E 's/.*SHA-256: //' || true)"
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; apksigner verify --verbose --print-certs /work/dist/android/interest-growth-android-arm64.apk /work/dist/android/interest-growth-android-x86_64-release.apk' > "$RUNNER_TEMP/apksigner.txt"
+          CERT_LINES="$(grep -E 'SHA-256' "$RUNNER_TEMP/apksigner.txt" | sed -E 's/.*SHA-256: //' || true)"
+          CERT_SHA="$(head -1 <<<"${CERT_LINES}")"
+          CERT_COUNT="$(wc -l <<<"${CERT_LINES}" | tr -d ' ')"
+          CERT_UNIQUE="$(sort -u <<<"${CERT_LINES}" | wc -l | tr -d ' ')"
+          if [ -z "${CERT_SHA}" ] || [ "${CERT_COUNT}" -ne 2 ] || [ "${CERT_UNIQUE}" -ne 1 ]; then
+            echo "FAIL: arm64 and x86_64 release APKs must share one signing cert (certs=${CERT_COUNT}, unique=${CERT_UNIQUE})" >&2
+            exit 1
+          fi
           echo "cert-sha256=${CERT_SHA}" >> "$GITHUB_OUTPUT"
           echo "apk-sha256=$(shasum -a 256 dist/android/interest-growth-android-arm64.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
           echo "--- apksigner output ---"; cat "$RUNNER_TEMP/apksigner.txt"
       - name: Generate SHA256SUMS from actual release APKs
-        run: python3 scripts/ci/generate_release_checksums.py --out dist/android/SHA256SUMS.txt dist/android/interest-growth-android-arm64.apk dist/android/interest-growth-android-x86_64-debug.apk
+        run: python3 scripts/ci/generate_release_checksums.py --out dist/android/SHA256SUMS.txt dist/android/interest-growth-android-arm64.apk dist/android/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-debug.apk
       - name: Clean up signing material
         if: always()
         run: rm -rf "$RUNNER_TEMP/keystore"
@@ -294,6 +367,7 @@ jobs:
           name: interest-growth-android-artifacts
           path: |
             dist/android/interest-growth-android-arm64.apk
+            dist/android/interest-growth-android-x86_64-release.apk
             dist/android/interest-growth-android-x86_64-debug.apk
             dist/android/SHA256SUMS.txt
           if-no-files-found: error
@@ -505,7 +579,7 @@ jobs:
   android-upgrade-in-place:
     name: Stable Android upgrade-in-place (same cert, N -> N+1)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     needs: [release-meta, android-signed-build]
     steps:
       - name: Stable-only gate — N/A for RC tag
@@ -516,29 +590,112 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Download release APK (new build)
+      - name: "Fail-closed: all release signing secrets must be present"
+        if: needs.release-meta.outputs.is_stable == 'true'
+        env:
+          KS_B64: ${{ secrets.PG_ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.PG_ANDROID_STORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.PG_ANDROID_KEY_ALIAS }}
+          KS_KEY_PASS: ${{ secrets.PG_ANDROID_KEY_PASSWORD }}
+        run: |
+          for var in KS_B64 KS_PASS KS_ALIAS KS_KEY_PASS; do
+            if [ -z "${!var}" ]; then
+              echo "FAIL: release signing secret \${$var} is missing — previous-tag build FAILS (no debug fallback)" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$RUNNER_TEMP/keystore"
+          echo "${KS_B64}" | base64 -d > "$RUNNER_TEMP/keystore/release.keystore"
+          chmod 600 "$RUNNER_TEMP/keystore/release.keystore"
+          echo "keystore decoded to $RUNNER_TEMP/keystore/release.keystore"
+      - name: Build Android toolchain image
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
+        with:
+          context: .
+          file: docker/android/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: interest-growth-android
+          cache-from: type=gha,scope=android-toolchain
+          cache-to: type=gha,mode=max,scope=android-toolchain
+      - name: Resolve previous formal stable tag (source to build 'old' from), §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          CURRENT="${{ needs.release-meta.outputs.tag }}"
+          PREV="$(gh release list --limit 20 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease==false) | .tagName' 2>/dev/null | grep -vFx "${CURRENT}" | head -1 || true)"
+          if [ -z "${PREV}" ]; then echo "FAIL: no previous stable release from which to build the old upgrade APK" >&2; exit 1; fi
+          echo "building 'old' release-test APK from previous stable tag: ${PREV}"
+          echo "prev_tag=${PREV}" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check out previous tag source into prev_src
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          git worktree add -f prev_src "${prev_tag}"
+          echo "prev_src ready:"; git -C prev_src describe --tags --always
+      - name: Build-time transplant CI hooks into old release-test source, §11
+        # The previous exact tag predates R4's WebView CDP enablement and the
+        # native CI TLS trust-root injection. patch_release_test_source.sh applies
+        # exactly those three committed, gated enablers (CiFlags + MainActivity
+        # CDP + remote.rs trust-root). It does NOT set android:debuggable and is
+        # applied ONLY to a throwaway CI-release-test APK, never the product.
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: bash scripts/ci/patch_release_test_source.sh prev_src
+      - name: Create Android sidecar placeholders for the old tauri-build
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          mkdir -p prev_src/apps/desktop/src-tauri/binaries
+          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+            : > "prev_src/apps/desktop/src-tauri/binaries/psychology-growth-core-${t}"
+          done
+      - name: Build old side Web static export (prev_src)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c 'cd prev_src/apps/web && npm ci && NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run build'
+      - name: Build previous signed x86_64 RELEASE-test APK (same cert, non-debuggable), §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD":/work -w /work \
+            -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
+            -v "$RUNNER_TEMP/keystore":/keystore:ro \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            -e PG_RELEASE_BUILD=1 \
+            -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
+            -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
+            -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
+            -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
+            interest-growth-android bash -c 'cd prev_src/apps/desktop && npm ci && npm run tauri -- android build --apk --target x86_64'
+          mkdir -p dist/android/prev
+          APK="$(find prev_src/apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | head -1)"
+          if [ -z "${APK}" ]; then echo "no previous x86_64 RELEASE-test APK produced" >&2; exit 1; fi
+          cp "${APK}" dist/android/prev/interest-growth-android-x86_64-release.apk
+      - name: Download current signed release APKs (new side)
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: interest-growth-android-artifacts
           path: dist/android
-      - name: Fetch previous release APK (same signing certificate), §6.1
+      - name: Static upgrade-pair preflight (old vs new), §11
+        # Before the emulator boots: applicationId old==new, cert SHA-256 old==new,
+        # ABI old/new==x86_64, old versionCode < new, both non-debuggable. Any
+        # violation fails the job (fail-closed) with a precise diagnostic.
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
-          # The previous formal artifact is the most recent release that owns
-          # interest-growth-android-arm64.apk, excluding the tag being cut.
-          mkdir -p dist/android/prev
-          CURRENT="${{ needs.release-meta.outputs.tag }}"
-          PREV="$(gh release list --limit 5 --json tagName,isPrerelease --jq '.[].tagName' 2>/dev/null | grep -vFx "${CURRENT}" | head -1 || true)"
-          if [ -z "${PREV}" ]; then echo "FAIL: no previous release found for upgrade-in-place" >&2; exit 1; fi
-          echo "previous release tag: ${PREV}"
-          gh release download "${PREV}" --repo "${{ github.repository }}" \
-            --pattern "interest-growth-android-arm64.apk" \
-            --dir dist/android/prev || { echo "FAIL: previous release asset unavailable" >&2; exit 1; }
-          # Pass up to the emulator step.
-          echo "prev_tag=${PREV}" >> "$GITHUB_ENV"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c \
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_upgrade_apk_pair.sh dist/android/prev/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-release.apk'
+      - name: Clean up signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keystore"
       - name: Set up JDK 17
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
@@ -551,25 +708,15 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Boot self-hosted API server
+      - name: Boot self-hosted API behind a real HTTPS TLS edge (ephemeral CI CA), §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: bash scripts/ci/boot_tls_server.sh 18443 ig-upgrade
+      - name: Stage ephemeral CI CA for device injection
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
-          set -euo pipefail
-          cat > .env <<'EOF'
-          PG_REMOTE_AUTH_ENABLED=true
-          PG_OWNER_BOOTSTRAP_TOKEN=ci-bootstrap-token-7a1f
-          APP_ENV=remote
-          EOF
-          docker compose -p ig-upgrade build api
-          docker compose -p ig-upgrade up -d api
-          for _ in $(seq 1 60); do
-            if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then echo "server healthy"; exit 0; fi
-            sleep 2
-          done
-          echo "server failed to become healthy" >&2
-          docker compose -p ig-upgrade logs api >&2 || true
-          exit 1
-      - name: Emulator — same-cert install, preserve data, install -r N+1, verify
+          cp "$RUNNER_TEMP/ig_tls/ca.pem" dist/android/ca.pem
+          test -s dist/android/ca.pem || { echo "FAIL: ephemeral CI CA not staged" >&2; exit 1; }
+      - name: Emulator — real N -> N+1 upgrade (black-box CDP, non-debuggable), §11
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
         with:
@@ -581,24 +728,22 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            adb install dist/android/prev/interest-growth-android-arm64.apk
-            adb reverse tcp:18080 tcp:8000
-            printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-upgrade-ci"}' > /tmp/ig_upg.json
-            adb push /tmp/ig_upg.json /data/local/tmp/ig_upg.json
-            adb shell run-as app.psychologygrowth.desktop mkdir -p files
-            adb shell run-as app.psychologygrowth.desktop cp /data/local/tmp/ig_upg.json files/ig_e2e_config.json
-            adb shell run-as app.psychologygrowth.desktop chmod 600 files/ig_e2e_config.json
+            adb shell setprop ig.ci.tls_ca_path /data/local/tmp/ig_ca.pem
+            adb push dist/android/ca.pem /data/local/tmp/ig_ca.pem
+            adb shell getprop ig.ci.tls_ca_path | grep -q /data/local/tmp/ig_ca.pem || { echo "FAIL: TLS trust-root property not set" >&2; exit 1; }
+            adb reverse tcp:18443 tcp:18443
+            adb install -r dist/android/prev/interest-growth-android-x86_64-release.apk
             adb shell am start -n app.psychologygrowth.desktop/.MainActivity
-            sleep 8
-            echo "--- old app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "old app NOT running"
-            echo "--- old app versionName ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
-            adb install -r dist/android/interest-growth-android-arm64.apk
+            sleep 25
+            python3 scripts/ci/android_upgrade_driver.py --stage create --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_create.json --timeout-s 300
+            echo "create stage: PASS"
+            adb shell am force-stop app.psychologygrowth.desktop
+            adb install -r dist/android/interest-growth-android-x86_64-release.apk
             adb shell am start -n app.psychologygrowth.desktop/.MainActivity
-            sleep 8
-            echo "--- new app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "new app NOT running"
-            echo "--- new app versionName ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
-            echo "--- enrollment config preserved after upgrade ---"; adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_config.json 2>&1 || true
-            adb install -r --no-streaming dist/android/interest-growth-android-arm64.apk && echo "same-cert reinstall accepted: PASS" || { echo "same-cert install FAILED" >&2; exit 1; }
+            sleep 30
+            echo "--- new app versionName/versionCode after install -r ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
+            python3 scripts/ci/android_upgrade_driver.py --stage verify --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_verify.json --timeout-s 300
+            grep -q '"result": "PASS"' /tmp/ig_upg_verify.json && echo "UPGRADE_IN_PLACE = PASS" || { echo "UPGRADE_IN_PLACE = FAIL (verify result)" >&2; exit 1; }
 
   cross-device:
     name: Stable cross-device (desktop-remote + Android, same server)

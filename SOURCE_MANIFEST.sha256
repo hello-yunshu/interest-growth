@@ -6,7 +6,7 @@ b9988c2e3c41c2b02d4a1a9184170c145b0a1c4ac7d2a02e8adb8ce848385b01  .github/depend
 cadd8431ed86fc3c40aa45c264717848dcfd95583510bce0c4b5a439f6a7bf84  .github/workflows/ci.yml
 db5ab60c8cc36465eccd862e94d669be5aa630e2d8d9fc524fef0a8575b09d38  .github/workflows/desktop-build.yml
 0441434b93f37011793acde663a68e15ef7167e7e327b845e4d61c1cda2f2211  .github/workflows/emulator-e2e.yml
-cb4df28402cae192f5054805baf67a15def849f68f11bd301ac6c812cad90025  .github/workflows/release.yml
+2df9380c65df9a8543e3b239dcb7256382359acc1aeecccbd62f9b56ad3f4200  .github/workflows/release.yml
 88ac414b4770ced81887830b01a0bec329b89eeeb4baf9906f1a5b95a86c1758  .github/workflows/web-e2e.yml
 0692c4994b94ebb415c560b2e47c9e98033a3703f1bb405b1196ae2ae5a95ab6  .gitignore
 7dc4251a071095196c2bca89c5fad3a4d0745272006f3f71806eb152baf3320f  00_BLUEPRINT_BASELINE.md
@@ -91,7 +91,7 @@ d22b394a5a140050065207d160273570edb04200480160e0951df3291dd7848f  apps/desktop/s
 56fd960cf225f6ca40f982b13a5dbb0d8bc3dfde13ff76422825c6070d0a1890  apps/desktop/src-tauri/gen/android/app/proguard-rules.pro
 6930bcb2c17dfdc11a7bab805b2d1f27999c5af70cc833bd169075cc9453c34a  apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml
 7b51a14c5d3b09f1afb3729f032bf2b84f74c1708298f6a3608ad02e5de51f07  apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/InterestGrowthPlugin.kt
-c06e636ee086cbf490672bcda0a14b41081fbf2510da4a3cf0f0fdce204c9687  apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/MainActivity.kt
+662f998e6e2e008cedcf5d831d25b6a941460cd64735a1af16df7a5e0f98ad48  apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/MainActivity.kt
 634d8d156704eec613f20cb7e50dbeea7ef5e786772374f5daeccb8aae361730  apps/desktop/src-tauri/gen/android/app/src/main/java/io/crates/keyring/Keyring.kt
 01d1a6a6c1234eb7fe270d097eb283d72b9c95ae5118886f1b6573aad280f1f7  apps/desktop/src-tauri/gen/android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml
 ed423c73a6f40a4d2909f0901e60527b3a807cd59e1b5593bcaae1808b1c6321  apps/desktop/src-tauri/gen/android/app/src/main/res/drawable/ic_launcher_background.xml

@@ -757,12 +757,22 @@ pub fn run() {
             // broker (never reachable while local mode is active) using the
             // default remote runtime id.
             #[cfg(target_os = "android")]
-            let broker = RemoteBroker::with_expected_runtime(
-                AndroidKeystoreStore::new()
-                    .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
-                broker_expected_runtime_id(mode),
-            )
-            .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
+            let broker = {
+                // Phase 4d — CI-only optional TLS trust root. On the upgrade-
+                // test APK the adb-runner sets `ig.ci.tls_ca_path` to an
+                // ephemeral CI CA; production (property unset) → None and the
+                // broker keeps its default Mozilla roots. Fail-closed if the
+                // property is set but the CA can't be loaded.
+                let trust_root = remote::ci_tls_trust_root()
+                    .map_err(|error| format!("failed to load CI TLS trust root: {error}"))?;
+                RemoteBroker::with_expected_runtime_and_trust_root(
+                    AndroidKeystoreStore::new()
+                        .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
+                    broker_expected_runtime_id(mode),
+                    trust_root,
+                )
+                .map_err(|error| format!("failed to initialize remote broker: {error}"))?
+            };
             #[cfg(not(target_os = "android"))]
             let broker =
                 RemoteBroker::with_expected_runtime(Arc::new(KeyringStore), broker_expected_runtime_id(mode))

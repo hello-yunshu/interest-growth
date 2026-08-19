@@ -1070,21 +1070,92 @@ pub fn assert_relative_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Shared HTTP client for all remote credential-bearing requests.
+/// Shared HTTP client for all remote credential-bearing requests. Builds the
+/// client and may carry an additional TLS trust root.
 ///
 /// Gate C §12 / Gate D §P1: redirects are explicitly disabled (fail-closed).
 /// A credential-bearing POST must never be transparently forwarded to a
 /// redirect target — a 307/308 preserves method and body, and a 301/302/303
 /// could still expose the custom bootstrap header. Any 3xx is surfaced as an
 /// explicit error instead of being followed.
-fn http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+///
+/// Phase 4d — CI-only optional trust root injection. The production broker uses
+/// reqwest's rustls backend with the compiled Mozilla root set (this crate does
+/// NOT enable rustls-platform-verifier / native-tls, so the Android OS trust
+/// store is not consulted). For the upgrade-in-place CDP test the broker must
+/// trust an ephemeral CI CA that fronts the self-hosted server over real
+/// HTTPS. A loadable PEM root is added here; `None` keeps the exact production
+/// behavior (fail-closed: nothing weakened when no root is injected).
+fn http_client_with_trust_root(
+    trust_root: Option<reqwest::Certificate>,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
         .user_agent(format!("interest-growth-desktop/{CLIENT_APP_VERSION}"))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| error.to_string())
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(cert) = trust_root {
+        builder = builder.add_root_certificate(cert);
+    }
+    builder.build().map_err(|error| error.to_string())
+}
+
+/// Load a PEM-encoded certificate as an additional TLS trust root.
+///
+/// Phase 4d. Fail-closed: an unreadable or invalid PEM is a hard error, never a
+/// silent fallthrough to the default roots (an operator who opts into a custom
+/// CA must not be silently degraded to no verification of that CA).
+pub fn load_pem_trust_root(pem_path: &Path) -> Result<reqwest::Certificate, String> {
+    let bytes = std::fs::read(pem_path)
+        .map_err(|error| format!("cannot read TLS trust root {}: {error}", pem_path.display()))?;
+    reqwest::Certificate::from_pem(&bytes)
+        .map_err(|error| format!("invalid PEM TLS trust root {}: {error}", pem_path.display()))
+}
+
+/// Android: read a system property via bionic `__system_property_get`.
+///
+/// Phase 4d. Used only to opt the CI upgrade-test APK into loading an ephemeral
+/// TLS trust root. `__system_property_get` is part of the always-linked bionic
+/// libc; any app may read system properties, so this introduces no new
+/// privilege. Reading an unset property returns `None`.
+#[cfg(target_os = "android")]
+pub fn android_system_property(name: &str) -> Option<String> {
+    use std::ffi::{c_char, CStr, CString};
+    // PROP_VALUE_MAX is 92 in bionic libc.
+    let mut value = [0i8; 92];
+    let name = CString::new(name).ok()?;
+    extern "C" {
+        fn __system_property_get(name: *const c_char, value: *mut c_char) -> i32;
+    }
+    // SAFETY: `name` is a valid NUL-terminated CString; `value` is a 92-byte
+    // buffer that __system_property_get fills with a NUL-terminated string, so
+    // reconstructing a CStr from it afterwards stays within bounds.
+    let n = unsafe { __system_property_get(name.as_ptr(), value.as_mut_ptr()) };
+    if n <= 0 {
+        return None;
+    }
+    let text = unsafe { CStr::from_ptr(value.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// CI-only optional TLS trust root for the Android upgrade test APK.
+///
+/// Phase 4d. Reads the system property `ig.ci.tls_ca_path`; when set to a PEM
+/// path, loads and returns it as an additional trust root. Default (unset) →
+/// `Ok(None)` = production Mozilla-roots behavior unchanged. Fail-closed: the
+/// property is set but the path is unreadable or invalid → `Err`.
+#[cfg(target_os = "android")]
+pub fn ci_tls_trust_root() -> Result<Option<reqwest::Certificate>, String> {
+    match android_system_property("ig.ci.tls_ca_path") {
+        Some(path) => load_pem_trust_root(Path::new(path.trim())).map(Some),
+        None => Ok(None),
+    }
 }
 
 impl RemoteBroker {
@@ -1099,6 +1170,20 @@ impl RemoteBroker {
         store: Arc<dyn CredentialStore>,
         runtime_id: &str,
     ) -> Result<Self, String> {
+        Self::with_expected_runtime_and_trust_root(store, runtime_id, None)
+    }
+
+    /// Like [`with_expected_runtime`], but additionally trusts a TLS root.
+    ///
+    /// Phase 4d — CI-only. `None` (the production default) is exactly the
+    /// `with_expected_runtime` behavior; `Some(cert)` adds one root so the
+    /// broker can reach a self-hosted HTTPS server fronted by an ephemeral CI
+    /// CA. Used by the upgrade-in-place test APK via [`ci_tls_trust_root`].
+    pub fn with_expected_runtime_and_trust_root(
+        store: Arc<dyn CredentialStore>,
+        runtime_id: &str,
+        trust_root: Option<reqwest::Certificate>,
+    ) -> Result<Self, String> {
         if !is_remote_runtime_id(runtime_id) {
             return Err(remote_error(
                 ERR_INTERNAL,
@@ -1106,7 +1191,7 @@ impl RemoteBroker {
             ));
         }
         Ok(Self {
-            client: http_client().map_err(|error| {
+            client: http_client_with_trust_root(trust_root).map_err(|error| {
                 remote_error(ERR_INTERNAL, format!("cannot build HTTP client: {error}"))
             })?,
             store,
@@ -3729,6 +3814,33 @@ mod tests {
             normalize_enrollment_origin("https://my-server.local").unwrap(),
             "https://my-server.local"
         );
+    }
+
+    // Phase 4d — CI-only optional TLS trust root. Fail-closed: a missing PEM
+    // (e.g. the CI property `ig.ci.tls_ca_path` points at a file that is not
+    // on disk) must be a hard Err at setup, never a silent fallthrough. (The
+    // happy path — sign with an ephemeral CA, trust it via
+    // add_root_certificate — is exercised end-to-end by the upgrade-in-place
+    // CI CDP job. Content-level DER validity is enforced by rustls at first
+    // handshake, not by reqwest's from_pem, so we assert the deterministic
+    // missing-file guard here.)
+    #[test]
+    fn trust_root_missing_file_is_hard_error() {
+        let err = load_pem_trust_root(&PathBuilder::for_missing());
+        assert!(err.is_err(), "missing trust root must fail-closed");
+        assert!(err.unwrap_err().contains("cannot read TLS trust root"));
+    }
+
+    /// Minimal helper that yields a guaranteed-missing Path (no filesystem
+    /// write needed), avoiding a real temp file for the missing-file case.
+    struct PathBuilder;
+    impl PathBuilder {
+        fn for_missing() -> std::path::PathBuf {
+            std::env::temp_dir().join(format!(
+                "ig_trust_root_missing_{}.pem",
+                std::process::id()
+            ))
+        }
     }
 
     #[test]
