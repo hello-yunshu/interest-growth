@@ -145,10 +145,15 @@ function isFileLike(value) {
 }
 
 export class RemoteTransport {
-  constructor({ broker, active = false, connection }) {
+  constructor({ broker, active = false, connection, byteUploadAllowed = true }) {
     this.broker = broker;
     this._active = active;
     this.connection = connection;
+    // Gate R0.5/§6.1 — android-remote only uploads through the SAF content://
+    // streaming path (uploadByUri); generic renderer byte uploads (which
+    // materialise a base64 copy via file.arrayBuffer) are structurally denied
+    // by the resolver. Desktop remote runtimes keep the size-bounded path.
+    this.byteUploadAllowed = byteUploadAllowed !== false;
   }
 
   // The broker is the native remote HTTP + credential broker. Without it the
@@ -258,6 +263,12 @@ export class RemoteTransport {
     }
     if (!file) {
       throw new Error('remote upload requires a file field');
+    }
+    // Gate R0.5/§6.1 — fail closed BEFORE materialising any bytes. An Android
+    // runtime must never read the file into a renderer base64 copy: the only
+    // supported Android upload is the native SAF content:// stream (uploadByUri).
+    if (!this.byteUploadAllowed) {
+      throw new Error('android-remote only supports SAF content:// streaming upload (uploadByUri)');
     }
     // Gate D §P17 — bound the payload before materialising a base64 copy in
     // memory (the native broker re-checks the encoded length and decoded size).

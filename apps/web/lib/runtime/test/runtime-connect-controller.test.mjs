@@ -13,6 +13,7 @@ import {
   dataLocationOf,
   isRemoteActive,
   isRemoteRuntime,
+  resumeSessionDecision,
   RUNTIME_LOCAL,
   RUNTIME_REMOTE,
   RUNTIME_ANDROID_REMOTE,
@@ -137,4 +138,60 @@ test('desktop local is never classified remote', () => {
   assert.equal(isRemoteRuntime(RUNTIME_LOCAL), false);
   assert.equal(isRemoteActive(state), false);
   assert.equal(dataLocationOf(state), 'local-device');
+});
+
+// ---- Gate R0.4 §R0.4 / §6.3 — resume re-evaluation decision ----------------
+// Fresh install + background/resume must resolve to RESET/Initializing and
+// NEVER to the terminal LoginExpired state (which is reserved for a revoked /
+// expired credential on a device that WAS enrolled).
+test('fresh install resume → RESET, never LoginExpired (§6.3)', () => {
+  const status = { enrolled: false };
+  assert.equal(resumeSessionDecision({ status, identity: null, refreshed: null }), 'RESET');
+  // Even if a bogus identity/refresh result leaks in, not-enrolled wins first.
+  assert.equal(
+    resumeSessionDecision({ status, identity: { identityChanged: true }, refreshed: { authExpired: true } }),
+    'RESET',
+  );
+});
+
+test('enrolled + server replaced resume → IdentityChanged (§6.3)', () => {
+  const status = { enrolled: true, connected: true };
+  assert.equal(
+    resumeSessionDecision({ status, identity: { identityChanged: true }, refreshed: null }),
+    'IDENTITY_MISMATCH',
+  );
+});
+
+test('enrolled + connected resume → BOOTSTRAP_OK (§6.3)', () => {
+  const status = { enrolled: true, connected: true };
+  assert.equal(
+    resumeSessionDecision({ status, identity: { identityChanged: false }, refreshed: null }),
+    'BOOTSTRAP_OK',
+  );
+});
+
+test('enrolled + not-connected + refresh ok → BOOTSTRAP_OK (§6.3)', () => {
+  const status = { enrolled: true, connected: false };
+  assert.equal(
+    resumeSessionDecision({ status, identity: {}, refreshed: { connected: true } }),
+    'BOOTSTRAP_OK',
+  );
+});
+
+test('enrolled + revoked credential resume → REFRESH_FAIL (LoginExpired) (§6.3)', () => {
+  const status = { enrolled: true, connected: false };
+  assert.equal(
+    resumeSessionDecision({ status, identity: {}, refreshed: { authExpired: true } }),
+    'REFRESH_FAIL',
+  );
+});
+
+test('enrolled + transient network failure resume → NETWORK_FAIL (§6.3)', () => {
+  const status = { enrolled: true, connected: false };
+  assert.equal(
+    resumeSessionDecision({ status, identity: {}, refreshed: { connected: false, authExpired: false } }),
+    'NETWORK_FAIL',
+  );
+  // A thrown coded error short-circuits to the mapped event.
+  assert.equal(resumeSessionDecision({ status, identity: {}, refreshed: null, error: 'NETWORK_FAIL' }), 'NETWORK_FAIL');
 });

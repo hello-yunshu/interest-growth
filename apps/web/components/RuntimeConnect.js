@@ -33,6 +33,7 @@ import {
   runtimeConnectReducer,
   isRemoteActive,
   isRemoteRuntime,
+  resumeSessionDecision,
   RUNTIME_ANDROID_REMOTE,
 } from '../lib/runtime/runtime-connect-controller.js';
 import { StatusChip, RecordsTable } from './BeautifulUI';
@@ -169,30 +170,25 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
           const machine = machineRef.current;
           if (!machine) return;
           try {
-            // §9 — resume != Connected. Even when the local access token has
-            // not expired yet, the server may have been replaced or dropped
+            // §9 / §6.3 — resume != Connected. Even when the local access token
+            // has not expired yet, the server may have been replaced or dropped
             // while backgrounded, so a REAL remote re-evaluation always runs on
-            // foreground return. Identity probe first: a replaced server is a
-            // blocking IdentityChanged, never a silent Connected.
-            const identity = await remoteVerifyIdentity();
-            if (!active) return;
-            if (identity?.identityChanged) {
-              machine.handle('IDENTITY_MISMATCH');
-              return;
-            }
+            // foreground return.
+            // Order is NOT arbitrary: session status first, because a brand-new
+            // install reports enrolled:false and must resolve to RESET — calling
+            // verify_identity on an unenrolled device first would return
+            // LOGIN_EXPIRED ("not enrolled") and wrongly enter the terminal
+            // LoginExpired state instead of Not-Enrolled/Initializing.
             const status = await remoteSessionStatus();
             if (!active) return;
-            if (status?.enrolled && status?.connected) {
-              machine.handle('BOOTSTRAP_OK');
-            } else if (status?.enrolled) {
-              const refreshed = await remoteRefreshNow();
+            const identity = status?.enrolled ? await remoteVerifyIdentity() : null;
+            if (!active) return;
+            let refreshed = null;
+            if (status?.enrolled && !status?.connected) {
+              refreshed = await remoteRefreshNow();
               if (!active) return;
-              if (refreshed?.connected) machine.handle('BOOTSTRAP_OK');
-              else if (refreshed?.authExpired) machine.handle('REFRESH_FAIL');
-              else machine.handle('NETWORK_FAIL');
-            } else {
-              machine.handle('RESET');
             }
+            machine.handle(resumeSessionDecision({ status, identity, refreshed }));
           } catch (error) {
             if (!active) return;
             machine.handle(remoteErrorEvent(error));

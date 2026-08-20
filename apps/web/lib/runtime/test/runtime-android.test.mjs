@@ -176,7 +176,11 @@ test('android-remote GET uses the native broker (relative path only)', async () 
   assert.equal(calls[0].opts.headers.Authorization, undefined);
 });
 
-test('android-remote upload goes through the native broker with bounded base64', async () => {
+test('android-remote generic FormData File/Blob upload FAILS CLOSED before arrayBuffer (§6.1)', async () => {
+  // Gate R0.5/§6.1 — android-remote only supports SAF content:// streaming
+  // upload (uploadByUri). A generic FormData byte upload must be denied at the
+  // transport before any file.arrayBuffer() / base64 copy is materialised, so
+  // a large file can never become a renderer base64 blob on Android.
   const calls = [];
   const adapter = androidAdapter({
     status: enrolledStatus(),
@@ -188,10 +192,28 @@ test('android-remote upload goes through the native broker with bounded base64',
   const { transport } = await resolveNativeRemote('android-remote', 'android', {}, adapter);
   const form = new FormData();
   form.append('file', new File([new Uint8Array(64)], 'note.txt', { type: 'text/plain' }));
-  await transport.request('/api/knowledge/sources/upload', { method: 'POST', body: form });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].path, '/api/knowledge/sources/upload');
-  assert.equal(calls[0].opts.fileName, 'note.txt');
+  await assert.rejects(
+    transport.request('/api/knowledge/sources/upload', { method: 'POST', body: form }),
+    /SAF content:\/\/ streaming upload/,
+  );
+  assert.equal(calls.length, 0, 'the native broker must never see a byte upload on Android');
+  // The uploadByUri SAF path remains the supported Android upload (routed
+  // through the adapter by api.js, never through the byte transport).
+  const byUriCalls = [];
+  const uriAdapter = androidAdapter({
+    status: enrolledStatus(),
+    uploadByUri: async (opts) => {
+      byUriCalls.push(opts);
+      return { status: 200, bodyBase64: '', contentType: '' };
+    },
+  });
+  await uriAdapter.uploadByUri({
+    path: '/api/knowledge/sources/upload',
+    uri: 'content://doc/1',
+    fileName: 'note.pdf',
+  });
+  assert.equal(byUriCalls.length, 1);
+  assert.equal(byUriCalls[0].uri, 'content://doc/1');
 });
 
 test('android-remote rejects absolute / protocol-relative paths like desktop', async () => {
@@ -315,6 +337,22 @@ test('android-remote transient network failure stays recoverable (never LoginExp
 });
 
 // ---- §5 platform isolation -------------------------------------------------
+test('android-remote exposes immutable runtime truth, not exception fallback (§6.2)', async () => {
+  // The adapter must implement getDesktopRuntimeMode explicitly so RuntimeConnect
+  // never infers android-remote from a caught exception or platform string.
+  const tauriAndroid = await import('../platforms/tauri-android.js');
+  assert.equal(typeof tauriAndroid.getDesktopRuntimeMode, 'function');
+  const mode = await tauriAndroid.getDesktopRuntimeMode();
+  assert.deepEqual(mode, {
+    activeRuntimeId: 'android-remote',
+    pendingRuntimeId: 'android-remote',
+    restartRequired: false,
+    sessionImmutable: true,
+  });
+  // Switching the runtime is unsupported and fails closed on Android.
+  await assert.rejects(tauriAndroid.setDesktopRuntimeMode('desktop-local'), /immutable/);
+});
+
 test('android-remote is a frozen runtime id and never claims desktop-only surfaces', async () => {
   assert.ok(RUNTIME_IDS.includes('android-remote'));
   const adapter = androidAdapter({ status: enrolledStatus() });

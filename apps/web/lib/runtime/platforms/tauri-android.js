@@ -53,21 +53,12 @@ export async function remoteApiRequest(path, { method, body, contentType, header
   return invoke('remote_api_request', { path, method, body, contentType, headers });
 }
 
-export async function remoteApiUpload(path, {
-  fileField,
-  fileName,
-  fileBytesB64,
-  fileContentType,
-  fields,
-} = {}) {
-  return invoke('remote_api_upload', {
-    path,
-    fileField,
-    fileName,
-    fileBytesB64,
-    fileContentType,
-    fields,
-  });
+// Gate R0.5/§6.1 — fail-closed. Android never accepts a generic renderer byte
+// upload: the ONLY supported Android upload is the native SAF content:// stream
+// (uploadByUri). Even if some UI path passes FormData here, it must throw
+// before any renderer base64 copy is created. The transport also denies it.
+export async function remoteApiUpload() {
+  throw new Error('android-remote only supports SAF content:// streaming upload (uploadByUri)');
 }
 
 export async function remoteSessionStatus() {
@@ -99,6 +90,25 @@ export async function openExternal(url) {
 // renderer only receives a content URI plus metadata (name/size/MIME) and
 // never the file bytes (Gate R0.5). Uploads go through the same native broker
 // as every remote mutation, so the transport-level mutation gate applies.
+
+// Gate R0.3/§6.2 — explicit immutable runtime truth. Android is ALWAYS
+// android-remote: no sidecar, no local core, no mode switch, no restart-to-
+// switch. This getter must exist so RuntimeConnect never infers the runtime
+// from an exception or a platform-string fallback.
+export async function getDesktopRuntimeMode() {
+  return {
+    activeRuntimeId: 'android-remote',
+    pendingRuntimeId: 'android-remote',
+    restartRequired: false,
+    sessionImmutable: true,
+  };
+}
+
+// Gate R0.3/§6.2 — switching the runtime is unsupported on Android. A renderer
+// path must fail closed instead of pretending a local/remote switch exists.
+export async function setDesktopRuntimeMode() {
+  throw new Error('android-remote runtime mode is immutable; switching is unsupported on Android');
+}
 
 // Select a document through SAF. `mimeType` narrows the picker when provided
 // (e.g. "application/pdf"); omit it for any file type.

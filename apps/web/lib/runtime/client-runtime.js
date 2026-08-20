@@ -67,7 +67,14 @@ export async function resolveNativeRemote(runtimeId, platform, runtime, adapter)
     apiUpload: adapter.remoteApiUpload,
   };
   const connection = new ConnectionStateMachine({ initialState: 'Initializing' });
-  const transport = new RemoteTransport({ broker, active: true, connection });
+  const transport = new RemoteTransport({
+    broker,
+    active: true,
+    connection,
+    // Gate R0.5/§6.1 — Android only uploads via SAF content:// (uploadByUri);
+    // the generic File/Blob byte path is denied structurally, not by UI habit.
+    byteUploadAllowed: platform !== 'android',
+  });
   if (status?.enrolled) {
     descriptor.server = {
       displayName: status.serverDisplayName || '自托管服务器',
