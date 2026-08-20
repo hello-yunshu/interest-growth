@@ -10,6 +10,23 @@ rust-version = "1.88.0"
 name = "interest_growth_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Gate R2 §10.3 / R4 §10 layer-2 — Desktop A native broker harness for the true
+# Native cross-device gate. The feature is NEVER enabled by default: the harness
+# module and its FileCredentialStore are inert in every product/release build.
+# Only the CI cross-device job builds the `desktop_native_harness` binary with
+# this feature to run a REAL `RemoteBroker` on a headless Linux runner.
+[features]
+default = []
+desktop-native-harness = []
+
+# The Desktop A harness binary is `required-features`-gated: a plain `cargo
+# build`/`cargo check` never produces it, so it cannot leak into release
+# packaging.
+[[bin]]
+name = "desktop_native_harness"
+path = "src/bin/desktop_native_harness.rs"
+required-features = ["desktop-native-harness"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

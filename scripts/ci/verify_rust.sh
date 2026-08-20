@@ -26,6 +26,13 @@ mkdir -p binaries
 echo "[verify_rust] cargo check --locked --lib"
 cargo check --locked --lib
 
+# Gate R2 §10.3 / R4 §10 layer-2 — Desktop A native broker harness compile
+# regression. The `desktop-native-harness` feature is never in the default
+# build, so a plain `cargo check` cannot catch breakage in the harness. This
+# explicit feature-gated check keeps the CI cross-device job buildable.
+echo "[verify_rust] cargo check --locked --bin desktop_native_harness --features desktop-native-harness"
+cargo check --locked --bin desktop_native_harness --features desktop-native-harness
+
 echo "[verify_rust] cargo test --locked --lib"
 cargo test --locked --lib
 
