@@ -148,7 +148,7 @@ d977268a3981ee3fc394bdb8e45997fdcf742859281e3245a05b9609a12cbba5  apps/desktop/s
 e17eddf8089e684727dfc51988d6602b0c078c752bcfbc2d04d261ce960d0f47  apps/desktop/src-tauri/src/emulator_e2e.rs
 2ede14de0897bcb5aefe944a08d5ca02385e2ebe3b6d1bbdc80623962d672529  apps/desktop/src-tauri/src/lib.rs
 34eb08d2c5f7654d397ac3c5807512e191689a0a264429bb36f0454cf53514a4  apps/desktop/src-tauri/src/main.rs
-1a01b05fdfa146314d048813465e92e4368167f9f00f1f318433fe5b76489eea  apps/desktop/src-tauri/src/remote.rs
+5a0e5912833216c692502105d895a7e90a8a6ee5cc7c4d7f821873aaea39ec3b  apps/desktop/src-tauri/src/remote.rs
 885126d3af5ea970942aba05956a8bede88c350cd2212841f65a5495a34f17b3  apps/desktop/src-tauri/src/runtime_mode.rs
 00f4593e4f2252d31aeebb398d31980d6e2e3d5b9282e7259efae786a4d7388e  apps/desktop/src-tauri/src/ui_ipc_e2e.rs
 df78e74406f621a73bc83f3c1b69c114729f604f6a7e36a75a34fb94c7660238  apps/desktop/src-tauri/tauri.conf.json

@@ -1122,7 +1122,7 @@ pub fn load_pem_trust_root(pem_path: &Path) -> Result<reqwest::Certificate, Stri
 pub fn android_system_property(name: &str) -> Option<String> {
     use std::ffi::{c_char, CStr, CString};
     // PROP_VALUE_MAX is 92 in bionic libc.
-    let mut value = [0i8; 92];
+    let mut value = [0u8; 92];
     let name = CString::new(name).ok()?;
     extern "C" {
         fn __system_property_get(name: *const c_char, value: *mut c_char) -> i32;
