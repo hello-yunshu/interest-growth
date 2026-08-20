@@ -56,7 +56,8 @@ def main(argv=None) -> int:
 
     lines: list[str] = []
     add = lines.append
-    add("# Interest Growth v0.7 — Release Verification Report")
+    tag = env('GITHUB_REF_NAME', default='unknown')
+    add(f"# Interest Growth {tag} — Release Verification Report")
     add("")
     add(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     add("")
