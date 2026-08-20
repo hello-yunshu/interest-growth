@@ -1,10 +1,10 @@
 # Project Status
 
 **Product:** Interest Growth
-**Release branch:** `feat/v0.7-android-release-closure` → target **v1.0.0 Stable**
+**Release branch:** `fix/v1.0.1-stable-closure` → **v1.0.1 Stable**
 **Default Domain Pack:** Psychology
 **Runtime:** Tauri 2 desktop shell + static Next.js/React + local Python/FastAPI Core
-**Execution order:** Gate R0 (v0.7 Closure) → R1 (Product Completion) → R2 (Release Hardening) → R3 (1.0 RC) → R4 (1.0 Stable). See `Interest_Growth_v1.0.0_远程Actions完整推进与正式发布_总执行提示词.md`.
+**Execution order:** Gate R0 (v0.7 Closure) → R1 (Product Completion) → R2 (Release Hardening) → R3 (1.0 RC) → R4 (1.0 Stable). See `Interest_Growth_最终稳定版_v1.0.1_远程Actions闭环发布_完整执行提示词.md`.
 
 ## Source candidate status
 
@@ -199,6 +199,17 @@ Independent code audit of `v1.0.0-rc.1` (commit `4aea601`) focusing on the §47 
 - **Windows/macOS desktop**: not published as release assets; Windows Authenticode and macOS Developer ID/notarization remain documented  external blockers (fail-closed, no ad-hoc fallback).
 
 **R3 exit criteria met.** Next: **Gate R4 (1.0 Stable)** — after RC1 soak/review, re-tag at `v1.0.0` (non-prerelease) and confirm the same green pipeline publishes the Stable release.
+
+## v1.0.1 — Stable closure execution (2026-08-20)
+
+Closed to `fix/v1.0.1-stable-closure`, merged into `main` at `422c0f1` via PR #14. All remote Actions gates PASS on the merged main (`CI` green, `Web E2E (UX closure)` success, `Build Artifacts` success).
+
+- **Android hardening (§6, batch 1)**: fail-closed byte upload on Android remote transport (`byteUploadAllowed=false`; `_upload` and `remoteApiUpload` throw before `file.arrayBuffer()`); immutable `getDesktopRuntimeMode()` on Android and `setDesktopRuntimeMode()` rejection; fresh-install resume resolves to `RESET` via sessionStatus-first pure `resumeSessionDecision()` (never terminal `LoginExpired`); plugin surface cfg-gated per `target_os` (shell/updater/dialog/fs desktop-only, opener + `android_bridge` on both); `check_for_update`/`install_available_update`/`set_desktop_runtime_mode` reject on Android; capability-surface audit test.
+- **Version bump 1.0.0 → 1.0.1 (batch 2, K1)**: canonical `pyproject.toml`; `SERVER_VERSION=1.0.1`; `MIN_CLIENT_VERSION` kept at `1.0.0` (patch release — no protocol/API break) with a semantic `<=` gate in `verify_version_consistency.py`; Android `versionCode` `1000001 → 1000002` with a monotonic check; desktop/web/contract `CLIENT_VERSION` advanced; `uv.lock`/package-locks/`SOURCE_MANIFEST` refreshed.
+- **Release pipeline gates (batch 2, K2)**: `gh release create --verify-tag` (refuses a missing tag) plus the existing explicit tag→SHA fail-closed binding; new `server-bundle` job producing `interest-growth-server-<version>.tar.gz` from the exact Docker-runtime source set; Windows x64 / macOS arm64 packages and the server bundle now attached to the release (macOS `.app` bundled to a single `.tar.gz`); a single `dist/release/SHA256SUMS.txt` over exactly the attached assets (debug APK never included); actionlint pinned to an immutable image digest instead of `:latest`; verification report title derives from `GITHUB_REF_NAME`.
+- **Branch protection**: `main` now requires `Python 3.11`, `Python 3.12` AND `PR Required Gate (aggregate of all critical PR checks)`; linear history, no force-push, no deletions, conversation resolution preserved.
+
+**Next**: create the immutable `v1.0.1` tag on `main` `422c0f1`, run the full Stable-only release matrix (exact-tag extended, upgrade-in-place, cross-device, Windows/macOS packages, desktop package audit, server bundle), then `gh release create v1.0.1 --verify-tag` and record evidence in `V1_0_1_RELEASE_VERIFICATION.md`.
 
 ## Compatibility identifiers intentionally retained
 

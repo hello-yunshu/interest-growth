@@ -3,6 +3,31 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
+## 1.0.1 — v1.0.1 Stable (2026-08-20)
+
+**Status**: Stable closure merged into `main` at `422c0f1` (PR #14). Version
+bump `1.0.0 → 1.0.1`; `MIN_CLIENT_VERSION` remains `1.0.0` (patch release, no
+protocol/API break). All remote Actions gates green on the merged main.
+
+**Android hardening (§6)**:
+- fail-closed byte upload on Android (`byteUploadAllowed=false`; the upload
+  throws before `file.arrayBuffer()`);
+- immutable `getDesktopRuntimeMode()` on Android; `setDesktopRuntimeMode()`
+  rejects;
+- fresh-install resume resolves to `RESET` (sessionStatus-first pure
+  `resumeSessionDecision()`);
+- plugin surface cfg-gated per `target_os`; updater / runtime-mode commands
+  reject on Android; capability-surface audit test added.
+
+**Release pipeline**:
+- `gh release create --verify-tag` + explicit tag→SHA fail-closed binding;
+- `server-bundle` job (`interest-growth-server-<version>.tar.gz`);
+- Windows/macOS/server assets attached to the release; single `SHA256SUMS.txt`
+  over exactly the attached assets (debug APK never included);
+- actionlint pinned to an immutable image digest.
+
+**Android**: `versionCode` `1000001 → 1000002` (monotonic, gate-checked).
+
 ## 1.0.0 — v1.0.0-rc.1 (2026-08-17)
 
 **Published**: v1.0.0 release candidate 1, prerelease, at
