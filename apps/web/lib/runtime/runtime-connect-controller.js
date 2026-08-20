@@ -140,3 +140,27 @@ export function dataLocationOf(state) {
 export function isRemoteActive(state) {
   return isRemoteRuntime(state.activeRuntimeId);
 }
+
+// Gate R0.4 §R0.4 / §6.3 — pure resume re-evaluation decision.
+//
+// A foreground/resume is NOT a silent Connected. The correct order is:
+//   1. session status first  (a brand-new install reports enrolled:false and
+//      must resolve to RESET/Initializing — NEVER LoginExpired, which is a
+//      terminal state reserved for a revoked/expired credential on a device
+//      that WAS enrolled);
+//   2. only when enrolled, probe identity  (a replaced server is a blocking
+//      IdentityChanged);
+//   3. otherwise connected / refresh / bounded network failure.
+//
+// Returns the ConnectionStateMachine event to dispatch. `error` carries a
+// remote coded-error string already mapped by remoteErrorEvent when the resume
+// driver surfaced a thrown native error instead of structured results.
+export function resumeSessionDecision({ status, identity, refreshed, error }) {
+  if (error) return error;
+  if (!status?.enrolled) return 'RESET';
+  if (identity?.identityChanged) return 'IDENTITY_MISMATCH';
+  if (status?.connected) return 'BOOTSTRAP_OK';
+  if (refreshed?.connected) return 'BOOTSTRAP_OK';
+  if (refreshed?.authExpired) return 'REFRESH_FAIL';
+  return 'NETWORK_FAIL';
+}
