@@ -63,6 +63,21 @@ def _match(pattern: str, text: str) -> str | None:
     return found.group(1).strip() if found else None
 
 
+def _parse_semver(value: str) -> tuple[int, int, int] | None:
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", value.strip())
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def _semver_lte(left: str, right: str) -> bool:
+    a = _parse_semver(left)
+    b = _parse_semver(right)
+    if a is None or b is None:
+        return True  # non-strict-version strings are not compared arithmetically
+    return a <= b
+
+
 def main() -> int:
     problems: list[str] = []
 
@@ -78,7 +93,16 @@ def main() -> int:
     # --- server / API ---------------------------------------------------- #
     remote_text = REMOTE_AUTH.read_text(encoding="utf-8")
     require_equal("remote_auth.SERVER_VERSION", _match(r'SERVER_VERSION\s*=\s*"([^"]+)"', remote_text))
-    require_equal("remote_auth.MIN_CLIENT_VERSION", _match(r'MIN_CLIENT_VERSION\s*=\s*"([^"]+)"', remote_text))
+    # MIN_CLIENT_VERSION is the minimum client the server accepts, NOT a mirror
+    # of the current product version. A patch release (e.g. 1.0.1) keeps it at
+    # the last shipped version so existing clients stay compatible; it must only
+    # move forward with a compatibility-breaking change. Validate it is a
+    # version <= canonical (semantic: min client must not exceed the server).
+    min_client = _match(r'MIN_CLIENT_VERSION\s*=\s*"([^"]+)"', remote_text)
+    if min_client is None:
+        problems.append("remote_auth.MIN_CLIENT_VERSION: version not found")
+    elif not _semver_lte(min_client, canonical):
+        problems.append(f"remote_auth.MIN_CLIENT_VERSION: {min_client!r} > canonical {canonical!r} (must never exceed the server version)")
     api_version = _match(r'API_VERSION\s*=\s*"([^"]+)"', remote_text)
     if api_version != API_VERSION:
         problems.append(f"remote_auth.API_VERSION: {api_version!r} != {API_VERSION!r}")
@@ -89,6 +113,15 @@ def main() -> int:
     tauri_text = TAURI_CONF.read_text(encoding="utf-8")
     require_equal("tauri.conf.json.version", _match(r'"version"\s*:\s*"([^"]+)"', tauri_text))
     require_equal("apps/desktop/package.json.version", str(json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))["version"]))
+    # Android versionCode must be strictly monotonic across releases. 1.0.0
+    # shipped versionCode 1000001, so 1.0.1 must be >= 1000002. Tauri's
+    # auto-computed value for 1.0.1 would collide with 1.0.0, so the explicit
+    # override is required and checked here.
+    version_code = _match(r'"versionCode"\s*:\s*(\d+)', tauri_text)
+    if version_code is None:
+        problems.append("tauri.conf.json.android.versionCode: not found")
+    elif int(version_code) < 1000002:
+        problems.append(f"tauri.conf.json.android.versionCode: {version_code} < 1000002 (must be strictly greater than the v1.0.0 value)")
 
     # --- web / ClientRuntime -------------------------------------------- #
     require_equal("apps/web/package.json.version", str(json.loads(WEB_PKG.read_text(encoding="utf-8"))["version"]))

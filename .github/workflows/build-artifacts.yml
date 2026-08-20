@@ -79,8 +79,8 @@ jobs:
             exit 1
           fi
           mkdir -p dist/android
-          cp "${APK}" dist/android/interest-growth-v1.0.0-android-arm64-debug.apk
-          echo "path=dist/android/interest-growth-v1.0.0-android-arm64-debug.apk" >> "$GITHUB_OUTPUT"
+          cp "${APK}" dist/android/interest-growth-v1.0.1-android-arm64-debug.apk
+          echo "path=dist/android/interest-growth-v1.0.1-android-arm64-debug.apk" >> "$GITHUB_OUTPUT"
       - name: APK static verification
         run: bash scripts/ci/verify_android_apk.sh "${{ steps.apk.outputs.path }}"
       - name: Generate SHA256SUMS for artifacts

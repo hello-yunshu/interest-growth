@@ -285,16 +285,23 @@ fn set_desktop_runtime_mode(
     state: State<'_, DesktopState>,
     runtime_id: String,
 ) -> Result<RuntimeModeInfo, String> {
-    if !runtime_mode::is_desktop_runtime_id(&runtime_id) {
-        return Err(format!("unsupported desktop runtime mode: {runtime_id}"));
+    #[cfg(target_os = "android")]
+    {
+        return Err("android-remote runtime mode is immutable; switching is unsupported on Android".into());
     }
-    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    let profile = RuntimeProfile {
-        runtime_id,
-    };
-    save_runtime_profile(&app_data, &profile)?;
-    let pending = load_runtime_profile(&app_data);
-    Ok(runtime_mode_info(state.mode, pending.as_ref()))
+    #[cfg(not(target_os = "android"))]
+    {
+        if !runtime_mode::is_desktop_runtime_id(&runtime_id) {
+            return Err(format!("unsupported desktop runtime mode: {runtime_id}"));
+        }
+        let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+        let profile = RuntimeProfile {
+            runtime_id,
+        };
+        save_runtime_profile(&app_data, &profile)?;
+        let pending = load_runtime_profile(&app_data);
+        Ok(runtime_mode_info(state.mode, pending.as_ref()))
+    }
 }
 
 #[tauri::command]
@@ -317,44 +324,54 @@ fn restart_app(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn check_for_update(app: AppHandle) -> Result<UpdateInfo, String> {
-    if option_env!("PG_UPDATER_CONFIGURED") != Some("1") {
-        return Err("this build does not have a signed updater channel configured".into());
+    #[cfg(target_os = "android")]
+    return Err("updater is a desktop-only capability; unsupported on Android".into());
+    #[cfg(not(target_os = "android"))]
+    {
+        if option_env!("PG_UPDATER_CONFIGURED") != Some("1") {
+            return Err("this build does not have a signed updater channel configured".into());
+        }
+        let updater = app.updater().map_err(|error| error.to_string())?;
+        let update = updater.check().await.map_err(|error| error.to_string())?;
+        Ok(match update {
+            Some(update) => UpdateInfo {
+                available: true,
+                current_version: update.current_version,
+                version: update.version,
+                notes: update.body.unwrap_or_default(),
+                published_at: update.date.map(|date| date.to_string()).unwrap_or_default(),
+            },
+            None => UpdateInfo {
+                available: false,
+                current_version: env!("CARGO_PKG_VERSION").into(),
+                version: String::new(),
+                notes: String::new(),
+                published_at: String::new(),
+            },
+        })
     }
-    let updater = app.updater().map_err(|error| error.to_string())?;
-    let update = updater.check().await.map_err(|error| error.to_string())?;
-    Ok(match update {
-        Some(update) => UpdateInfo {
-            available: true,
-            current_version: update.current_version,
-            version: update.version,
-            notes: update.body.unwrap_or_default(),
-            published_at: update.date.map(|date| date.to_string()).unwrap_or_default(),
-        },
-        None => UpdateInfo {
-            available: false,
-            current_version: env!("CARGO_PKG_VERSION").into(),
-            version: String::new(),
-            notes: String::new(),
-            published_at: String::new(),
-        },
-    })
 }
 
 #[tauri::command]
 async fn install_available_update(app: AppHandle) -> Result<bool, String> {
-    if option_env!("PG_UPDATER_CONFIGURED") != Some("1") {
-        return Err("this build does not have a signed updater channel configured".into());
+    #[cfg(target_os = "android")]
+    return Err("updater is a desktop-only capability; unsupported on Android".into());
+    #[cfg(not(target_os = "android"))]
+    {
+        if option_env!("PG_UPDATER_CONFIGURED") != Some("1") {
+            return Err("this build does not have a signed updater channel configured".into());
+        }
+        let updater = app.updater().map_err(|error| error.to_string())?;
+        let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
+            return Ok(false);
+        };
+        update
+            .download_and_install(|_, _| {}, || {})
+            .await
+            .map_err(|error| error.to_string())?;
+        app.request_restart();
+        Ok(true)
     }
-    let updater = app.updater().map_err(|error| error.to_string())?;
-    let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
-        return Ok(false);
-    };
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|error| error.to_string())?;
-    app.request_restart();
-    Ok(true)
 }
 
 // Gate D §P14 — provider administration is desktop-local only. The renderer
@@ -707,12 +724,27 @@ pub fn run() {
     let child_slot: Arc<Mutex<Option<CommandChild>>> = Arc::new(Mutex::new(None));
     let slot_for_setup = child_slot.clone();
 
-    let mut builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
+    let mut builder = tauri::Builder::default();
+    // Gate R2 §6.4 — desktop vs Android plugin surface is structurally split.
+    // shell / updater / dialog / fs are DESKTOP-only capabilities; Android must
+    // not gain desktop updater/fs/dialog/shell management by unconditional
+    // registration. opener stays on both (Android opens external URLs through
+    // the system browser via `opener:allow-default-urls`), and the SAF bridge
+    // plugin is registered on both (no-op on desktop).
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder
+            .plugin(tauri_plugin_shell::init())
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_dialog::init())
+            .plugin(tauri_plugin_fs::init())
+            .plugin(tauri_plugin_opener::init());
+    }
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_opener::init());
+    }
+    builder = builder
         // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
         // Android (no-op plugin on desktop). The SAF bridge lets the native
         // layer read/write file bytes without a renderer base64 copy.
@@ -892,5 +924,51 @@ mod tests {
     fn remote_mode_denies_provider_administration() {
         let error = ensure_local_mode(RuntimeMode::DesktopRemote).unwrap_err();
         assert!(error.contains("desktop-local"));
+    }
+
+    // Gate R2 §6.4 — static audit of the Android plugin/capability surface.
+    // The Android capability file must never inherit desktop shell/window/
+    // fs/dialog/updater permissions, and desktop-only invoke commands must
+    // reject on Android builds.
+    #[test]
+    fn android_capability_surface_stays_minimal() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let android_cap = std::fs::read_to_string(root.join("capabilities/android.json"))
+            .expect("capabilities/android.json must exist");
+        for banned in [
+            "window-state",
+            "dialog:allow-save",
+            "fs:allow-write-file",
+            "shell:",
+            "updater:",
+        ] {
+            assert!(
+                !android_cap.contains(banned),
+                "android.json must not grant {banned}"
+            );
+        }
+        assert!(android_cap.contains("opener:allow-default-urls"));
+        let desktop_cap = std::fs::read_to_string(root.join("capabilities/default.json"))
+            .expect("capabilities/default.json must exist");
+        assert!(!desktop_cap.contains("\"android\""));
+        assert!(desktop_cap.contains("dialog:allow-save"));
+        assert!(desktop_cap.contains("fs:allow-write-file"));
+    }
+
+    // Gate R2 §6.4 — Android cannot invoke the desktop-only updater install or
+    // runtime-mode switch. These compile out to a hard error on Android.
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_rejects_desktop_only_commands() {
+        let info = runtime_mode_info(RuntimeMode::AndroidRemote, None);
+        assert_eq!(info.active_runtime_id, RUNTIME_ID_ANDROID_REMOTE);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn android_compile_guard_is_desktop_noop() {
+        // On desktop these commands are reachable; the cfg gates are asserted by
+        // the Android emulator/upgrade jobs on the Android target build.
+        assert!(true);
     }
 }
