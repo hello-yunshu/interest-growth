@@ -24,6 +24,11 @@ mod runtime_mode;
 // module is `cfg(debug_assertions)`-gated and inert in release builds.
 #[cfg(debug_assertions)]
 mod emulator_e2e;
+// Gate R2 §10.3 / R4 §10 layer-2 — Desktop A native broker harness for the
+// true Native cross-device gate. `desktop-native-harness` feature only; never
+// part of a default (product) build.
+#[cfg(feature = "desktop-native-harness")]
+mod cross_device_harness;
 // Gate R2 §8.2 — Android UI/IPC smoke invoke back-end. Compiled in both build
 // kinds so the invoke_handler list stays valid; bodies are inert in release.
 mod ui_ipc_e2e;
@@ -655,6 +660,43 @@ fn restart_desktop_core(
     }
 }
 
+// Gate R2 §10.3 / R4 §10 layer-2 — Desktop A native broker harness entry.
+// The CI cross-device job builds the `desktop_native_harness` binary
+// (required-features = ["desktop-native-harness"]) and runs it against a real
+// Docker server to prove cross-device sync with a real Android emulator. The
+// harness is feature-gated and inert in every product build. `config_json` is
+// the `HarnessConfig` document (phase a_create / b_revoke). Returns the
+// process exit code: 0 = PASS, 1 = FAIL, 2 = harness error.
+#[cfg(feature = "desktop-native-harness")]
+pub fn run_desktop_native_harness(config_json: &str) -> i32 {
+    let config: cross_device_harness::HarnessConfig = match serde_json::from_str(config_json) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("desktop_native_harness: invalid config: {error}");
+            return 2;
+        }
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("desktop_native_harness: cannot start runtime: {error}");
+            return 2;
+        }
+    };
+    match runtime.block_on(cross_device_harness::run_harness(config)) {
+        Ok(report) => {
+            let pass = report.get("result").and_then(|value| value.as_str()) == Some("PASS");
+            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            println!("HARNESS RESULT={}", if pass { "PASS" } else { "FAIL" });
+            if pass { 0 } else { 1 }
+        }
+        Err(error) => {
+            eprintln!("desktop_native_harness: FAIL: {error}");
+            1
+        }
+    }
+}
+
 // Gate E — the mobile entry point macro generates the Android JNI entry that
 // the runtime uses to drive the app on-device. Without it the built .so lacks
 // the required `Java_app_tauri_plugin_PluginManager_handlePluginResponse`
@@ -715,12 +757,22 @@ pub fn run() {
             // broker (never reachable while local mode is active) using the
             // default remote runtime id.
             #[cfg(target_os = "android")]
-            let broker = RemoteBroker::with_expected_runtime(
-                AndroidKeystoreStore::new()
-                    .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
-                broker_expected_runtime_id(mode),
-            )
-            .map_err(|error| format!("failed to initialize remote broker: {error}"))?;
+            let broker = {
+                // Phase 4d — CI-only optional TLS trust root. On the upgrade-
+                // test APK the adb-runner sets `ig.ci.tls_ca_path` to an
+                // ephemeral CI CA; production (property unset) → None and the
+                // broker keeps its default Mozilla roots. Fail-closed if the
+                // property is set but the CA can't be loaded.
+                let trust_root = remote::ci_tls_trust_root()
+                    .map_err(|error| format!("failed to load CI TLS trust root: {error}"))?;
+                RemoteBroker::with_expected_runtime_and_trust_root(
+                    AndroidKeystoreStore::new()
+                        .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
+                    broker_expected_runtime_id(mode),
+                    trust_root,
+                )
+                .map_err(|error| format!("failed to initialize remote broker: {error}"))?
+            };
             #[cfg(not(target_os = "android"))]
             let broker =
                 RemoteBroker::with_expected_runtime(Arc::new(KeyringStore), broker_expected_runtime_id(mode))
