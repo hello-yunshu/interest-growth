@@ -1,7 +1,7 @@
 # Project Status
 
 **Product:** Interest Growth
-**Release branch:** `fix/v1.0.1-stable-closure` → **v1.0.2 Stable target**
+**Release branch:** `fix/v1.0.1-stable-closure` → **v1.0.3 Stable target**
 **Default Domain Pack:** Psychology
 **Runtime:** Tauri 2 desktop shell + static Next.js/React + local Python/FastAPI Core
 **Execution order:** Gate R0 (v0.7 Closure) → R1 (Product Completion) → R2 (Release Hardening) → R3 (1.0 RC) → R4 (1.0 Stable). See `Interest_Growth_最终稳定版_v1.0.1_远程Actions闭环发布_完整执行提示词.md`.
