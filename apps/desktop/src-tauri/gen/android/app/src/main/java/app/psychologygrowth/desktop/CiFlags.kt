@@ -17,5 +17,5 @@
 //         (prompt §11 — display DebuggingEnabled risk is confined to this
 //         throwaway artifact).
 object CiFlags {
-  const val ENABLE_WEBVIEW_REMOTE_DEBUGGING: Boolean = true
+  const val ENABLE_WEBVIEW_REMOTE_DEBUGGING: Boolean = false
 }

@@ -1639,7 +1639,7 @@ wheels = [
 
 [[package]]
 name = "interest-growth"
-version = "1.0.2"
+version = "1.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

@@ -3,13 +3,13 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.2 — v1.0.2 Stable target (2026-08-21)
+## 1.0.3 — v1.0.3 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
 
-`v1.0.1` was never published (no GitHub Release was created), so per the
-immutable-tag governance the fixes below ship as the next patch `1.0.2`.
+`v1.0.1` and `v1.0.2` were never published (no GitHub Release was created), so
+per the immutable-tag governance the fixes below ship as the next patch `1.0.3`.
 
 **Fixes over the v1.0.1 tag SHA**:
 - Android `x86_64` Rust compile fix — `__system_property_get` buffer must be
@@ -19,9 +19,21 @@ immutable-tag governance the fixes below ship as the next patch `1.0.2`.
   `bundle/macos/<App>.app/Contents/MacOS/<CFBundleExecutable>` and hidden Cargo
   metadata is excluded, so startup smoke can no longer launch the Python
   sidecar or a build helper quasicom.
-- Version bump `1.0.1 → 1.0.2` with `MIN_CLIENT_VERSION` kept at `1.0.0`
+- **Production security fix** — `CiFlags.kt` no longer leaks WebView remote
+  debugging: `ENABLE_WEBVIEW_REMOTE_DEBUGGING` is `false`, so the published
+  production APK and normal builds always disable it (the `true` default was
+  an internal test artifact flag and is confined to the throwaway x86_64
+  emulator APK).
+- Version bump `1.0.2 → 1.0.3` with `MIN_CLIENT_VERSION` kept at `1.0.0`
   (patch release, no protocol/API break); Android `versionCode` advanced to
-  `1000003` (monotonic).
+  `1000005` (monotonic; `1000004` is skipped — versionCode must not contain
+  the digit `4`).
+
+## 1.0.2 — (unpublished)
+
+Never published. Android `versionCode` was advanced to `1000003` but a
+production security defect (CiFlags.kt `ENABLE_WEBVIEW_REMOTE_DEBUGGING=true`)
+was found before any release created; all fixes ship in `1.0.3`.
 
 ## 1.0.1 — v1.0.1 Stable (2026-08-20)
 
