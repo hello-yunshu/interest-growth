@@ -200,10 +200,9 @@ jobs:
           pip-audit --skip-editable
       - name: Audit optional RAG extras (documented dev-only advisory)
         # PYSEC-2026-113: pyarrow 22.0.0 is forced by graphrag~=3.1 (graphrag
-        # pins pyarrow~=22.0). rag-graphrag is an optional dev/experimental
-        # extra, not part of the 1.0 runtime; a fix requires an upstream
-        # graphrag release that allows pyarrow>=23.0.1. Documented explicitly
-        # here so the ignore is auditable, never a silent drop.
+        # pins pyarrow~=22.0). The optional RAG extra pins NLTK >=3.10.0 so
+        # the current NLTK advisories cannot resolve into this audit. The
+        # remaining pyarrow ignore is documented explicitly and auditable.
         run: |
           python -m pip install -e ".[rag-graphrag]" pip-audit
           pip-audit --skip-editable --ignore-vuln PYSEC-2026-113
