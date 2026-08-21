@@ -48,7 +48,7 @@ def main():
     if spec["global_lifecycle"]["wildcard_default_allowed_in_production"] is not False:return fail("global lifecycle fail-open")
     if set(spec["allowed_native_tables"])!={"native_tutor_checkpoint","native_run_event","native_aux_memory"}:return fail("allowed native tables drift")
     with (ROOT/"pyproject.toml").open("rb") as f:project=tomllib.load(f)
-    if project["project"]["version"]!="1.0.1":return fail("version mismatch")
+    if project["project"]["version"]!="1.0.2":return fail("version mismatch")
     # Gate R2 §17 — all user-visible version sources and frozen API/backup
     # contracts must agree with the canonical product version.
     import verify_version_consistency

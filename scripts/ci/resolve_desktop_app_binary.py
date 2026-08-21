@@ -89,7 +89,10 @@ def deterministic_candidate(
         cand = release_dir / f"{binary_name}.exe"
         return cand if cand.is_file() else None
     if os_kind == "mac":
-        exe = release_dir / f"{app_name}.app" / "Contents" / "MacOS" / binary_name
+        # The .app bundle is produced under release/bundle/macos/, never in the
+        # release/ dir root (which also holds Cargo metadata/lock files).
+        app_bundle = release_dir / "bundle" / "macos" / f"{app_name}.app"
+        exe = app_bundle / "Contents" / "MacOS" / binary_name
         return exe if exe.is_file() and os.access(exe, os.X_OK) else None
     # linux (non-packaged smoke only): plain binary in release/
     cand = release_dir / binary_name
@@ -100,6 +103,10 @@ def scan_candidates(release_dir: Path, os_kind: str) -> list[Path]:
     """Scan release/ applying the explicit rejection list."""
     found: list[Path] = []
     for child in sorted(release_dir.iterdir()):
+        if child.name.startswith("."):
+            # Hidden Cargo metadata/lock files (.cargo-*, .rustc_info.json) have
+            # no suffix and are never packaged executables.
+            continue
         if child.is_dir():
             if child.name in REJECT_DIRS or child.name.endswith(".app"):
                 continue

@@ -114,7 +114,7 @@ class ResolveDesktopAppBinaryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             repo = make_repo(Path(td))
             rel = release_dir(repo, "aarch64-apple-darwin")
-            exe_dir = rel / "Interest Growth.app" / "Contents" / "MacOS"
+            exe_dir = rel / "bundle" / "macos" / "Interest Growth.app" / "Contents" / "MacOS"
             exe_dir.mkdir(parents=True)
             (exe_dir / "interest-growth-desktop").write_bytes(b"")
             os.chmod(exe_dir / "interest-growth-desktop", 0o755)
@@ -131,7 +131,7 @@ class ResolveDesktopAppBinaryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             repo = make_repo(Path(td))
             rel = release_dir(repo, "aarch64-apple-darwin")
-            exe_dir = rel / "Interest Growth.app" / "Contents" / "MacOS"
+            exe_dir = rel / "bundle" / "macos" / "Interest Growth.app" / "Contents" / "MacOS"
             exe_dir.mkdir(parents=True)
             (exe_dir / "psychology-growth-core-aarch64-apple-darwin").write_bytes(b"")
             os.chmod(exe_dir / "psychology-growth-core-aarch64-apple-darwin", 0o755)
