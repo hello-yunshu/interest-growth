@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "interest-growth"
-version = "1.0.16"
+version = "1.0.17"
 description = "Local-first multi-interest learning, practice, research, growth and expression system with Psychology as the default Domain Pack"
 requires-python = ">=3.11"
 dependencies = [

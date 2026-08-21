@@ -3,13 +3,29 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.16 — v1.0.16 Stable target (2026-08-21)
+## 1.0.17 — v1.0.17 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix).
 
-`v1.0.15` failed two Stable-gate jobs, so this ships as `1.0.16` under the
-immutable-tag governance (`1.0.15` is recorded below; `1.0.16` is the next
-valid slot and contains no `4`/`11`).
+`v1.0.16` was never published: its tag pointed to an incomplete commit whose
+two lockfiles (`apps/desktop/package-lock.json`, `apps/desktop/src-tauri/
+Cargo.lock`) were still pinned at `1.0.15`, so `cargo --locked` (and the
+dependencies gate) could not resolve the product version. Per the
+immutable-tag governance this ships as `1.0.17` — `1.0.16` is recorded below
+as unpublished, and `1.0.17` contains no `4`/`11`.
+
+**Fixes (Release pipeline only):**
+- Fully synced every version source to `1.0.17`, including the two committed
+  `Cargo.lock` / `package-lock.json` entries for the desktop package, so the
+  Rust locked build and npm clean-install see a single consistent version.
+- Android `versionCode` advanced to `1000018` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.16 — v1.0.16 Stable target (unpublished)
+
+**Status**: unpublished — the `v1.0.16` tag pointed at an incomplete commit:
+the two desktop lockfiles were still `1.0.15`, breaking `cargo --locked`.
+The intended fixes (recorded below) ship in `1.0.17`.
 
 **Fixes (Release pipeline only):**
 - `android-upgrade-in-place` TLS edge: the ephemeral Caddy in
