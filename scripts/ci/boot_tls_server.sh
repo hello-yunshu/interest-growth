@@ -52,7 +52,7 @@ openssl x509 -req \
   -extfile "${WORK}/ext.cnf" >/dev/null 2>&1
 
 cat > "${WORK}/Caddyfile" <<EOF
-https://127.0.0.1 {
+:443 {
 	bind 0.0.0.0
 	encode gzip
 	tls /certs/server.crt /certs/server.key
