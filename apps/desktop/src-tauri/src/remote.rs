@@ -3630,6 +3630,7 @@ mod tests {
                 let request_line = lines.next().unwrap_or_default().to_string();
                 let mut headers = Vec::new();
                 let mut content_length = 0usize;
+                let mut transfer_chunked = false;
                 for line in lines {
                     if let Some((key, value)) = line.split_once(':') {
                         let name = key.trim().to_ascii_lowercase();
@@ -3637,19 +3638,30 @@ mod tests {
                         if name == "content-length" {
                             content_length = value.parse().unwrap_or(0);
                         }
+                        if name == "transfer-encoding"
+                            && value
+                                .split(',')
+                                .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+                        {
+                            transfer_chunked = true;
+                        }
                         headers.push((name, value));
                     }
                 }
                 let header_end = position + 4;
-                while buffer.len() < header_end + content_length {
-                    let count = stream.read(&mut chunk).await?;
-                    if count == 0 {
-                        break;
+                let body_bytes = if transfer_chunked {
+                    read_chunked_body(stream, &mut buffer, header_end).await?
+                } else {
+                    while buffer.len() < header_end + content_length {
+                        let count = stream.read(&mut chunk).await?;
+                        if count == 0 {
+                            break;
+                        }
+                        buffer.extend_from_slice(&chunk[..count]);
                     }
-                    buffer.extend_from_slice(&chunk[..count]);
-                }
-                let available = buffer.len().saturating_sub(header_end);
-                let body_bytes = buffer[header_end..header_end + content_length.min(available)].to_vec();
+                    let available = buffer.len().saturating_sub(header_end);
+                    buffer[header_end..header_end + content_length.min(available)].to_vec()
+                };
                 let body = String::from_utf8_lossy(&body_bytes).to_string();
                 let parts: Vec<&str> = request_line.split_whitespace().collect();
                 let method = parts.first().copied().unwrap_or("").to_string();
@@ -3668,6 +3680,56 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    async fn read_chunked_body(
+        stream: &mut TcpStream,
+        buffer: &mut Vec<u8>,
+        mut cursor: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        let mut body = Vec::new();
+        loop {
+            while find_subsequence(&buffer[cursor..], b"\r\n").is_none() {
+                let mut chunk = [0u8; 4096];
+                let count = stream.read(&mut chunk).await?;
+                if count == 0 {
+                    return Ok(body);
+                }
+                buffer.extend_from_slice(&chunk[..count]);
+            }
+            let line_end = cursor + find_subsequence(&buffer[cursor..], b"\r\n").unwrap();
+            let size_line = String::from_utf8_lossy(&buffer[cursor..line_end]);
+            let size = usize::from_str_radix(size_line.split(';').next().unwrap_or_default().trim(), 16)
+                .unwrap_or(0);
+            cursor = line_end + 2;
+            if size == 0 {
+                // Consume the terminating CRLF and any optional trailers.
+                loop {
+                    if find_subsequence(&buffer[cursor..], b"\r\n\r\n").is_some() {
+                        return Ok(body);
+                    }
+                    if buffer.get(cursor..).is_some_and(|tail| tail.starts_with(b"\r\n")) {
+                        return Ok(body);
+                    }
+                    let mut chunk = [0u8; 4096];
+                    let count = stream.read(&mut chunk).await?;
+                    if count == 0 {
+                        return Ok(body);
+                    }
+                    buffer.extend_from_slice(&chunk[..count]);
+                }
+            }
+            while buffer.len() < cursor + size + 2 {
+                let mut chunk = [0u8; 4096];
+                let count = stream.read(&mut chunk).await?;
+                if count == 0 {
+                    return Ok(body);
+                }
+                buffer.extend_from_slice(&chunk[..count]);
+            }
+            body.extend_from_slice(&buffer[cursor..cursor + size]);
+            cursor += size + 2;
+        }
     }
 
     fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
