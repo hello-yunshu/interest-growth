@@ -253,7 +253,7 @@ def test_owner_login_issues_device_and_token_pair(remote_client):
     response = _login(remote_client)
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["server"]["server_version"] == "1.0.18"
+    assert body["server"]["server_version"] == "1.0.19"
     tokens = body["tokens"]
     assert tokens["token_type"] == "Bearer"
     assert tokens["expires_in"] == 900
