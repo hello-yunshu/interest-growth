@@ -647,15 +647,18 @@ jobs:
       - name: Resolve previous formal stable tag (source to build 'old' from), §11
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
+          set -euo pipefail
+          # This job's actions/checkout uses fetch-depth:1 + fetch-tags:false, so
+          # no tags exist yet; fetch them before resolving the previous version.
+          git fetch --tags --force
           CURRENT="${{ needs.release-meta.outputs.tag }}"
           # First-ever Stable has no previous non-prerelease GitHub *release*, so
           # the N-side upgrade baseline resolves to the immediately-preceding
-          # release *tag* (e.g. v1.0.8 for a v1.0.9 first-stable). The old APK is
+          # release *tag* (e.g. v1.0.8 for a v1.0.10 first-stable). The old APK is
           # rebuilt from that tag's source and re-signed with the current
           # keystore, so a tag without a published release is a valid, honest
-          # baseline (prompt §11 / patch_release_test_source.sh). Default
-          # actions/checkout fetches all tags; descending version order, minus
-          # CURRENT, yields the immediately-previous version tag.
+          # baseline (prompt §11 / patch_release_test_source.sh). Descending
+          # version order, minus CURRENT, yields the immediately-previous tag.
           PREV="$(git tag --sort=-v:refname | grep -vFx "${CURRENT}" | head -1 || true)"
           if [ -z "${PREV}" ]; then echo "FAIL: no previous release tag from which to build the old upgrade APK" >&2; exit 1; fi
           echo "building 'old' release-test APK from previous tag: ${PREV}"
@@ -835,8 +838,8 @@ jobs:
               with urllib.request.urlopen(r, data=data) as resp:
                   return resp.status, json.loads(resp.read() or b"{}")
           req("POST", "/auth/owner/bootstrap", {"owner_password": pwd}, headers={"X-PG-Owner-Bootstrap-Token": bt})
-          s1, dA = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "desktop-remote-A", "platform": "desktop", "app_version": "1.0.9"})
-          s2, dB = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "android-remote-B", "platform": "android", "app_version": "1.0.9"})
+          s1, dA = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "desktop-remote-A", "platform": "desktop", "app_version": "1.0.10"})
+          s2, dB = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "android-remote-B", "platform": "android", "app_version": "1.0.10"})
           assert s1 == 201 and s2 == 201, (s1, s2)
           tokA, tokB = dA["tokens"]["access_token"], dB["tokens"]["access_token"]
 
@@ -1445,7 +1448,7 @@ jobs:
           ST_DESK="$(s "desktop-package-audit" "${{ needs.desktop-package-audit.result }}")"
           ST_SERVER="$(s "server-bundle" "${{ needs.server-bundle.result }}")"
           python3 scripts/ci/generate_release_report.py \
-            --out dist/release/V1_0_9_RELEASE_VERIFICATION.md \
+            --out dist/release/V1_0_10_RELEASE_VERIFICATION.md \
             --asset dist/release/interest-growth-android-arm64.apk \
             --field "Node=22" --field "JDK=17" --field "Android SDK=36" --field "NDK=27.1" \
             --field "Android ABI (release)=arm64-v8a" --field "Android ABI (emulator)=x86_64" \
@@ -1491,10 +1494,10 @@ jobs:
           - **Supported platforms:** Android (arm64-v8a), Windows x64, macOS arm64$EXTRA
           - **Verification:** source integrity + Host regression (3.11 + 3.12) + Web/ClientRuntime + Rust + Docker integration + Android signed build + APK static verification + Android emulator remote slice (see verification report asset)
           - **Signing:** release certificate SHA-256 fingerprint is reported in the verification report (non-secret)
-          - **Known limitations / NOT RUN:** see V1_0_9_RELEASE_VERIFICATION.md asset
-          - **Server compatibility:** v1.0.9 authenticated self-hosted Core (online-first, no offline sync)
+          - **Known limitations / NOT RUN:** see V1_0_10_RELEASE_VERIFICATION.md asset
+          - **Server compatibility:** v1.0.10 authenticated self-hosted Core (online-first, no offline sync)
 
-          Checksums are in SHA256SUMS.txt per asset set; the verification report is V1_0_9_RELEASE_VERIFICATION.md.
+          Checksums are in SHA256SUMS.txt per asset set; the verification report is V1_0_10_RELEASE_VERIFICATION.md.
           EOF
           echo "path=${RUNNER_TEMP}/body.md" >> "$GITHUB_OUTPUT"
       - name: Create release
@@ -1512,7 +1515,7 @@ jobs:
             dist/release/interest-growth-android-arm64.apk \
             dist/release/SHA256SUMS.txt \
             dist/release/interest-growth-android-arm64.spdx.json \
-            dist/release/V1_0_9_RELEASE_VERIFICATION.md \
+            dist/release/V1_0_10_RELEASE_VERIFICATION.md \
             dist/release/interest-growth-windows-*.exe \
             dist/release/interest-growth-windows-*.msi \
             dist/release/interest-growth-macos-arm64-app.tar.gz \

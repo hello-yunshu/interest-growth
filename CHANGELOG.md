@@ -3,25 +3,49 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.9 — v1.0.9 Stable target (2026-08-21)
+## 1.0.10 — v1.0.10 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.9` was never published: its Release run failed at the Stable-only
+`android-upgrade-in-place` "Resolve previous formal stable tag" step. This
+job's `actions/checkout` uses `fetch-depth: 1` + `fetch-tags: false`, so `git tag`
+returned nothing and the N-side upgrade baseline was empty. The fix fetches
+tags (`git fetch --tags --force`) before resolving the immediately preceding
+version tag. Per the immutable-tag governance this ships as the next patch
+`1.0.10` (contains no `4` or `11`).
+
+**Fix over the v1.0.9 tag SHA** (Release workflow hardening only):
+- `android-upgrade-in-place` now fetches repository tags before resolving the
+  previous formal stable tag, so the old APK build baseline is available even
+  with the shallow, tag-less checkout used by that job.
+- Android `versionCode` advanced to `1000012` (monotonic; contains no `4` or
+  `11` — `1000011` is skipped because it contains `11`); `MIN_CLIENT_VERSION`
+  stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.9 — v1.0.9 Stable target (unpublished)
+
+**Status**: unpublished — the Release run failed at the Stable-only
+`android-upgrade-in-place` N-side baseline resolution because the job's
+shallow checkout (`fetch-tags: false`) exposed no tags to `git tag`. Fixed in
+`1.0.10`.
 
 `v1.0.8` was never published: its Release run surfaced two bugs at the
 Stable-only gates. (1) `android-upgrade-in-place` resolved its N-side
 upgrade baseline from previously *published* non-prerelease GitHub releases —
 for a first Stable this is empty, so the old APK build had no tag to build
-from and failed. The fix resolves the previous version from descending release
-*git tags* (`git tag --sort=-v:refname` minus the current tag), so a tag
-without a published release is a valid, honest upgrade baseline (its old APK
-is rebuilt and re-signed with the current keystore, prompt §11). (2) The web
-lockfile regeneration during the version bump pulled two transitive deps
-(`available-typed-arrays`, `path-parse`) to a non-existent `1.0.8`, failing npm
-resolution; both were pinned back to `1.0.7`. Per the immutable-tag governance
-these fixes ship as the next patch `1.0.9` (contains no `4` or `11`).
+from and failed. The fix (also carried into `1.0.10`) resolves the previous
+version from descending release *git tags* (`git tag --sort=-v:refname` minus
+the current tag), so a tag without a published release is a valid, honest
+upgrade baseline (its old APK is rebuilt and re-signed with the current
+keystore, prompt §11). (2) The web lockfile regeneration during the version
+bump pulled two transitive deps (`available-typed-arrays`, `path-parse`) to a
+non-existent `1.0.8`, failing npm resolution; both were pinned back to `1.0.7`.
+Per the immutable-tag governance these fixes ship as the next patch `1.0.9`
+(contains no `4` or `11`).
 
-**Fixes over the v1.0.8 tag SHA** (Release workflow + dependency hardening):
+**Fixes first proposed for `1.0.9` over the v1.0.8 tag SHA**:
 - `android-upgrade-in-place` N-side baseline now resolves the immediately
   preceding version **tag** instead of requiring a published Stable release,
   so a first-ever Stable has a valid upgrade baseline.
