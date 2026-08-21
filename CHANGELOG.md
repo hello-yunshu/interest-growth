@@ -3,10 +3,33 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.3 — v1.0.3 Stable target (2026-08-21)
+## 1.0.5 — v1.0.5 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.2` and `v1.0.3` were never published (no GitHub Release was created), so
+per the immutable-tag governance the fixes below ship as the next patch `1.0.5`
+(`1.0.4` is skipped — the version must not contain the digit `4`).
+
+**Fixes over the v1.0.3 tag SHA** (Release workflow hardening only):
+- Android static verification — `apksigner verify --print-certs` accepts ONE
+  APK per invocation; the shared-cert check now loops over each release APK
+  separately so both arm64 + x86_64 certificates are captured and compared.
+- macOS packaging — the DMG is not a release asset and its bundling is flaky
+  on headless CI; the arm64 package gate now builds `--bundles app` and still
+  runs the packaged `.app` startup smoke.
+- Android `versionCode` advanced to `1000006` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
+**Fixes over the v1.0.1 tag SHA** (carried forward):
+- Android `x86_64` Rust compile fix, deterministic macOS binary resolver,
+  `CiFlags.kt` WebView remote-debug leak fix — see the `1.0.3` entry below.
+
+## 1.0.3 — v1.0.3 Stable target (2026-08-21)
+
+**Status**: unpublished — the Release matrix failed at Android shared-cert
+verification and macOS DMG bundling (both fixed in `1.0.5`).
 
 `v1.0.1` and `v1.0.2` were never published (no GitHub Release was created), so
 per the immutable-tag governance the fixes below ship as the next patch `1.0.3`.
