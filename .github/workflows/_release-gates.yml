@@ -33,6 +33,15 @@ on:
         description: "Exact main SHA for Stable Candidate mode"
         required: false
         type: string
+    secrets:
+      PG_ANDROID_KEYSTORE_B64:
+        required: false
+      PG_ANDROID_STORE_PASSWORD:
+        required: false
+      PG_ANDROID_KEY_ALIAS:
+        required: false
+      PG_ANDROID_KEY_PASSWORD:
+        required: false
 permissions:
   contents: read
 
@@ -683,7 +692,7 @@ jobs:
           echo "building 'old' release-test APK from published baseline: ${PREV}"
           echo "prev_tag=${PREV}" >> "$GITHUB_ENV"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
       - name: Check out previous tag source into prev_src
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
@@ -695,7 +704,7 @@ jobs:
       - name: Download the actual published baseline APK and verify its certificate
         if: needs.release-meta.outputs.is_stable == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p dist/android/published-baseline
@@ -1679,4 +1688,4 @@ jobs:
             dist/release/interest-growth-macos-arm64-app.tar.gz \
             dist/release/interest-growth-server-*.tar.gz
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
