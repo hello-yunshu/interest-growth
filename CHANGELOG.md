@@ -3,9 +3,31 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.18 — v1.0.18 Stable target (2026-08-21)
+## 1.0.19 — v1.0.19 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix).
+
+`v1.0.18` was never published: its Release run's Stable-only
+`android-upgrade-in-place` emulator stage failed because `adb shell setprop
+ig.ci.tls_ca_path ...` was denied (the API 35 google_apis unprivileged `shell`
+domain cannot set an arbitrary `ig.ci.*` property under the SELinux property
+context). The TLS edge was fixed in `1.0.18` and passes; the new release APK
+reads the trust-root path from that property. Per the immutable-tag governance
+this ships as `1.0.19` — it contains no `4`/`11`.
+
+**Fixes (Release pipeline only):**
+- `android-upgrade-in-place` CA injection: the emulator `script` now runs
+  `adb root` + `adb wait-for-device` before `setprop ig.ci.tls_ca_path`, so the
+  userdebug image sets the property instead of failing with "Failed to set
+  property".
+- Android `versionCode` advanced to `1000020` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.18 — v1.0.18 Stable target (unpublished)
+
+**Status**: unpublished — the `v1.0.18` Release run failed the Stable-only
+`android-upgrade-in-place` emulator CA-injection stage (fixed in `1.0.19`).
+The TLS-edge fix below is validated by that run and carried forward.
 
 `v1.0.17` was never published: its Release run failed the Stable-only
 `android-upgrade-in-place` TLS edge (`FAIL: TLS edge did not become healthy`),
