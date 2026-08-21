@@ -54,7 +54,7 @@ def _bootstrap(client) -> None:
 def _login(client, *, name="phone"):
     return client.post(
         "/api/auth/owner/login",
-        json={"owner_password": OWNER_PASSWORD, "device_name": name, "platform": "android", "app_version": "1.0.7"},
+        json={"owner_password": OWNER_PASSWORD, "device_name": name, "platform": "android", "app_version": "1.0.8"},
     )
 
 
