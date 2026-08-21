@@ -53,6 +53,7 @@ openssl x509 -req \
 
 cat > "${WORK}/Caddyfile" <<EOF
 https://127.0.0.1 {
+	bind 0.0.0.0
 	encode gzip
 	tls /certs/server.crt /certs/server.key
 	reverse_proxy /api/* api:8000

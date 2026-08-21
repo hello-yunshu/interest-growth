@@ -56,6 +56,37 @@ cleanup_tree() {
   fi
 }
 
+dump_app_logs() {
+  echo "--- app.stderr (tail) ---" >&2
+  tail -60 "$DATA_ROOT/app.stderr.log" >&2 || true
+  echo "--- app.stdout (tail) ---" >&2
+  tail -20 "$DATA_ROOT/app.stdout.log" >&2 || true
+}
+
+# Poll until the desktop-local Core sidecar appears. The app's own readiness
+# gate waits up to 30s for core health (spawn_core), and a first Windows launch
+# of a signed PyInstaller onefile can materialize its process later than a
+# single immediate `tasklist` snapshot under the runner's Defender scan. A
+# single check at 25s is thus a false-negative source on Windows (macOS has no
+# such delay); polling avoids it while still proving local Core was launched.
+wait_for_sidecar() {
+  local timeout_s="$1"
+  local deadline=$((SECONDS + timeout_s))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    if [ "$PLATFORM" = "--win" ]; then
+      if tasklist 2>/dev/null | grep -qi "psychology-growth-core"; then
+        return 0
+      fi
+    else
+      if pgrep -f "psychology-growth-core" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 launch_and_probe() {
   local pid
   "$APP_BIN" >"$DATA_ROOT/app.stdout.log" 2>"$DATA_ROOT/app.stderr.log" &
@@ -69,31 +100,26 @@ launch_and_probe() {
     # The packaged app exited during/right after setup — this is exactly the
     # R0 startup BLOCKER regression.
     echo "FAIL: packaged app exited during startup (setup likely crashed)" >&2
-    echo "--- app.stderr (tail) ---" >&2
-    tail -60 "$DATA_ROOT/app.stderr.log" >&2 || true
-    echo "--- app.stdout (tail) ---" >&2
-    tail -20 "$DATA_ROOT/app.stdout.log" >&2 || true
+    dump_app_logs
     return 1
   fi
   echo "PASS: packaged app process alive after 25s (Tauri setup survived)"
 
-  # desktop-local must spawn the local Core sidecar.
-  if [ "$PLATFORM" = "--win" ]; then
-    if tasklist 2>/dev/null | grep -qi "psychology-growth-core"; then
-      echo "PASS: desktop-local sidecar process running"
-    else
-      echo "FAIL: desktop-local sidecar not found in tasklist" >&2
-      cleanup_tree "$pid"
-      return 1
-    fi
+  # desktop-local must spawn the local Core sidecar. Poll up to 40s so a slow
+  # first Windows launch is not a false negative, while covering the app's own
+  # 30s core-health window (if the app kills an unhealthy Core, we still catch
+  # a process that materialized earlier or fail with logs for diagnosis).
+  if wait_for_sidecar 40; then
+    echo "PASS: desktop-local sidecar process running"
   else
-    if pgrep -f "psychology-growth-core" >/dev/null 2>&1; then
-      echo "PASS: desktop-local sidecar process running"
+    if [ "$PLATFORM" = "--win" ]; then
+      echo "FAIL: desktop-local sidecar not found in tasklist (after 40s poll)" >&2
     else
-      echo "FAIL: desktop-local sidecar not found (pgrep psychology-growth-core)" >&2
-      cleanup_tree "$pid"
-      return 1
+      echo "FAIL: desktop-local sidecar not found (pgrep psychology-growth-core, after 40s poll)" >&2
     fi
+    dump_app_logs
+    cleanup_tree "$pid"
+    return 1
   fi
 
   cleanup_tree "$pid"
