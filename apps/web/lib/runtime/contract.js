@@ -56,7 +56,7 @@ export const SUPPORTED_API_VERSION = 1;
 // The shipping client package version. The compatibility checker requires an
 // explicit version input so a 0.6 client against min_client_version=0.7.0 is
 // honestly judged UpdateRequired (Gate C §8.3) rather than bypassed.
-export const CLIENT_VERSION = '1.0.16';
+export const CLIENT_VERSION = '1.0.17';
 
 // Gate E — frozen capability vocabulary. Every runtime descriptor's
 // `capabilities` object uses exactly these keys; feature pages branch on
