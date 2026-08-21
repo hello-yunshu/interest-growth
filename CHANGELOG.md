@@ -3,10 +3,37 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.5 — v1.0.5 Stable target (2026-08-21)
+## 1.0.6 — v1.0.6 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.5` was never published: its Release run failed at the Android shared-cert
+step, because `apksigner verify` was handed BOTH release APKs in one invocation
+(that tool accepts exactly ONE APK per call) and exited with
+`Unexpected parameter(s) after APK`. Per the immutable-tag governance the fixes
+ship as the next patch `1.0.6` (contains no `4` or `11`).
+
+**Fixes over the v1.0.5 tag SHA** (Release workflow hardening only):
+- Android static verification now loops over each release APK (`arm64` +
+  `x86_64`) and runs `apksigner verify --print-certs` separately, so the shared
+  same-signing-cert check actually completes and both certificate fingerprints
+  are captured.
+- Android `versionCode` advanced to `1000007` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+- The apksigner shared-cert loop replaces the previous single-command call that
+  produced `Unexpected parameter(s) after APK` and failed the Android gate.
+
+**Fixes over the v1.0.3 tag SHA** (carried forward from the failed `1.0.5`):
+- Android static verification loop (see above) plus the macOS `--bundles app`
+  packaging change; Android `x86_64` Rust compile fix, deterministic macOS
+  binary resolver, `CiFlags.kt` WebView remote-debug leak fix.
+
+## 1.0.5 — v1.0.5 Stable target (unpublished)
+
+**Status**: unpublished — the Release matrix failed at Android shared-cert
+verification (`apksigner verify` received multiple APKs in one call). The fix
+ships as `1.0.6`.
 
 `v1.0.2` and `v1.0.3` were never published (no GitHub Release was created), so
 per the immutable-tag governance the fixes below ship as the next patch `1.0.5`
