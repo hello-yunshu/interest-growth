@@ -3,6 +3,26 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
+## 1.0.2 — v1.0.2 Stable target (2026-08-21)
+
+**Status**: pending remote Actions verification (single unified Stable matrix,
+see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.1` was never published (no GitHub Release was created), so per the
+immutable-tag governance the fixes below ship as the next patch `1.0.2`.
+
+**Fixes over the v1.0.1 tag SHA**:
+- Android `x86_64` Rust compile fix — `__system_property_get` buffer must be
+  typed `[c_char; 92]` (matches the `*mut c_char` signature on every Android
+  target; `c_char` is `u8` on `aarch64` but `i8` on `x86_64`).
+- Deterministic packaged-binary resolver — the macOS main app is resolved from
+  `bundle/macos/<App>.app/Contents/MacOS/<CFBundleExecutable>` and hidden Cargo
+  metadata is excluded, so startup smoke can no longer launch the Python
+  sidecar or a build helper quasicom.
+- Version bump `1.0.1 → 1.0.2` with `MIN_CLIENT_VERSION` kept at `1.0.0`
+  (patch release, no protocol/API break); Android `versionCode` advanced to
+  `1000003` (monotonic).
+
 ## 1.0.1 — v1.0.1 Stable (2026-08-20)
 
 **Status**: Stable closure merged into `main` at `422c0f1` (PR #14). Version

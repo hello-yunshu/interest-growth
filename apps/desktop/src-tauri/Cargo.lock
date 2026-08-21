@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "interest-growth-desktop"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "android-native-keyring-store",
  "base64 0.22.1",
