@@ -3,26 +3,40 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.10 — v1.0.10 Stable target (2026-08-21)
+## 1.0.12 — v1.0.12 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
 
-`v1.0.9` was never published: its Release run failed at the Stable-only
-`android-upgrade-in-place` "Resolve previous formal stable tag" step. This
-job's `actions/checkout` uses `fetch-depth: 1` + `fetch-tags: false`, so `git tag`
-returned nothing and the N-side upgrade baseline was empty. The fix fetches
-tags (`git fetch --tags --force`) before resolving the immediately preceding
-version tag. Per the immutable-tag governance this ships as the next patch
-`1.0.10` (contains no `4` or `11`).
+`v1.0.10` was never published: its Release run failed the Rust / Android /
+macOS cargo gates because a dependency version was corrupted during the version
+sync — `webpki-root-certs` (a real crates.io package at `1.0.9`) was wrongly
+rewritten to `1.0.10`, so `cargo --locked` could not resolve it. The lockfile is
+restored so the genuine dependency versions are unchanged (only the product
+`interest-growth-desktop` entry advances). Per the immutable-tag governance this
+ships as `1.0.12` — `1.0.11` is skipped because it contains `11`.
 
-**Fix over the v1.0.9 tag SHA** (Release workflow hardening only):
-- `android-upgrade-in-place` now fetches repository tags before resolving the
-  previous formal stable tag, so the old APK build baseline is available even
-  with the shallow, tag-less checkout used by that job.
-- Android `versionCode` advanced to `1000012` (monotonic; contains no `4` or
+**Fixes (Release pipeline only):**
+- `apps/desktop/src-tauri/Cargo.lock` restores the genuine `webpki-root-certs`
+  version (`1.0.9`) and bumps only the `interest-growth-desktop` product entry
+  to `1.0.12`; macOS / Android / Rust cargo gates resolve again.
+- Android `versionCode` advanced to `1000013` (monotonic; contains no `4` or
   `11` — `1000011` is skipped because it contains `11`); `MIN_CLIENT_VERSION`
   stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.10 — v1.0.10 Stable target (unpublished)
+
+**Status**: unpublished — the Release run failed the Rust / Android / macOS
+cargo gates because the version sync corrupted the `webpki-root-certs` lock
+entry (`1.0.9` → `1.0.10`). Restored in `1.0.12`.
+
+The pipeline fix first proposed for `1.0.10` over the `v1.0.9` tag SHA:
+- `android-upgrade-in-place` now fetches repository tags before resolving the
+  previous formal stable tag, so the old APK build baseline is available even
+  with the shallow, tag-less checkout (`fetch-depth: 1` + `fetch-tags: false`)
+  used by that job.
+- Android `versionCode` advanced to `1000012` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
 
 ## 1.0.9 — v1.0.9 Stable target (unpublished)
 
