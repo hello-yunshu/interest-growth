@@ -3,10 +3,36 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
+## 1.0.16 — v1.0.16 Stable target (2026-08-21)
+
+**Status**: pending remote Actions verification (single unified Stable matrix).
+
+`v1.0.15` failed two Stable-gate jobs, so this ships as `1.0.16` under the
+immutable-tag governance (`1.0.15` is recorded below; `1.0.16` is the next
+valid slot and contains no `4`/`11`).
+
+**Fixes (Release pipeline only):**
+- `android-upgrade-in-place` TLS edge: the ephemeral Caddy in
+  `boot_tls_server.sh` now sets `bind 0.0.0.0`, so Caddy listens on the
+  container network interface and the `-p <tls_port>:443` host mapping is
+  reachable (`FAIL: TLS edge did not become healthy` no longer fires).
+  Without it Caddy only bound the container loopback, which the published
+  port cannot reach.
+- Windows packaged startup smoke: `verify_packaged_startup.sh` now polls for
+  the `psychology-growth-core` sidecar (up to 40s) instead of a single
+  `tasklist` snapshot, so a slow first launch under the runner's Defender scan
+  is not a false negative; on failure it dumps the app stdout/stderr for
+  diagnosis.
+- Android `versionCode` advanced to `1000017` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
 ## 1.0.15 — v1.0.15 Stable target (2026-08-21)
 
-**Status**: pending remote Actions verification (single unified Stable matrix,
-see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+**Status**: unpublished — the Stable Release run failed two jobs: the
+`android-upgrade-in-place` TLS edge (`FAIL: TLS edge did not become healthy`),
+because the ephemeral Caddy only bound the container loopback, and the Windows
+packaged startup smoke (`FAIL: desktop-local sidecar not found in tasklist`).
+Addressing both ships in `1.0.16`.
 
 `v1.0.13` was never published: its Release run failed the Stable-only
 `android-upgrade-in-place` old-APK build at the npm stage. The previous tag
