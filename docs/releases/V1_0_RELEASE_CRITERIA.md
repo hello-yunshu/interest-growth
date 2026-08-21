@@ -67,6 +67,21 @@ All user-visible version locations must agree with the canonical product version
 
 After the freeze, 1.x evolution is backward-compatible additive only; breaking changes go to 2.0 or an explicit migration.
 
+#### Erratum / clarification: minimum client version
+
+`MIN_CLIENT_VERSION` is a compatibility floor, not a mirror of
+`SERVER_VERSION`. It may remain lower than the current server/client version
+when older clients are still supported, and it must only be raised when the
+compatibility policy intentionally drops those clients. The invariant is:
+
+```text
+MIN_CLIENT_VERSION <= SERVER_VERSION
+```
+
+Changing this floor after an RC is a compatibility-policy change and therefore
+requires the normal RC review; it must not be changed merely to make the
+version strings look identical.
+
 ## 4. Gates for 1.0 RC (Gate R3)
 
 - All Release Gate jobs green on the exact RC tag commit (never "main was green").

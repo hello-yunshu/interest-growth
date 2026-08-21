@@ -28,6 +28,14 @@ def base_text(base: str, path: str) -> str:
     return subprocess.check_output(["git", "show", f"{base}:{path}"], cwd=ROOT, text=True)
 
 
+def product_version(ref: str | None = None) -> str:
+    if ref is None:
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    else:
+        text = base_text(ref, "pyproject.toml")
+    return str(tomllib.loads(text)["project"]["version"])
+
+
 def normalize(path: str, kind: str, text: str):
     if kind == "cargo":
         packages = tomllib.loads(text).get("package", [])
@@ -55,6 +63,19 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-ref", default="HEAD^", help="git revision containing the prior lockfiles")
     args = parser.parse_args()
+    try:
+        previous_version = product_version(args.base_ref)
+        current_version = product_version()
+    except (subprocess.CalledProcessError, KeyError, tomllib.TOMLDecodeError) as error:
+        print(f"DEPENDENCY VERSION INTEGRITY: FAIL (cannot resolve product version: {error})")
+        return 1
+    if previous_version == current_version:
+        print(
+            "DEPENDENCY VERSION INTEGRITY: N/A "
+            f"(product version unchanged at {current_version}; dependency updates are reviewed separately)"
+        )
+        return 0
+    print(f"product version changed: {previous_version} -> {current_version}; checking lockfile purity")
     failures: list[str] = []
     for path, kind in LOCKFILES.items():
         current = (ROOT / path).read_text(encoding="utf-8")
