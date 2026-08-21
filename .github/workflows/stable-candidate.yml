@@ -1,9 +1,9 @@
 name: Stable Candidate
 
 # This is the only pre-tag entry point for the full Stable-only matrix. It
-# calls the same reusable release workflow used by tag-triggered final
-# releases, with publishing disabled by mode. The exact SHA is validated in
-# release.yml against the caller's GITHUB_SHA before any gate runs.
+# calls the reusable gate workflow used by tag-triggered final releases, with
+# publishing disabled by mode. The exact SHA is validated against the caller's
+# checkout and current origin/main before any gate runs.
 on:
   workflow_dispatch:
     inputs:
@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   stable-gates:
-    uses: ./.github/workflows/release.yml
+    uses: ./.github/workflows/_release-gates.yml
     with:
       mode: candidate
       candidate_sha: ${{ inputs.candidate_sha }}

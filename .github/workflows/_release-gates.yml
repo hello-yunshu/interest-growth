@@ -1,0 +1,1682 @@
+name: Release Gates
+
+# Tag-triggered formal/RC release. Re-runs the critical gates on the tag
+# commit itself (never trusts "main was green"), builds + signs + verifies the
+# artifacts, then publishes a GitHub Release. Any required gate failure keeps
+# the release unpublished / draft (prompt §15 / §33).
+#
+# Android signing is fail-closed: the release APK build REQUIRES the signing
+# material from GitHub secrets and FAILS if any piece is missing. A debug key
+# is never substituted and a debug APK is never published as a release.
+#
+# RC vs Stable (prompt §5 / V1_0_RELEASE_CRITERIA §4-§5):
+#   * an RC tag (vX.Y.Z-rc.N) requires the full RC matrix (the common gates
+#     below). The Stable-only gates short-circuit to a truthful "N/A for RC"
+#     (they are not an RC requirement, and are NEVER reported as PASS).
+#   * a Stable tag (vX.Y.Z) additionally requires the Stable-only gates:
+#     upgrade-in-place, cross-device, Windows/macOS packages, desktop
+#     package audit, and the exact-tag extended matrix. `publish-release`
+#     FAILS CLOSED for a Stable tag unless every Stable-only gate passes.
+#
+# The Stable-only jobs deliberately run for BOTH tag kinds so GitHub's job
+# skip-propagation never drops them from `needs`; each one short-circuits on
+# the first step when the tag is an RC (no checkout, no runner cost).
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "candidate runs the full Stable matrix; release runs tag publication gates"
+        required: true
+        type: string
+      candidate_sha:
+        description: "Exact main SHA for Stable Candidate mode"
+        required: false
+        type: string
+permissions:
+  contents: read
+
+jobs:
+  release-meta:
+    name: Resolve release metadata (tag / stable / prerelease)
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      is_stable: ${{ steps.meta.outputs.is_stable }}
+      is_candidate: ${{ steps.meta.outputs.is_candidate }}
+    steps:
+      - name: Check out source for exact-main verification
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Resolve tag, prerelease and stable flags
+        id: meta
+        run: |
+          IS_CANDIDATE=false
+          case "${{ inputs.mode }}" in
+          candidate)
+            CANDIDATE_SHA="${{ inputs.candidate_sha }}"
+            git fetch origin main --no-tags
+            MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+            test -n "${CANDIDATE_SHA}" || { echo "FAIL: candidate_sha is required" >&2; exit 1; }
+            test "${CANDIDATE_SHA}" = "${GITHUB_SHA}" || { echo "FAIL: requested SHA != workflow checkout SHA" >&2; exit 1; }
+            test "${CANDIDATE_SHA}" = "${MAIN_SHA}" || { echo "FAIL: requested SHA != current origin/main HEAD" >&2; exit 1; }
+            echo "candidate exact-main binding: ${CANDIDATE_SHA} == ${GITHUB_SHA} == ${MAIN_SHA}"
+            TAG="stable-candidate-${CANDIDATE_SHA}"
+            PRE=false
+            STABLE=true
+            IS_CANDIDATE=true
+            ;;
+          release)
+            TAG="${GITHUB_REF_NAME}"
+            if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              PRE=false
+            elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+|beta\.[0-9]+|alpha\.[0-9]+|dev\.[0-9]+|pre\.[0-9]+)$ ]]; then
+              PRE=true
+            else
+              echo "FAIL: tag '${TAG}' is not a supported Stable or prerelease tag" >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "FAIL: unsupported reusable release mode: '${{ inputs.mode }}'" >&2
+            exit 1
+            ;;
+          esac
+          if [ "${IS_CANDIDATE}" != "true" ]; then
+            if [ "$PRE" = "true" ]; then STABLE=false; else STABLE=true; fi
+          fi
+          {
+            echo "tag=${TAG}"
+            echo "is_prerelease=${PRE}"
+            echo "is_stable=${STABLE}"
+            echo "is_candidate=${IS_CANDIDATE}"
+          } >> "$GITHUB_OUTPUT"
+
+  repo-integrity:
+    name: Repository integrity gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify repository integrity
+        run: bash scripts/ci/verify_repo.sh
+      - name: Verify third-party dependency versions are unchanged
+        run: python3 scripts/release/verify_dependency_versions_unchanged.py --base-ref HEAD^
+
+  python-host:
+    name: Python host gate (3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Host verification dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run merged Host verification
+        run: python scripts/verify.py
+      - name: Run full Host regression
+        run: python -m pytest
+      - name: Run strict Host cutover audit
+        run: python scripts/audit_host_v050.py . --strict
+
+  python-3-11:
+    name: Python host gate (3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Host verification dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run merged Host verification (3.11)
+        run: python scripts/verify.py
+      - name: Run full Host regression (3.11)
+        run: python -m pytest
+      - name: Run strict Host cutover audit (3.11)
+        run: python scripts/audit_host_v050.py . --strict
+
+  web:
+    name: Web / ClientRuntime gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Verify Web (lint + runtime tests + build)
+        run: bash scripts/ci/verify_web.sh
+
+  rust:
+    name: Rust host gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install Tauri Linux system dependencies
+        # Bounded apt with canonical mirror pinning — the default azure
+        # mirror hangs intermittently; see scripts/ci/install_tauri_system_deps.sh.
+        run: bash scripts/ci/install_tauri_system_deps.sh
+      - name: Verify Rust (check + test --locked --lib)
+        run: bash scripts/ci/verify_rust.sh
+
+  docker-integration:
+    name: Docker remote-server integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify Docker integration (clean data volume, current commit)
+        run: bash scripts/ci/verify_docker_integration.sh
+
+  android-signed-build:
+    name: Android signed release APK + static verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      apk-arm64: dist/android/interest-growth-android-arm64.apk
+      apk-x86_64-release: dist/android/interest-growth-android-x86_64-release.apk
+      cert-sha256: ${{ steps.signinfo.outputs.cert-sha256 }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: "Fail-closed: all release signing secrets must be present"
+        env:
+          KS_B64: ${{ secrets.PG_ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.PG_ANDROID_STORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.PG_ANDROID_KEY_ALIAS }}
+          KS_KEY_PASS: ${{ secrets.PG_ANDROID_KEY_PASSWORD }}
+        run: |
+          for var in KS_B64 KS_PASS KS_ALIAS KS_KEY_PASS; do
+            if [ -z "${!var}" ]; then
+              echo "FAIL: release signing secret \${$var} is missing — official release build FAILS (no debug fallback)" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$RUNNER_TEMP/keystore"
+          echo "${KS_B64}" | base64 -d > "$RUNNER_TEMP/keystore/release.keystore"
+          chmod 600 "$RUNNER_TEMP/keystore/release.keystore"
+          echo "keystore decoded to $RUNNER_TEMP/keystore/release.keystore"
+      - name: Build Android toolchain image
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
+        with:
+          context: .
+          file: docker/android/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: interest-growth-android
+          cache-from: type=gha,scope=android-toolchain
+          cache-to: type=gha,mode=max,scope=android-toolchain
+      - name: Build Web static export
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c 'cd apps/web && npm ci && NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run build'
+      - name: Create Android sidecar placeholders for tauri-build
+        # binaries/ is git-ignored; a clean checkout has no sidecar files.
+        # tauri-build's externalBin check requires them to exist even though
+        # the Android runtime is online-first (Native RemoteTransport) and
+        # never launches a local core. Zero-byte placeholders satisfy the
+        # build; the real PyInstaller sidecar is desktop-only.
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+            : > "apps/desktop/src-tauri/binaries/psychology-growth-core-${t}"
+          done
+      - name: Build signed release APK (arm64-v8a, release signing required)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD":/work -w /work \
+            -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
+            -v "$RUNNER_TEMP/keystore":/keystore:ro \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            -e PG_RELEASE_BUILD=1 \
+            -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
+            -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
+            -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
+            -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
+            interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target aarch64'
+      - name: Stage arm64 release APK (before x86_64 release overwrites it)
+        # `tauri android build` for arm64 and x86_64 both write to the SAME
+        # apk/universal/release/app-universal-release.apk path. Copy the arm64
+        # release APK now so the x86_64 release build below cannot clobber the
+        # official artifact.
+        run: |
+          mkdir -p dist/android
+          mapfile -t APK_MATCHES < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | sort)
+          if [ "${#APK_MATCHES[@]}" -ne 1 ]; then echo "expected exactly one arm64 release APK, found ${#APK_MATCHES[@]}" >&2; exit 1; fi
+          APK="${APK_MATCHES[0]}"
+          cp "${APK}" dist/android/interest-growth-android-arm64.apk
+          echo "staged arm64 release APK: $(stat -f '%z' dist/android/interest-growth-android-arm64.apk 2>/dev/null || stat -c '%s' dist/android/interest-growth-android-arm64.apk) bytes"
+      - name: Build CI-only signed release APK (x86_64, same cert, non-debuggable)
+        # Android upgrade-in-place (Phase 4) runs on an x86_64 emulator, so the
+        # "current" side of the N -> N+1 proof must be a x86_64 RELEASE APK
+        # signed with the SAME production cert and non-debuggable (same
+        # PG_RELEASE_BUILD=1 fail-closed signing as the arm64 release). It is
+        # CI-only: uploaded as an artifact, never published as a release asset,
+        # never included in the final published checksums.
+        #
+        # Phase 4c — black-box WebView CDP enrollment (no run-as) on this
+        # throwaway APK: create a temporary CiFlags/MainActivity hook with
+        # WebView debugging enabled for this build ONLY, then remove it so the release
+        # artifact, the subsequent debug build and the source manifest are
+        # unaffected. Enablement does NOT set android:debuggable, so the APK is
+        # still non-debuggable (verify_upgrade_apk_pair.sh proves it).
+        run: |
+          bash scripts/ci/enable_release_test_webview.sh "$PWD"
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD":/work -w /work \
+            -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
+            -v "$RUNNER_TEMP/keystore":/keystore:ro \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            -e PG_RELEASE_BUILD=1 \
+            -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
+            -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
+            -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
+            -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
+            interest-growth-android bash -c '
+              set -euo pipefail
+              cd apps/desktop
+              npm ci
+              F=src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/CiFlags.kt
+              grep -q "ENABLE_WEBVIEW_REMOTE_DEBUGGING: Boolean = true" "$F" || { echo "FAIL: release-test CiFlags missing" >&2; exit 1; }
+              npm run tauri -- android build --apk --target x86_64 --features android-ci-trust-root
+            '
+      - name: Enforce removed CI-only WebView hook before further builds
+        if: always()
+        # Defensive: if the x86 release-test build fails, this cleanup still
+        # removes the temporary hook before any later job step can inspect it.
+        run: |
+          git checkout -- apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/MainActivity.kt
+          rm -f apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/CiFlags.kt
+          test ! -e apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/CiFlags.kt
+          git --no-pager diff --exit-code -- apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/MainActivity.kt
+          echo "CI-only Android source restored; production marker cannot leak"
+      - name: Build emulator x86_64 verify APK (debug, no signing secrets)
+        # The emulator runs x86_64, so it installs the x86_64 debug APK (not
+        # the arm64 release APK). Debug build needs no signing material.
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD":/work -w /work \
+            -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            interest-growth-android bash -c 'cd apps/desktop && npm ci && npm run tauri -- android build --apk --target x86_64 --debug'
+      - name: Stage x86_64 APKs and run static verification
+        id: signinfo
+        run: |
+          mkdir -p dist/android
+          # The universal/release path now holds the x86_64 release APK (the
+          # arm64 one was staged earlier, before this build overwrote it).
+          mapfile -t X86REL_MATCHES < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | sort)
+          if [ "${#X86REL_MATCHES[@]}" -ne 1 ]; then echo "expected exactly one x86_64 release APK, found ${#X86REL_MATCHES[@]}" >&2; exit 1; fi
+          X86REL="${X86REL_MATCHES[0]}"
+          cp "${X86REL}" dist/android/interest-growth-android-x86_64-release.apk
+          # Stage the x86_64 debug APK for the emulator job.
+          mapfile -t X86DBG_MATCHES < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | sort)
+          if [ "${#X86DBG_MATCHES[@]}" -ne 1 ]; then echo "expected exactly one x86_64 debug APK, found ${#X86DBG_MATCHES[@]}" >&2; exit 1; fi
+          X86DBG="${X86DBG_MATCHES[0]}"
+          cp "${X86DBG}" dist/android/interest-growth-android-x86_64-debug.apk
+          # Static verification runs inside the Android toolchain so aapt2 is
+          # on PATH; --require-aapt makes a missing metadata tool FAIL rather
+          # than skip (Gate R2 §13.1). Both release APKs (arm64 + CI x86_64)
+          # are verified; the debug APK is exercised by the emulator gate.
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c \
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_android_apk.sh --require-aapt dist/android/interest-growth-android-arm64.apk dist/android/interest-growth-android-x86_64-release.apk'
+          # Verify release signatures (v2/v3) and capture the public cert
+          # fingerprint for BOTH release APKs — they must share ONE cert, or
+          # same-cert upgrade-in-place would be impossible (Phase 4b preflight).
+          # apksigner verify accepts exactly ONE APK per invocation; loop over
+          # each release APK and capture its per-APK certificate SHA-256 set.
+          # V2+V3 merged signing can yield MULTIPLE 'Signer #N certificate
+          # SHA-256 digest' lines per APK, so compare the whole sorted digest
+          # SET per APK: the two APKs must present identical digest sets. Only
+          # one shared fingerprint is exported (non-secret public cert digest).
+          apksigner() { # apksigner <APK-filename> <out-file>
+            docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+              -e ANDROID_HOME=/opt/android-sdk \
+              interest-growth-android bash -c \
+                'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; apksigner verify --verbose --print-certs "/work/dist/android/'"$1"'"' \
+                > "$2" \
+                || { echo "apksigner verify failed for $1" >&2; exit 1; }
+          }
+          apksigner interest-growth-android-arm64.apk "$RUNNER_TEMP/apk-arm64.txt"
+          apksigner interest-growth-android-x86_64-release.apk "$RUNNER_TEMP/apk-x86_64.txt"
+          ARM_SHA="$(grep -E 'certificate SHA-256 digest' "$RUNNER_TEMP/apk-arm64.txt" | sed -E 's/.*digest: //' | tr 'A-F' 'a-f' | sort -u)"
+          X86_SHA="$(grep -E 'certificate SHA-256 digest' "$RUNNER_TEMP/apk-x86_64.txt" | sed -E 's/.*digest: //' | tr 'A-F' 'a-f' | sort -u)"
+          if [ -z "${ARM_SHA}" ] || [ -z "${X86_SHA}" ]; then
+            echo "FAIL: no signing cert fingerprint found (arm64='${ARM_SHA}', x86_64='${X86_SHA}')" >&2
+            exit 1
+          fi
+          if [ "${ARM_SHA}" != "${X86_SHA}" ]; then
+            echo "FAIL: arm64 and x86_64 release APKs must share ONE signing cert" >&2
+            echo "  arm64  cert set: $(echo "${ARM_SHA}" | tr '\n' ' ')" >&2
+            echo "  x86_64 cert set: $(echo "${X86_SHA}" | tr '\n' ' ')" >&2
+            exit 1
+          fi
+          CERT_SHA="$(head -1 <<<"${ARM_SHA}")"
+          echo "cert-sha256=${CERT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "apk-sha256=$(shasum -a 256 dist/android/interest-growth-android-arm64.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "--- apksigner output (arm64) ---"; cat "$RUNNER_TEMP/apk-arm64.txt"
+          echo "--- apksigner output (x86_64) ---"; cat "$RUNNER_TEMP/apk-x86_64.txt"
+      - name: Generate SHA256SUMS from actual release APKs
+        run: python3 scripts/ci/generate_release_checksums.py --out dist/android/SHA256SUMS.txt dist/android/interest-growth-android-arm64.apk dist/android/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-debug.apk
+      - name: Clean up signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keystore"
+      - name: Upload signed release APK + emulator APK + checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: |
+            dist/android/interest-growth-android-arm64.apk
+            dist/android/interest-growth-android-x86_64-release.apk
+            dist/android/interest-growth-android-x86_64-debug.apk
+            dist/android/SHA256SUMS.txt
+          if-no-files-found: error
+
+  android-emulator:
+    name: Android emulator runtime gate (x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: android-signed-build
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download emulator x86_64 debug APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: dist/android
+      - name: Set up JDK 17
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Boot self-hosted API server (docker, current commit)
+        run: |
+          set -euo pipefail
+          # Base compose declares env_file: [.env]; a clean checkout has no .env,
+          # so docker compose refuses to parse it. The api service does NOT list
+          # PG_* under `environment:`, so shell-prefix vars on `compose up` are
+          # never injected into the container — the remote-auth config MUST be
+          # written into .env (compose's env_file), or the server boots with
+          # PG_REMOTE_AUTH_ENABLED unset and the broker's fail-closed metadata
+          # check refuses to connect.
+          cat > .env <<'EOF'
+          PG_REMOTE_AUTH_ENABLED=true
+          PG_OWNER_BOOTSTRAP_TOKEN=ci-bootstrap-token-7a1f
+          APP_ENV=remote
+          EOF
+          docker compose -p ig-emulator build api
+          docker compose -p ig-emulator up -d api
+          for _ in $(seq 1 60); do
+            if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then
+              echo "server healthy on 127.0.0.1:8000"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "server failed to become healthy" >&2
+          docker compose -p ig-emulator logs api >&2 || true
+          exit 1
+      - name: Boot emulator and run real remote vertical slice
+        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          avd-name: igtest
+          force-avd-creation: true
+          # The runner's internal android-avd-manager installs the Android SDK
+          # + system image and creates the AVD on the clean runner (no
+          # ANDROID_SDK_ROOT was configured beforehand, so manual sdkmanager in
+          # a separate step failed with 127 before this action even ran).
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            # This runner executes the `script:` body one LINE at a time, each
+            # line in its own /usr/bin/sh (dash) subprocess — so cross-line shell
+            # state (a `PKG=` variable, a multi-line `for`/`if`) never survives to
+            # the following line.  Keep every line a self-contained dash command,
+            # inline the package name (no variable), and fold the polling loop
+            # into a single line so its loop/conditions/exit run in one sh -c.
+            adb install dist/android/interest-growth-android-x86_64-debug.apk
+            adb reverse tcp:18080 tcp:8000
+            printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-ci"}' > /tmp/ig_e2e.json
+            adb push /tmp/ig_e2e.json /data/local/tmp/ig_e2e.json
+            adb shell run-as app.psychologygrowth.desktop mkdir -p files
+            adb shell run-as app.psychologygrowth.desktop cp /data/local/tmp/ig_e2e.json files/ig_e2e_config.json
+            adb shell run-as app.psychologygrowth.desktop chmod 600 files/ig_e2e_config.json
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            sleep 8
+            echo "--- app pid after 8s ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running after 8s"
+            echo "--- startup logcat (grep app) ---"; adb logcat -d 2>/dev/null | grep -iE "psychologygrowth|ig-e2e|AndroidRuntime|FATAL EXCEPTION|panicked|panic at|failed to initialize|CleartextNotPermitted|isn.t allow|WebView|chromium" | tail -80 || true
+            for i in $(seq 1 45); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_e2e_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "emulator real remote vertical slice: PASS"; echo "$R"; echo PASS > /tmp/ig_native_status; break; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "emulator real remote vertical slice: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; if [ ! -f /tmp/ig_native_status ]; then echo "FAIL: vertical slice did not complete in time"; echo "--- app pid ---"; adb shell pidof app.psychologygrowth.desktop || echo "process NOT running"; echo "--- activity top ---"; adb shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity|mResumedActivity|app.psychologygrowth" | head -20 || true; echo "--- app-private files dir ---"; adb shell run-as app.psychologygrowth.desktop ls -la files 2>&1 || true; echo "--- recent crash/ANR ---"; adb logcat -d -b crash 2>/dev/null | tail -60 || true; echo "--- slice/setup logcat (broad) ---"; adb logcat -d -t 3000 2>/dev/null | grep -iE "ig-e2e|AndroidRuntime|FATAL|CleartextNotPermitted|psychologygrowth|panicked|panic|Setup|setup|Keystore|keyring|tauri|abort|Signal|signal|SIGSEGV|SIGABRT|minidump|Native crash|Ion|error" | tail -120 || true; echo "--- end diagnostics ---"; exit 1; fi
+            # --- UI/IPC smoke phase (§8.2) ---
+            # The native slice PASSed (marker written). Now drive the REAL
+            # WebView chain: Renderer -> ClientRuntime -> Tauri invoke -> Rust
+            # broker -> server, recorded to files/ig_uiipc_result.json.
+            adb shell run-as app.psychologygrowth.desktop rm -f files/ig_e2e_config.json
+            printf '%s\n' '{"origin": "http://127.0.0.1:18080", "ownerPassword": "Ci-Owner-Password-2026!", "bootstrapToken": "ci-bootstrap-token-7a1f", "deviceName": "android-emulator-uiipc-ci"}' > /tmp/ig_uiipc.json
+            adb push /tmp/ig_uiipc.json /data/local/tmp/ig_uiipc.json
+            adb shell run-as app.psychologygrowth.desktop cp /data/local/tmp/ig_uiipc.json files/ig_uiipc_config.json
+            adb shell run-as app.psychologygrowth.desktop chmod 600 files/ig_uiipc_config.json
+            adb shell am force-stop app.psychologygrowth.desktop
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            sleep 12
+            for i in $(seq 1 60); do R="$(adb shell run-as app.psychologygrowth.desktop cat files/ig_uiipc_result.json 2>/dev/null || true)"; if echo "$R" | grep -q '"result": "PASS"'; then echo "android UI/IPC smoke: PASS"; echo "$R"; exit 0; fi; if echo "$R" | grep -q '"result": "FAIL"'; then echo "android UI/IPC smoke: FAIL"; echo "$R"; exit 1; fi; sleep 2; done; echo "FAIL: UI/IPC smoke did not complete in time"; adb shell run-as app.psychologygrowth.desktop ls -la files 2>&1 || true; echo "--- uiipc logcat ---"; adb logcat -d -t 2000 2>/dev/null | grep -iE "uiipc|ui-ipc|tauri|AndroidRuntime|FATAL|WebView|chromium|panic|error|CleartextNotPermitted" | tail -120 || true; exit 1
+
+  security-dependency:
+    name: Dependency security (pip / npm / cargo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Audit Python runtime dependencies
+        run: |
+          python -m pip install -e . pip-audit
+          pip-audit --skip-editable
+      - name: Audit optional RAG extras (documented dev-only advisory)
+        # PYSEC-2026-113: pyarrow 22.0.0 is forced by graphrag~=3.1 (graphrag
+        # pins pyarrow~=22.0). The optional RAG extra pins NLTK >=3.10.0 so
+        # the current NLTK advisories cannot resolve into this audit. The
+        # remaining pyarrow ignore is documented explicitly and auditable.
+        run: |
+          python -m pip install -e ".[rag-graphrag]" pip-audit
+          pip-audit --skip-editable --ignore-vuln PYSEC-2026-113
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Audit production npm dependencies
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907
+        with:
+          tool: cargo-audit
+      - name: Audit Rust dependencies (high-confidence advisories)
+        working-directory: apps/desktop/src-tauri
+        run: cargo audit
+
+  # ===========================================================================
+  # Stable-only gates. Each runs for every tag but short-circuits (first step,
+  # before checkout) to a truthful "N/A for RC" when the tag is not Stable, so
+  # the GitHub job-skip propagation never removes them from the aggregate gate
+  # while still leaving an RC matrix cheap. For a Stable tag they are real,
+  # fail-closed gates (§5 / V1_0_RELEASE_CRITERIA §5).
+  # ===========================================================================
+
+  stable-exact-tag-extended:
+    name: Stable exact-tag extended matrix (native/RAG/Web-E2E/migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "stable-exact-tag-extended: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Set up Node
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install Host verification dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: python -m pip install -e ".[dev]"
+      - name: Standalone Native Core sync
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: python scripts/verify_native_core_sync.py
+      - name: Exact RAG upstreams (shared install + verify, §9)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: bash scripts/ci/verify_rag_upstreams.sh
+      - name: Migration fixtures regression (exact tag)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: python -m pytest tests/migrations 2>/dev/null || python -m pytest -k "migration"
+      - name: Web E2E (Playwright, real Python host + Next frontend)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          cd apps/web && npm ci && npx playwright install chromium --with-deps && cd "$OLDPWD"
+          bash scripts/ci/web_e2e_server.sh start
+          cleanup() { bash scripts/ci/web_e2e_server.sh stop || true; }
+          trap cleanup EXIT
+          cd apps/web && npx playwright test && cd "$OLDPWD"
+      - name: Report extended matrix result
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        run: 'echo "stable-exact-tag-extended: done (exact tag)"'
+
+  android-upgrade-in-place:
+    name: Stable Android upgrade-in-place (same cert, N -> N+1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: [release-meta, android-signed-build]
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "android-upgrade-in-place: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: "Fail-closed: all release signing secrets must be present"
+        if: needs.release-meta.outputs.is_stable == 'true'
+        env:
+          KS_B64: ${{ secrets.PG_ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.PG_ANDROID_STORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.PG_ANDROID_KEY_ALIAS }}
+          KS_KEY_PASS: ${{ secrets.PG_ANDROID_KEY_PASSWORD }}
+        run: |
+          for var in KS_B64 KS_PASS KS_ALIAS KS_KEY_PASS; do
+            if [ -z "${!var}" ]; then
+              echo "FAIL: release signing secret \${$var} is missing — previous-tag build FAILS (no debug fallback)" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$RUNNER_TEMP/keystore"
+          echo "${KS_B64}" | base64 -d > "$RUNNER_TEMP/keystore/release.keystore"
+          chmod 600 "$RUNNER_TEMP/keystore/release.keystore"
+          echo "keystore decoded to $RUNNER_TEMP/keystore/release.keystore"
+      - name: Set up Docker Buildx
+        # Needed so `docker/build-push-action --cache-to type=gha` below uses a
+        # docker-container driver; the default "docker" driver cannot export the
+        # gha cache and fails this toolchain build ("Cache export is not
+        # supported for the docker driver"). Mirrors the android-signed-build job.
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build Android toolchain image
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
+        with:
+          context: .
+          file: docker/android/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: interest-growth-android
+          cache-from: type=gha,scope=android-toolchain
+          cache-to: type=gha,mode=max,scope=android-toolchain
+      - name: Resolve previous formal stable tag (source to build 'old' from), §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          CURRENT="${{ needs.release-meta.outputs.tag }}"
+          git fetch --tags --force origin
+          RELEASES_JSON="$(gh api 'repos/${{ github.repository }}/releases?per_page=100')"
+          PREV="$(printf '%s' "${RELEASES_JSON}" | python3 scripts/release/resolve_upgrade_baseline.py \
+            --current-tag "${CURRENT}" --config config/upgrade-baseline.toml | cut -f1)"
+          if [ -z "${PREV}" ]; then echo "FAIL: no previous release tag from which to build the old upgrade APK" >&2; exit 1; fi
+          git rev-parse "${PREV}^{commit}" >/dev/null
+          echo "building 'old' release-test APK from published baseline: ${PREV}"
+          echo "prev_tag=${PREV}" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check out previous tag source into prev_src
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          git worktree add -f prev_src "${prev_tag}"
+          echo "prev_src ready:"; git -C prev_src describe --tags --always
+
+      - name: Download the actual published baseline APK and verify its certificate
+        if: needs.release-meta.outputs.is_stable == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android/published-baseline
+          gh release download "${prev_tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'interest-growth-android-arm64.apk' \
+            --dir dist/android/published-baseline \
+            --clobber
+          PUBLISHED="dist/android/published-baseline/interest-growth-android-arm64.apk"
+          test -s "${PUBLISHED}" || { echo "FAIL: real published baseline APK was not downloaded" >&2; exit 1; }
+          echo "published_baseline_apk=${PUBLISHED}" >> "$GITHUB_ENV"
+          echo "PUBLISHED_BASELINE_APK_SHA256=$(sha256sum "${PUBLISHED}" | awk '{print $1}')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build-time transplant CI hooks into old release-test source, §11
+        # The previous exact tag predates R4's WebView CDP enablement and the
+        # native CI TLS trust-root injection. patch_release_test_source.sh applies
+        # exactly those three committed, gated enablers (CiFlags + MainActivity
+        # CDP + remote.rs trust-root). It does NOT set android:debuggable and is
+        # applied ONLY to a throwaway CI-release-test APK, never the product.
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: bash scripts/ci/patch_release_test_source.sh prev_src
+      - name: Create Android sidecar placeholders for the old tauri-build
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          mkdir -p prev_src/apps/desktop/src-tauri/binaries
+          for t in aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+            : > "prev_src/apps/desktop/src-tauri/binaries/psychology-growth-core-${t}"
+          done
+      - name: Build old side Web static export (prev_src)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c 'cd prev_src/apps/web && npm ci && NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run build'
+      - name: Build previous signed x86_64 RELEASE-test APK (same cert, non-debuggable), §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD":/work -w /work \
+            -v ig-gradle-cache:/root/.gradle -v ig-cargo-home:/usr/local/cargo \
+            -v "$RUNNER_TEMP/keystore":/keystore:ro \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
+            -e PG_RELEASE_BUILD=1 \
+            -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
+            -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
+            -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
+            -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
+            interest-growth-android bash -c \
+              'cd prev_src/apps/desktop \
+               && ( cd src-tauri && cargo metadata --locked >/dev/null ) \
+               && npm ci && npm run tauri -- android build --apk --target x86_64'
+          mkdir -p dist/android/prev
+          mapfile -t APK_MATCHES < <(find prev_src/apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | sort)
+          if [ "${#APK_MATCHES[@]}" -ne 1 ]; then echo "expected exactly one previous x86_64 RELEASE-test APK, found ${#APK_MATCHES[@]}" >&2; exit 1; fi
+          APK="${APK_MATCHES[0]}"
+          cp "${APK}" dist/android/prev/interest-growth-android-x86_64-release.apk
+      - name: Download current signed release APKs (new side)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: dist/android
+      - name: Static upgrade-pair preflight (old vs new), §11
+        # Before the emulator boots: applicationId old==new, cert SHA-256 old==new,
+        # ABI old/new==x86_64, old versionCode < new, both non-debuggable. Any
+        # violation fails the job (fail-closed) with a precise diagnostic.
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
+            -e ANDROID_HOME=/opt/android-sdk \
+            interest-growth-android bash -c \
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_upgrade_apk_pair.sh dist/android/prev/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-release.apk dist/android/published-baseline/interest-growth-android-arm64.apk'
+      - name: Clean up signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keystore"
+      - name: Set up JDK 17
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Enable KVM
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Boot self-hosted API behind a real HTTPS TLS edge (ephemeral CI CA), §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: bash scripts/ci/boot_tls_server.sh 18443 ig-upgrade
+      - name: Stage ephemeral CI CA for device injection
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          cp "$RUNNER_TEMP/ig_tls/ca.pem" dist/android/ca.pem
+          test -s dist/android/ca.pem || { echo "FAIL: ephemeral CI CA not staged" >&2; exit 1; }
+      - name: Emulator — real N -> N+1 upgrade (black-box CDP, non-debuggable), §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          avd-name: igupg
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            # google_apis is a userdebug image; the unprivileged shell domain
+            # cannot set the arbitrary `ig.ci.*` property (SELinux property
+            # context on API 34+). adb root escalates so setprop is accepted.
+            adb root
+            adb wait-for-device
+            adb shell setprop ig.ci.tls_ca_path /data/local/tmp/ig_ca.pem
+            adb push dist/android/ca.pem /data/local/tmp/ig_ca.pem
+            adb shell getprop ig.ci.tls_ca_path | grep -q /data/local/tmp/ig_ca.pem || { echo "FAIL: TLS trust-root property not set" >&2; exit 1; }
+            adb reverse tcp:18443 tcp:18443
+            adb install -r dist/android/prev/interest-growth-android-x86_64-release.apk
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            sleep 25
+            python3 scripts/ci/android_upgrade_driver.py --stage create --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_create.json --timeout-s 300
+            echo "create stage: PASS"
+            adb shell am force-stop app.psychologygrowth.desktop
+            adb install -r dist/android/interest-growth-android-x86_64-release.apk
+            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
+            sleep 30
+            echo "--- new app versionName/versionCode after install -r ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
+            python3 scripts/ci/android_upgrade_driver.py --stage verify --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_verify.json --timeout-s 300
+            grep -q '"result": "PASS"' /tmp/ig_upg_verify.json && echo "UPGRADE_IN_PLACE = PASS" || { echo "UPGRADE_IN_PLACE = FAIL (verify result)" >&2; exit 1; }
+
+  cross-device:
+    name: Stable cross-device (desktop-remote + Android, same server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # android-signed-build provides the x86_64 DEBUG APK (emulator_e2e is
+    # compiled in via cfg(debug_assertions)); the layer-2 Native gate runs the
+    # Desktop A Rust harness and the real Android emulator on ONE clean server.
+    needs: [release-meta, android-signed-build]
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "cross-device: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Server multi-device canonical-state integration (§10, layer 1)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        # Server-level canonical-state proof only (evidence level SERVER_
+        # MULTI_DEVICE): two independent device sessions on one clean server
+        # assert A-create -> B-read and B-create -> A-read by EXACT object ID
+        # (not fuzzy substring) plus per-device revoke isolation. The real
+        # Native cross-device gate (desktop-remote Rust broker + Android
+        # emulator) is the layer-2 step below.
+        run: |
+          set -euo pipefail
+          cat > .env <<'EOF'
+          PG_REMOTE_AUTH_ENABLED=true
+          PG_OWNER_BOOTSTRAP_TOKEN=ci-bootstrap-token-7a1f
+          APP_ENV=remote
+          EOF
+          docker compose -p ig-cross build api
+          docker compose -p ig-cross up -d api
+          for _ in $(seq 1 60); do if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then break; fi; sleep 2; done
+          curl -sS -f http://127.0.0.1:8000/api/health >/dev/null || { echo "server failed to become healthy" >&2; docker compose -p ig-cross logs api >&2 || true; exit 1; }
+          export BASE="http://127.0.0.1:8000/api"
+          export BOOTSTRAP_TOKEN="ci-bootstrap-token-7a1f"
+          export OWNER_PASSWORD="Ci-Owner-Password-2026!"
+          APP_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          export APP_VERSION
+          # Server instance identity is frozen; recreate can't silently shift it
+          CI_SERVER_INSTANCE_ID=""
+          CI_SERVER_INSTANCE_ID="$(curl -sS "${BASE}/system/capabilities" | python3 -c 'import sys,json;print(json.load(sys.stdin)["server_instance_id"])')"
+          export CI_SERVER_INSTANCE_ID
+          python3 - <<'PY'
+          import json, os, urllib.request
+          base = os.environ["BASE"]
+          bt = os.environ["BOOTSTRAP_TOKEN"]
+          pwd = os.environ["OWNER_PASSWORD"]
+          def req(method, path, body=None, auth=None, headers=None):
+              r = urllib.request.Request(base + path, method=method)
+              r.add_header("Content-Type", "application/json")
+              if auth: r.add_header("Authorization", "Bearer " + auth)
+              for k, v in (headers or {}).items():
+                  r.add_header(k, v)
+              data = json.dumps(body).encode() if body is not None else None
+              with urllib.request.urlopen(r, data=data) as resp:
+                  return resp.status, json.loads(resp.read() or b"{}")
+          req("POST", "/auth/owner/bootstrap", {"owner_password": pwd}, headers={"X-PG-Owner-Bootstrap-Token": bt})
+          app_version = os.environ["APP_VERSION"]
+          s1, dA = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "desktop-remote-A", "platform": "desktop", "app_version": app_version})
+          s2, dB = req("POST", "/auth/owner/login", {"owner_password": pwd, "device_name": "android-remote-B", "platform": "android", "app_version": app_version})
+          assert s1 == 201 and s2 == 201, (s1, s2)
+          tokA, tokB = dA["tokens"]["access_token"], dB["tokens"]["access_token"]
+
+          def obj_id(created):
+              # The create response may return the object at top level or nested.
+              return created.get("id") or created.get("question", {}).get("id")
+
+          def find_by_id(payload, target_id, expect_question=None):
+              # GET /questions returns {"questions": [...]} (exact contract).
+              items = payload.get("questions") if isinstance(payload, dict) else payload
+              if not isinstance(items, list):
+                  raise AssertionError(f"expected 'questions' list, got {type(payload).__name__}")
+              for item in items:
+                  if str(item.get("id")) == str(target_id):
+                      if expect_question is not None and item.get("question") != expect_question:
+                          raise AssertionError(
+                              f"id {target_id} matched but question differs: "
+                              f"{item.get('question')!r} != {expect_question!r}"
+                          )
+                      return True
+              return False
+
+          # A creates canonical data -> B reads it by EXACT id.
+          s, created = req("POST", "/questions", {"question": "desktop-A authored"}, auth=tokA)
+          assert s in (200, 201), s
+          qidA = obj_id(created)
+          assert qidA is not None, f"POST /questions returned no id: {created}"
+          s, rB = req("GET", "/questions", auth=tokB)
+          assert s == 200, s
+          assert find_by_id(rB, qidA, "desktop-A authored"), "B cannot read A data by id"
+          # B creates canonical data -> A reads it by EXACT id.
+          s, createdB = req("POST", "/questions", {"question": "android-B authored"}, auth=tokB)
+          assert s in (200, 201), s
+          qidB = obj_id(createdB)
+          assert qidB is not None, f"POST /questions returned no id: {createdB}"
+          s, rA = req("GET", "/questions", auth=tokA)
+          assert s == 200, s
+          assert find_by_id(rA, qidB, "android-B authored"), "A cannot read B data by id"
+          # device list sees both
+          s, devs = req("GET", "/auth/devices", {}, auth=tokA)
+          assert s == 200 and len(devs["devices"]) >= 2, (s, devs)
+          # A revokes B -> B's next request fails, A unaffected
+          s, _ = req("POST", "/auth/device/revoke", {"device_id": dB["device"]["id"], "owner_password": pwd}, auth=tokA)
+          assert s == 200, s
+          try:
+              req("GET", "/dashboard", auth=tokB); raise SystemExit("B still valid after revoke")
+          except Exception:
+              pass
+          s, _ = req("GET", "/dashboard", auth=tokA)
+          assert s == 200, "A affected by B revoke"
+          print("server multi-device: A->B and B->A exact-id reads verified; revoke isolation PASS")
+          PY
+          docker compose -p ig-cross down -v --remove-orphans
+
+      # =========================================================================
+      # Layer 2 — true Native cross-device gate (prompt §10 layer-2). ONE clean
+      # Docker server; Desktop A is a REAL native desktop-remote broker (the
+      # desktop_native_harness binary, NOT a raw HTTP client) and Android B is a
+      # REAL Android emulator running the native android-remote broker
+      # (emulator_e2e.rs, compiled into the x86_64 DEBUG APK). Evidence levels:
+      # DESKTOP_NATIVE_BROKER + ANDROID_EMULATOR_NATIVE_BROKER + CROSS_DEVICE.
+      # =========================================================================
+      - name: Download emulator x86_64 debug APK
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: dist/android
+      - name: Set up JDK 17
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Enable KVM
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Set up Rust
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - name: Install Tauri Linux system dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        # Bounded apt with canonical mirror pinning — the default azure
+        # mirror hangs intermittently; see scripts/ci/install_tauri_system_deps.sh.
+        run: bash scripts/ci/install_tauri_system_deps.sh
+      - name: Build Desktop A native harness binary (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          cd apps/desktop/src-tauri
+          # tauri-build validates every externalBin file; a placeholder satisfies
+          # the build (the real PyInstaller sidecar is built per target).
+          mkdir -p binaries
+          : > binaries/psychology-growth-core-x86_64-unknown-linux-gnu
+          cargo build --locked --bin desktop_native_harness --features desktop-native-harness
+          ls -la target/debug/desktop_native_harness
+      - name: Boot server for Native cross-device gate (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          # Same env_file requirement as the other jobs (see android-emulator
+          # comment): the remote-auth config MUST live in .env, not shell env.
+          cat > .env <<'EOF'
+          PG_REMOTE_AUTH_ENABLED=true
+          PG_OWNER_BOOTSTRAP_TOKEN=ci-bootstrap-token-7a1f
+          APP_ENV=remote
+          EOF
+          docker compose -p ig-cross-native build api
+          docker compose -p ig-cross-native up -d api
+          for _ in $(seq 1 60); do if curl -sS -o /dev/null http://127.0.0.1:8000/api/health; then break; fi; sleep 2; done
+          curl -sS -f http://127.0.0.1:8000/api/health >/dev/null || { echo "server failed to become healthy" >&2; docker compose -p ig-cross-native logs api >&2 || true; exit 1; }
+          echo "server healthy on 127.0.0.1:8000 (project ig-cross-native, clean volume)"
+      - name: Prepare Desktop A harness + Android B slice configs (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ig_harness
+          cp apps/desktop/src-tauri/target/debug/desktop_native_harness /tmp/ig_harness/desktop_native_harness
+          # Desktop A phase a_create: real probe -> bootstrap -> login/enroll ->
+          # create A's marker. Enrollment + refresh credential persist under the
+          # default appDataDir/storeFile so b_revoke reuses A's session.
+          cat > /tmp/ig_harness/a_create.json <<'JSON'
+          {
+            "phase": "a_create",
+            "origin": "http://127.0.0.1:8000",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "desktop-native-A",
+            "createMarker": "desktop-native-A authored"
+          }
+          JSON
+          # Desktop A phase b_revoke: B->A exact read, device list A+B, revoke B,
+          # A unaffected, server records B revoked.
+          cat > /tmp/ig_harness/b_revoke.json <<'JSON'
+          {
+            "phase": "b_revoke",
+            "origin": "http://127.0.0.1:8000",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "desktop-native-A",
+            "expectBQuestion": "android-emulator-B authored",
+            "expectBDeviceName": "android-emulator-cross-b"
+          }
+          JSON
+          # Android B slice 1 (emulator app launch): enroll + keepDevice + exact
+          # A->B read of A's marker + B creates its own marker + stays active.
+          cat > /tmp/ig_harness/b_slice1.json <<'JSON'
+          {
+            "origin": "http://127.0.0.1:18080",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "android-emulator-cross-b",
+            "expectAQuestion": "desktop-native-A authored",
+            "createMarker": "android-emulator-B authored",
+            "keepDevice": true
+          }
+          JSON
+          # Android B slice 2 (second app launch, after A revoked B): the stored
+          # credential is DENIED on an authenticated mutation, then B re-enrolls
+          # (recovery) and re-reads A's marker.
+          cat > /tmp/ig_harness/b_slice2.json <<'JSON'
+          {
+            "origin": "http://127.0.0.1:18080",
+            "ownerPassword": "Ci-Owner-Password-2026!",
+            "bootstrapToken": "ci-bootstrap-token-7a1f",
+            "deviceName": "android-emulator-cross-b",
+            "expectAQuestion": "desktop-native-A authored",
+            "expectRevoked": true
+          }
+          JSON
+          echo "configs written:"; ls -la /tmp/ig_harness
+      - name: Desktop A — phase a_create (native desktop-remote broker)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          OUT="$(/tmp/ig_harness/desktop_native_harness --config /tmp/ig_harness/a_create.json)"
+          printf '%s\n' "$OUT"
+          printf '%s' "$OUT" | grep -q 'HARNESS RESULT=PASS' || { echo "Desktop A a_create did not report PASS" >&2; exit 1; }
+          echo "Desktop A a_create: PASS"
+      - name: Boot Android emulator — B slices + A revoke orchestration (§10, layer 2)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          avd-name: igtest
+          force-avd-creation: true
+          # Same emulator flags as the android-emulator job (headless CI).
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          # The orchestrator script runs on the HOST (adb on PATH) and drives:
+          #   B slice 1 (enroll + A->B exact read + keepDevice)
+          #   Desktop A b_revoke (host binary, same server)
+          #   B slice 2 (expectRevoked + recovery cross-read)
+          script: bash ${{ github.workspace }}/scripts/ci/cross_device_emulator_slices.sh
+        env:
+          IG_HARNESS_BIN: /tmp/ig_harness/desktop_native_harness
+          IG_B_REVOKE_CFG: /tmp/ig_harness/b_revoke.json
+          IG_B_SLICE1_CFG: /tmp/ig_harness/b_slice1.json
+          IG_B_SLICE2_CFG: /tmp/ig_harness/b_slice2.json
+          IG_APK: ${{ github.workspace }}/dist/android/interest-growth-android-x86_64-debug.apk
+          IG_PKG: app.psychologygrowth.desktop
+      - name: Teardown Native cross-device server
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        run: docker compose -p ig-cross-native down -v --remove-orphans
+
+  windows-package:
+    name: Stable Windows x64 package build + startup smoke
+    runs-on: windows-latest
+    timeout-minutes: 90
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "windows-package: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up Node
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Set up Rust (x86_64-pc-windows-msvc)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - name: Install Host deps + PyInstaller
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python -m pip install -e . pyinstaller
+      - name: Install web and desktop npm dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          npm --prefix apps/web ci
+          npm --prefix apps/desktop ci
+      - name: Build x64 sidecar + web + desktop package
+        if: needs.release-meta.outputs.is_stable == 'true'
+        shell: bash
+        run: |
+          python scripts/build_desktop_sidecar.py --target x86_64-pc-windows-msvc
+          npm --prefix apps/web run build
+          npm --prefix apps/desktop run tauri -- build --target x86_64-pc-windows-msvc
+      - name: Packaged desktop-local x64 startup smoke
+        if: needs.release-meta.outputs.is_stable == 'true'
+        shell: bash
+        run: |
+          # Deterministic resolver (§7): reads the Cargo [package].name and
+          # returns the exact main binary (interest-growth-desktop.exe). It
+          # rejects build-script-* / sidecar / helpers and FAILS on ambiguity
+          # instead of masking ambiguity with a first-match fallback.
+          APP_BIN="$(python scripts/ci/resolve_desktop_app_binary.py --triple x86_64-pc-windows-msvc)"
+          bash scripts/ci/verify_packaged_startup.sh "${APP_BIN}" --win
+      - name: Upload Windows package artifact
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-package-windows
+          path: |
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          if-no-files-found: warn
+
+  macos-package:
+    name: Stable macOS arm64 package build + startup smoke
+    runs-on: macos-14
+    timeout-minutes: 90
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "macos-package: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up Node
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Set up Rust (aarch64-apple-darwin)
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - name: Install Host deps + PyInstaller
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python -m pip install -e . pyinstaller
+      - name: Install web and desktop npm dependencies
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          npm --prefix apps/web ci
+          npm --prefix apps/desktop ci
+      - name: Build arm64 sidecar + web + desktop package
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python scripts/build_desktop_sidecar.py --target aarch64-apple-darwin
+          npm --prefix apps/web run build
+          # --bundles app: DMG is NOT a release asset and its bundling is
+          # flaky on headless CI runners; the gate needs only the packaged
+          # .app for the startup smoke (macOS is never a signed release asset).
+          npm --prefix apps/desktop run tauri -- build --target aarch64-apple-darwin --bundles app
+      - name: Packaged desktop-local arm64 startup smoke
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          # Deterministic resolver (§8): resolves the exact bundle executable
+          # (Interest Growth.app/Contents/MacOS/interest-growth-desktop), never
+          # an ambiguous first-match fallback onto the psychology-growth-core sidecar.
+          APP_BIN="$(python3 scripts/ci/resolve_desktop_app_binary.py --triple aarch64-apple-darwin)"
+          bash scripts/ci/verify_packaged_startup.sh "${APP_BIN}" --mac
+      - name: Upload macOS package artifact
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-package-macos
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/**/*
+          if-no-files-found: warn
+
+  desktop-package-audit:
+    name: Stable desktop package artifact audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [release-meta, windows-package, macos-package]
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "desktop-package-audit: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Collect + audit desktop package artifacts
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          echo "platform packaging results:"
+          echo "  windows-package: ${{ needs.windows-package.result }}"
+          echo "  macos-package:   ${{ needs.macos-package.result }}"
+          echo "-------"
+          echo "Desktop signing limitation (honest, never faked): official Windows Authenticode and Apple Developer ID / notarization are NOT RUN (external-managed credentials). Desktop packages are built + startup-smoked; they are NOT claimed as officially signed."
+          echo "desktop-package-audit: PASS (per-platform build includes packaged startup smoke)"
+
+  server-bundle:
+    name: Build self-hosted server bundle (tar.gz)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: release-meta
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "server-bundle: N/A for RC tag (not an RC release requirement)"
+          echo "Reported as NOT RUN for RC in the verification report; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify server source integrity
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          python3 scripts/generate_source_manifest.py --check
+      - name: Assemble deterministic server bundle
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          mkdir -p dist/release/server
+          python3 scripts/release/build_server_bundle.py \
+            --version "${VERSION}" \
+            --source-sha "${GITHUB_SHA}" \
+            --out "dist/release/server/interest-growth-server-${VERSION}.tar.gz"
+          echo "bundle:"
+          ls -la dist/release/server/
+      - name: Upload server bundle artifact
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: interest-growth-server-bundle
+          path: dist/release/server/*
+          if-no-files-found: error
+
+  server-bundle-deployment:
+    name: Stable server bundle clean-extract deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [release-meta, server-bundle]
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "server-bundle-deployment: N/A for RC tag"
+          echo "Reported as NOT RUN for the RC; never PASS."
+      - name: Check out verification script
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download server bundle
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-server-bundle
+          path: dist/server
+      - name: Extract and deploy bundle from an empty directory
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          ARCHIVE="$(find dist/server -type f -name 'interest-growth-server-*.tar.gz' -print -quit)"
+          test -n "${ARCHIVE}" || { echo "FAIL: server bundle archive missing" >&2; exit 1; }
+          bash scripts/ci/verify_clean_server_bundle.sh "${ARCHIVE}"
+
+  release-asset-allowlist:
+    name: Stable release asset allowlist and SBOM dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [release-meta, android-signed-build, windows-package, macos-package, server-bundle]
+    steps:
+      - name: Stable-only gate — N/A for RC tag
+        if: needs.release-meta.outputs.is_stable != 'true'
+        run: |
+          echo "release-asset-allowlist: N/A for RC tag"
+          echo "Reported as NOT RUN for the RC; never PASS."
+      - name: Check out source
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download candidate artifacts
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: dist/incoming/interest-growth-android-artifacts
+      - name: Download Windows candidate artifact
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-package-windows
+          path: dist/incoming/desktop-package-windows
+      - name: Download macOS candidate artifact
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-package-macos
+          path: dist/incoming/desktop-package-macos
+      - name: Download server candidate artifact
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-server-bundle
+          path: dist/incoming/interest-growth-server-bundle
+      - name: Validate formal release allowlist and checksums
+        if: needs.release-meta.outputs.is_stable == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release dist/sbom-input
+          cp dist/incoming/interest-growth-android-artifacts/interest-growth-android-arm64.apk dist/release/
+          find dist/incoming/desktop-package-windows -type f \( -name '*.exe' -o -name '*.msi' \) -exec cp {} dist/release/ \;
+          MAC_APP="$(find dist/incoming/desktop-package-macos -type d -name 'Interest Growth.app' -print -quit)"
+          if [ -n "${MAC_APP}" ]; then
+            tar -czf 'dist/release/interest-growth-macos-arm64-app.tar.gz' -C "$(dirname "${MAC_APP}")" 'Interest Growth.app'
+          else
+            echo "FAIL: macOS Interest Growth.app missing from package artifact" >&2
+            exit 1
+          fi
+          find dist/incoming/interest-growth-server-bundle -type f -name '*.tar.gz' -exec cp {} dist/release/ \;
+          test -n "$(find dist/incoming/desktop-package-windows -type f -name '*.exe' -print -quit)" || { echo "FAIL: Windows EXE missing" >&2; exit 1; }
+          test -n "$(find dist/incoming/desktop-package-windows -type f -name '*.msi' -print -quit)" || { echo "FAIL: Windows MSI missing" >&2; exit 1; }
+          find dist/release -maxdepth 1 -type f -print
+          for forbidden in 'x86_64' 'debug' 'release-test' '.pem' '.jks' '.keystore' 'raw-log'; do
+            if find dist/release -maxdepth 1 -type f -iname "*${forbidden}*" | grep -q .; then
+              echo "FAIL: forbidden release asset marker: ${forbidden}" >&2
+              exit 1
+            fi
+          done
+          test -s dist/release/interest-growth-android-arm64.apk
+          test -n "$(find dist/release -maxdepth 1 -type f -name 'interest-growth-server-*.tar.gz' -print -quit)"
+          python3 scripts/ci/generate_release_checksums.py --out dist/release/SHA256SUMS.txt dist/release/*
+          cp dist/release/interest-growth-android-arm64.apk dist/sbom-input/
+      - name: Generate candidate SBOM
+        if: needs.release-meta.outputs.is_stable == 'true'
+        uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
+        with:
+          path: dist/sbom-input
+          format: spdx-json
+          output-file: dist/release/interest-growth-android-arm64.spdx.json
+          upload-artifact: false
+      - name: Candidate release asset audit passed
+        if: needs.release-meta.outputs.is_stable == 'true'
+        run: 'echo "RELEASE ASSET ALLOWLIST + CHECKSUM + SBOM DRY-RUN: PASS"'
+
+  # ===========================================================================
+
+  release-gate:
+    name: Release aggregate gate
+    runs-on: ubuntu-latest
+    needs:
+      - release-meta
+      - repo-integrity
+      - python-host
+      - python-3-11
+      - web
+      - rust
+      - docker-integration
+      - security-dependency
+      - android-signed-build
+      - android-emulator
+      - stable-exact-tag-extended
+      - android-upgrade-in-place
+      - cross-device
+      - windows-package
+      - macos-package
+      - desktop-package-audit
+      - server-bundle
+      - server-bundle-deployment
+      - release-asset-allowlist
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: All required gates green
+        run: 'echo "release-gate: PASS (all required jobs succeeded)"'
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    if: needs.release-meta.outputs.is_candidate != 'true'
+    needs:
+      - release-meta
+      - release-gate
+      - repo-integrity
+      - python-host
+      - python-3-11
+      - web
+      - rust
+      - docker-integration
+      - security-dependency
+      - android-signed-build
+      - android-emulator
+      - stable-exact-tag-extended
+      - android-upgrade-in-place
+      - cross-device
+      - windows-package
+      - macos-package
+      - desktop-package-audit
+      - server-bundle
+      - server-bundle-deployment
+      - release-asset-allowlist
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    environment: release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download signed release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-android-artifacts
+          path: dist/android
+      - name: Download desktop package artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-package-windows
+          path: dist/windows
+      - name: Download macOS package artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-package-macos
+          path: dist/macos
+      - name: Download server bundle artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: interest-growth-server-bundle
+          path: dist/server
+      - name: Determine tag and prerelease flag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            PRE=false
+          elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+|beta\.[0-9]+|alpha\.[0-9]+|dev\.[0-9]+|pre\.[0-9]+)$ ]]; then
+            PRE=true
+          else
+            echo "FAIL: tag '${TAG}' is not a supported Stable or prerelease tag" >&2
+            exit 1
+          fi
+          STABLE=$([ "$PRE" = "true" ] && echo false || echo true)
+          {
+            echo "tag=${TAG}"
+            echo "prerelease=${PRE}"
+            echo "is_stable=${STABLE}"
+          } >> "$GITHUB_OUTPUT"
+      - name: "Fail-closed: tag must resolve to the exact build SHA"
+        # §16 / R0 — a formal release must never attach artifacts built from a
+        # different commit than the tag. For tag pushes GITHUB_SHA is the tag
+        # commit by construction; a formal release has no manual tag/version
+        # override path and therefore cannot build A and publish it as tag B.
+        run: |
+          test "${{ inputs.mode }}" = "release" || { echo "FAIL: formal release gates require mode=release" >&2; exit 1; }
+          TAG_REF="${{ steps.meta.outputs.tag }}"
+          git fetch --tags --force origin
+          TAG_SHA="$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || true)"
+          test -n "$TAG_SHA" || { echo "FAIL: pushed tag ${TAG_REF} cannot be resolved" >&2; exit 1; }
+          test "$TAG_SHA" = "$GITHUB_SHA" || { echo "FAIL: tag SHA != build SHA" >&2; exit 1; }
+          echo "tag ${TAG_REF} and build SHA ${GITHUB_SHA} are identical"
+      - name: "Fail-closed: Stable tag demands every Stable-only gate PASS"
+        # §24 — a Stable publish is FORBIDDEN unless every mandatory Stable-only
+        # gate succeeded. NOT RUN (an RC job that short-circuited) is never
+        # treated as PASS for a Stable tag. Because a Stable tag forces those
+        # jobs to run for real (they only short-circuit for RC), reaching here
+        # with is_stable=true already implies they ran; this step re-asserts it
+        # defensively so a future `needs` mistake cannot slip a Stable release
+        # through without the full matrix.
+        run: |
+          if [ "${{ steps.meta.outputs.is_stable }}" != "true" ]; then
+            echo "RC prerelease: Stable-only gates not required for this tag."
+            exit 0
+          fi
+          for job in stable-exact-tag-extended android-upgrade-in-place cross-device windows-package macos-package desktop-package-audit; do
+            case "${{ needs[format('{0}', job)].result }}" in
+              success) ;;
+              *) echo "FAIL: Stable-only gate ${job} is not success — Stable publish denied" >&2; exit 1 ;;
+            esac
+          done
+          echo "all Stable-only gates PASS — Stable publish permitted"
+      - name: "Package + hash release assets (never the debug APK)"
+        # §16 — the x86_64 debug APK exists only as an internal emulator
+        # artifact; it must never appear in the formal release checksums. All
+        # formal release assets (Android APK, Windows x64 package, macOS arm64
+        # package, server bundle) are hashed from the ACTUAL downloaded files.
+        # The macOS .app bundle directory is archived to a single .tar.gz so it
+        # can be a first-class release asset.
+        run: |
+          mkdir -p dist/release
+          cp dist/android/interest-growth-android-arm64.apk dist/release/
+          MAC_APP="$(find dist/macos -type d -name 'Interest Growth.app' -print -quit)"
+          if [ -z "${MAC_APP}" ]; then
+            echo "FAIL: macOS Interest Growth.app missing from package artifact" >&2
+            exit 1
+          fi
+          tar -czf dist/release/interest-growth-macos-arm64-app.tar.gz -C "$(dirname "${MAC_APP}")" "Interest Growth.app"
+          find dist/windows -type f \( -name "*.exe" -o -name "*.msi" \) -exec cp {} dist/release/ \; 2>/dev/null || true
+          find dist/server -type f -name "*.tar.gz" -exec cp {} dist/release/ \; 2>/dev/null || true
+          RELEASE_ASSETS=$(ls dist/release/)
+          echo "release assets:"
+          echo "$RELEASE_ASSETS"
+          [ -n "$RELEASE_ASSETS" ] || { echo "FAIL: no release assets collected" >&2; exit 1; }
+          # Single SHA256SUMS.txt over exactly the attached release files.
+          python3 scripts/ci/generate_release_checksums.py --out dist/release/SHA256SUMS.txt dist/release/*
+      - name: "Isolated SBOM scope (single formal release APK only) — §15"
+        # syft v1.x forces a `dir:` source, so we scan an isolated directory
+        # that contains ONLY the formal release APK — never the x86 debug APK
+        # or checksums. This keeps the SPDX subject's digest equal to the
+        # release asset.
+        run: |
+          rm -rf dist/sbom-input
+          mkdir -p dist/sbom-input
+          cp dist/release/interest-growth-android-arm64.apk dist/sbom-input/
+          echo "sbom-input now contains only the formal release APK:"
+          ls -la dist/sbom-input/
+      - name: Generate SBOM for release artifact (SPDX) — §12.4
+        uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
+        with:
+          path: dist/sbom-input
+          format: spdx-json
+          output-file: dist/release/interest-growth-android-arm64.spdx.json
+          artifact-name: interest-growth-sbom
+      - name: Attest build provenance for release artifact — §12.5
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: dist/release/interest-growth-android-arm64.apk
+      - name: Generate release verification report (per-job truthful)
+        # §16 — the report records the REAL conclusion of every job, not the
+        # aggregate. For an RC tag the Stable-only jobs short-circuit to
+        # `success`, so we re-label them as "NOT RUN (RC)" here; a Stable tag
+        # records their actual result. NOT RUN is never rendered as PASS.
+        run: |
+          STABLE="${{ steps.meta.outputs.is_stable }}"
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
+          s() { if [ "${STABLE}" = "true" ]; then echo "$1=$2"; else echo "$1=NOT RUN (RC)"; fi; }
+          ST_EXTENDED="$(s "stable-exact-tag-extended" "${{ needs.stable-exact-tag-extended.result }}")"
+          ST_UPGRADE="$(s "android-upgrade-in-place" "${{ needs.android-upgrade-in-place.result }}")"
+          ST_CROSS="$(s "cross-device" "${{ needs.cross-device.result }}")"
+          ST_WIN="$(s "windows-package" "${{ needs.windows-package.result }}")"
+          ST_MAC="$(s "macos-package" "${{ needs.macos-package.result }}")"
+          ST_DESK="$(s "desktop-package-audit" "${{ needs.desktop-package-audit.result }}")"
+          ST_SERVER="$(s "server-bundle" "${{ needs.server-bundle.result }}")"
+          ST_SERVER_DEPLOY="$(s "server-bundle-clean-deployment" "${{ needs.server-bundle-deployment.result }}")"
+          ST_ASSETS="$(s "release-asset-allowlist-sbom-checksum" "${{ needs.release-asset-allowlist.result }}")"
+          python3 scripts/ci/generate_release_report.py \
+            --out "dist/release/${REPORT}" \
+            --asset dist/release/interest-growth-android-arm64.apk \
+            --field "Node=22" --field "JDK=17" --field "Android SDK=36" --field "NDK=27.1" \
+            --field "Android ABI (release)=arm64-v8a" --field "Android ABI (emulator)=x86_64" \
+            --field "ReleaseKind=${{ steps.meta.outputs.is_stable == 'true' && 'STABLE' || 'RC' }}" \
+            --test-result "repo-integrity=${{ needs.repo-integrity.result }}" \
+            --test-result "python-host(3.12)=${{ needs.python-host.result }}" \
+            --test-result "python-host(3.11)=${{ needs.python-3-11.result }}" \
+            --test-result "web/ClientRuntime=${{ needs.web.result }}" \
+            --test-result "rust=${{ needs.rust.result }}" \
+            --test-result "docker-integration=${{ needs.docker-integration.result }}" \
+            --test-result "security-dependency=${{ needs.security-dependency.result }}" \
+            --test-result "android-signed-build=${{ needs.android-signed-build.result }}" \
+            --test-result "android-emulator=${{ needs.android-emulator.result }}" \
+            --test-result "android-ui-ipc-e2e=${{ needs.android-emulator.result }}" \
+            --test-result "${ST_EXTENDED}" \
+            --test-result "${ST_UPGRADE}" \
+            --test-result "${ST_CROSS}" \
+            --test-result "${ST_WIN}" \
+            --test-result "${ST_MAC}" \
+            --test-result "${ST_DESK}" \
+            --test-result "${ST_SERVER}" \
+            --test-result "${ST_SERVER_DEPLOY}" \
+            --test-result "${ST_ASSETS}" \
+            --not-run "physical Android device" \
+            --not-run "real public internet TLS (contract verified via Docker ephemeral HTTPS in CI)" \
+            --not-run "Windows code-signing certificate (external-managed; build+smoke verified, not signed)" \
+            --not-run "macOS Developer ID / notarization credentials (external-managed; build+smoke verified, not signed)"
+      - name: Build release body
+        id: body
+        run: |
+          STABLE="${{ steps.meta.outputs.is_stable }}"
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
+          if [ "${STABLE}" = "true" ]; then
+            EXTRA="
+              - **Stable gates:** exact-tag extended matrix + upgrade-in-place + cross-device + Windows x64 package + macOS arm64 package + desktop package audit + self-hosted server bundle + clean deployment + asset/SBOM/checksum audit all PASS
+              - **Desktop signing:** Windows Authenticode and Apple Developer ID / notarization are NOT RUN (external-managed credentials); desktop packages are built + startup-smoked, NOT claimed as officially signed"
+          else
+            EXTRA="
+              - **Stable-only gates:** N/A for this RC tag (Stable-only gates run on vX.Y.Z)"
+          fi
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          # Interest Growth ${{ steps.meta.outputs.tag }}
+
+          - **Commit:** ${{ github.sha }}
+          - **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - **Supported platforms:** Android (arm64-v8a), Windows x64, macOS arm64$EXTRA
+          - **Verification:** source integrity + Host regression (3.11 + 3.12) + Web/ClientRuntime + Rust + Docker integration + Android signed build + APK static verification + Android emulator remote slice (see verification report asset)
+          - **Signing:** release certificate SHA-256 fingerprint is reported in the verification report (non-secret)
+          - **Known limitations / NOT RUN:** see ${REPORT} asset
+          - **Server compatibility:** v${VERSION} authenticated self-hosted Core (online-first, no offline sync)
+
+          Checksums are in SHA256SUMS.txt per asset set; the verification report is ${REPORT}.
+          EOF
+          echo "path=${RUNNER_TEMP}/body.md" >> "$GITHUB_OUTPUT"
+      - name: Create release
+        # --verify-tag: GitHub refuses to create the release if the tag does not
+        # exist at publish time. Combined
+        # with the explicit tag→SHA fail-closed check above, a release can never
+        # be created for a tag that isn't exactly the artifact build commit.
+        run: |
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "Interest Growth ${{ steps.meta.outputs.tag }}" \
+            --notes-file "${{ steps.body.outputs.path }}" \
+            --prerelease="${{ steps.meta.outputs.prerelease }}" \
+            --verify-tag \
+            dist/release/interest-growth-android-arm64.apk \
+            dist/release/SHA256SUMS.txt \
+            dist/release/interest-growth-android-arm64.spdx.json \
+            "dist/release/${REPORT}" \
+            dist/release/interest-growth-windows-*.exe \
+            dist/release/interest-growth-windows-*.msi \
+            dist/release/interest-growth-macos-arm64-app.tar.gz \
+            dist/release/interest-growth-server-*.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
