@@ -3,10 +3,32 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.6 — v1.0.6 Stable target (2026-08-21)
+## 1.0.7 — v1.0.7 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.6` was never published: its Release run failed at the Android shared-cert
+step because `apksigner verify --print-certs` emits one `certificate SHA-256
+digest` line per merged signer (V2+V3), so BOTH release APKs produced two
+fingerprints — the old global "2 lines / 1 unique" assertion was wrong for a
+multi-signature APK and exited with `certs=4, unique=2` even though both APKs
+were signed with the same keystore. Per the immutable-tag governance the fixes
+ship as the next patch `1.0.7` (contains no `4` or `11`).
+
+**Fixes over the v1.0.6 tag SHA** (Release workflow hardening only):
+- Android shared-cert check now captures each APK's **per-signer** SHA-256
+  fingerprint set into a separate file and asserts the two sets are identical,
+  instead of demanding a single global fingerprint line (V2+V3 merged signing
+  legitimately yields multiple entries per APK).
+- Android `versionCode` advanced to `1000008` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.6 — v1.0.6 Stable target (unpublished)
+
+**Status**: unpublished — the Release matrix failed at the Android shared-cert
+step (`certs=4, unique=2`, see `1.0.7` below for the fix). The fix ships as
+`1.0.7`.
 
 `v1.0.5` was never published: its Release run failed at the Android shared-cert
 step, because `apksigner verify` was handed BOTH release APKs in one invocation
