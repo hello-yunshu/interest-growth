@@ -1,12 +1,24 @@
 # Project Status
 
-**Product:** Interest Growth
-**Release branch:** `fix/v1.0.1-stable-closure` → **v1.0.8 Stable target**
-**Default Domain Pack:** Psychology
-**Runtime:** Tauri 2 desktop shell + static Next.js/React + local Python/FastAPI Core
-**Execution order:** Gate R0 (v0.7 Closure) → R1 (Product Completion) → R2 (Release Hardening) → R3 (1.0 RC) → R4 (1.0 Stable). See `Interest_Growth_最终稳定版_v1.0.1_远程Actions闭环发布_完整执行提示词.md`.
+## Current release dashboard
 
-## Source candidate status
+- **Current product version:** `1.0.20`
+- **Current main SHA:** pending final commit; remote baseline is `3457c87875d9b17d4d5582e5497b689b7ccc1c6a`
+- **Current Stable Candidate SHA:** pending final push
+- **Current Candidate Actions run:** not triggered yet
+- **Current release status:** `PENDING_VERIFICATION`; immutable `v1.0.19` remains unpublished
+- **Latest published Stable:** none
+- **Latest published prerelease:** `v1.0.0-rc.3` (published and used as the frozen first-Stable upgrade fallback)
+- **Current blockers:** Stable Candidate exact-SHA matrix, clean-extract server deployment, Android production negative hook audit, and remote Actions evidence are pending
+
+The current source closure adds compile-time isolation for the CI Android trust
+root, a structured product-version bump tool with dependency drift checking,
+the shared Stable Candidate entry point, a frozen upgrade-baseline resolver and
+a clean-extract self-hosted server bundle gate. Candidate success is required
+before creating an immutable Stable tag. Historical runs below are evidence
+records, not current-SHA PASS claims.
+
+## Historical Evidence
 
 v0.6 Host integration is implemented. Product packaging/runtime verification is tracked separately:
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministically resolve the packaged desktop main application binary.
 
-Replaces the old ``find ... | head -1`` heuristics that could pick a Cargo
+Replaces the old first-match filesystem heuristics that could pick a Cargo
 build helper (``build-script-*``), a dependency executable, or the Python
 sidecar (``psychology-growth-core*``) as the packaged app. The main binary is
 derived from the Cargo ``[package].name`` (e.g. ``interest-growth-desktop``),

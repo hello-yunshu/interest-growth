@@ -72,8 +72,9 @@ jobs:
       - name: Stage x86_64 debug APK
         run: |
           mkdir -p dist/android
-          X86="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
-          if [ -z "${X86}" ]; then echo "no x86_64 debug APK produced" >&2; exit 1; fi
+          mapfile -t X86_MATCHES < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | sort)
+          if [ "${#X86_MATCHES[@]}" -ne 1 ]; then echo "expected exactly one x86_64 debug APK, found ${#X86_MATCHES[@]}" >&2; exit 1; fi
+          X86="${X86_MATCHES[0]}"
           cp "${X86}" dist/android/interest-growth-android-x86_64-debug.apk
       - name: Boot self-hosted API server (docker, current commit)
         run: |
