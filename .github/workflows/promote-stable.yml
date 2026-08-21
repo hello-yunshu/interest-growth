@@ -1,0 +1,87 @@
+name: Promote Stable Candidate
+
+# Promotion is the only workflow allowed to create a Stable tag. It accepts a
+# candidate SHA and version, proves that the Stable Candidate workflow for that
+# exact SHA succeeded, rechecks main and version consistency, then performs a
+# non-forced tag push. Final publication remains tag-triggered in release.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact SHA that passed Stable Candidate"
+        required: true
+        type: string
+      final_version:
+        description: "Canonical product version without the v prefix"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  promote:
+    name: Verify Candidate and create immutable tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Verify candidate, main, version and tag state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          FINAL_VERSION: ${{ inputs.final_version }}
+        run: |
+          set -euo pipefail
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: candidate_sha must be a full commit SHA" >&2; exit 1; }
+          [[ "${FINAL_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "FAIL: final_version must be X.Y.Z" >&2; exit 1; }
+          TAG="v${FINAL_VERSION}"
+
+          git fetch origin main --no-tags
+          MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+          test "${MAIN_SHA}" = "${CANDIDATE_SHA}" || { echo "FAIL: origin/main moved after Candidate" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+
+          SOURCE_VERSION="$(python3 - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as handle:
+              print(tomllib.load(handle)["project"]["version"])
+          PY
+          )"
+          test "${SOURCE_VERSION}" = "${FINAL_VERSION}" || {
+            echo "FAIL: candidate source version ${SOURCE_VERSION} != requested ${FINAL_VERSION}" >&2
+            exit 1
+          }
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "FAIL: ${TAG} already exists; immutable tags are never moved" >&2
+            exit 1
+          fi
+
+          RUNS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/stable-candidate.yml/runs?event=workflow_dispatch&per_page=100")"
+          CANDIDATE_SHA="${CANDIDATE_SHA}" python3 - <<'PY' "${RUNS}"
+          import json
+          import os
+          import sys
+
+          target = os.environ["CANDIDATE_SHA"]
+          payload = json.loads(sys.argv[1])
+          matches = [
+              run for run in payload.get("workflow_runs", [])
+              if run.get("head_sha") == target
+              and run.get("status") == "completed"
+              and run.get("conclusion") == "success"
+          ]
+          if not matches:
+              raise SystemExit("FAIL: no successful Stable Candidate run for exact candidate_sha")
+          print(f"Candidate success run: {max(matches, key=lambda item: item.get('run_number', 0)).get('id')}")
+          PY
+
+          git tag -a "${TAG}" "${CANDIDATE_SHA}" -m "Interest Growth ${TAG}"
+          git push origin "${TAG}"
+          echo "PROMOTION: ${CANDIDATE_SHA} -> immutable ${TAG}"

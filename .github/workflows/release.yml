@@ -27,9 +27,8 @@ on:
     inputs:
       mode:
         description: "candidate runs the full Stable matrix without publishing a Release"
-        required: false
+        required: true
         type: string
-        default: release
       candidate_sha:
         description: "Exact main SHA for Stable Candidate mode"
         required: false
@@ -37,16 +36,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      version_tag:
-        description: "Release tag (e.g. vX.Y.Z-rc.N)"
-        required: true
-      prerelease:
-        description: "Publish as prerelease"
-        type: boolean
-        default: true
-
 permissions:
   contents: read
 
@@ -60,38 +49,43 @@ jobs:
       is_stable: ${{ steps.meta.outputs.is_stable }}
       is_candidate: ${{ steps.meta.outputs.is_candidate }}
     steps:
+      - name: Check out source for exact-main verification
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Resolve tag, prerelease and stable flags
         id: meta
         run: |
           IS_CANDIDATE=false
           if [ "${{ github.event_name }}" = "workflow_call" ]; then
-            if [ "${{ inputs.mode }}" != "candidate" ]; then
-              echo "FAIL: release.yml workflow_call is only valid for candidate mode" >&2
-              exit 1
-            fi
+            case "${{ inputs.mode }}" in
+              candidate) ;;
+              *) echo "FAIL: unsupported reusable release mode: '${{ inputs.mode }}'" >&2; exit 1 ;;
+            esac
             CANDIDATE_SHA="${{ inputs.candidate_sha }}"
-            if [ -z "${CANDIDATE_SHA}" ] || [ "${CANDIDATE_SHA}" != "${GITHUB_SHA}" ]; then
-              echo "FAIL: candidate_sha must be non-empty and equal the caller's exact SHA" >&2
-              echo "  candidate_sha=${CANDIDATE_SHA}" >&2
-              echo "  GITHUB_SHA=${GITHUB_SHA}" >&2
-              exit 1
-            fi
+            git fetch origin main --no-tags
+            MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+            test -n "${CANDIDATE_SHA}" || { echo "FAIL: candidate_sha is required" >&2; exit 1; }
+            test "${CANDIDATE_SHA}" = "${GITHUB_SHA}" || { echo "FAIL: requested SHA != workflow checkout SHA" >&2; exit 1; }
+            test "${CANDIDATE_SHA}" = "${MAIN_SHA}" || { echo "FAIL: requested SHA != current origin/main HEAD" >&2; exit 1; }
+            echo "candidate exact-main binding: ${CANDIDATE_SHA} == ${GITHUB_SHA} == ${MAIN_SHA}"
             TAG="stable-candidate-${CANDIDATE_SHA}"
             PRE=false
             STABLE=true
             IS_CANDIDATE=true
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.version_tag }}"
-            case "${{ github.event.inputs.prerelease }}" in
-              true|True|TRUE|on|yes|1) PRE=true ;;
-              *) PRE=false ;;
-            esac
-          else
+          elif [ "${{ github.event_name }}" = "push" ]; then
             TAG="${GITHUB_REF_NAME}"
-            case "${GITHUB_REF_NAME}" in
-              *-rc.*|*-beta*|*-alpha*|*-dev*|*-pre*) PRE=true ;;
-              *) PRE=false ;;
-            esac
+            if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              PRE=false
+            elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+|beta\.[0-9]+|alpha\.[0-9]+|dev\.[0-9]+|pre\.[0-9]+)$ ]]; then
+              PRE=true
+            else
+              echo "FAIL: tag '${TAG}' is not a supported Stable or prerelease tag" >&2
+              exit 1
+            fi
+          else
+            echo "FAIL: release workflow only accepts tag pushes or explicit candidate calls" >&2
+            exit 1
           fi
           if [ "${IS_CANDIDATE}" != "true" ]; then
             if [ "$PRE" = "true" ]; then STABLE=false; else STABLE=true; fi
@@ -700,6 +694,23 @@ jobs:
           git fetch --tags --force
           git worktree add -f prev_src "${prev_tag}"
           echo "prev_src ready:"; git -C prev_src describe --tags --always
+
+      - name: Download the actual published baseline APK and verify its certificate
+        if: needs.release-meta.outputs.is_stable == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android/published-baseline
+          gh release download "${prev_tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'interest-growth-android-arm64.apk' \
+            --dir dist/android/published-baseline \
+            --clobber
+          PUBLISHED="dist/android/published-baseline/interest-growth-android-arm64.apk"
+          test -s "${PUBLISHED}" || { echo "FAIL: real published baseline APK was not downloaded" >&2; exit 1; }
+          echo "published_baseline_apk=${PUBLISHED}" >> "$GITHUB_ENV"
+          echo "PUBLISHED_BASELINE_APK_SHA256=$(sha256sum "${PUBLISHED}" | awk '{print $1}')" >> "$GITHUB_STEP_SUMMARY"
       - name: Build-time transplant CI hooks into old release-test source, §11
         # The previous exact tag predates R4's WebView CDP enablement and the
         # native CI TLS trust-root injection. patch_release_test_source.sh applies
@@ -738,8 +749,7 @@ jobs:
             -e PG_ANDROID_KEY_PASSWORD="${{ secrets.PG_ANDROID_KEY_PASSWORD }}" \
             interest-growth-android bash -c \
               'cd prev_src/apps/desktop \
-               && ( cd src-tauri && { cargo metadata --locked >/dev/null 2>&1 \
-                    || { echo "prev-tag lockfile unresolvable (e.g. a pinned crates.io version was never published); regenerating from manifest so genuine versions resolve"; cargo generate-lockfile; }; } ) \
+               && ( cd src-tauri && cargo metadata --locked >/dev/null ) \
                && npm ci && npm run tauri -- android build --apk --target x86_64'
           mkdir -p dist/android/prev
           mapfile -t APK_MATCHES < <(find prev_src/apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | sort)
@@ -761,7 +771,7 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
             interest-growth-android bash -c \
-              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_upgrade_apk_pair.sh dist/android/prev/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-release.apk'
+              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_upgrade_apk_pair.sh dist/android/prev/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-release.apk dist/android/published-baseline/interest-growth-android-arm64.apk'
       - name: Clean up signing material
         if: always()
         run: rm -rf "$RUNNER_TEMP/keystore"
@@ -1479,20 +1489,16 @@ jobs:
       - name: Determine tag and prerelease flag
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.version_tag }}"
-            case "${{ github.event.inputs.prerelease }}" in
-              true|True|TRUE|on|yes|1) PRE=true ;;
-              *) PRE=false ;;
-            esac
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            PRE=false
+          elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+|beta\.[0-9]+|alpha\.[0-9]+|dev\.[0-9]+|pre\.[0-9]+)$ ]]; then
+            PRE=true
           else
-            TAG="${GITHUB_REF_NAME}"
-            case "${GITHUB_REF_NAME}" in
-              *-rc.*|*-beta*|*-alpha*|*-dev*|*-pre*) PRE=true ;;
-              *) PRE=false ;;
-            esac
+            echo "FAIL: tag '${TAG}' is not a supported Stable or prerelease tag" >&2
+            exit 1
           fi
-          if [ "$PRE" = "true" ]; then STABLE=false; else STABLE=true; fi
+          STABLE=$([ "$PRE" = "true" ] && echo false || echo true)
           {
             echo "tag=${TAG}"
             echo "prerelease=${PRE}"
@@ -1501,26 +1507,16 @@ jobs:
       - name: "Fail-closed: tag must resolve to the exact build SHA"
         # §16 / R0 — a formal release must never attach artifacts built from a
         # different commit than the tag. For tag pushes GITHUB_SHA is the tag
-        # commit by construction; for workflow_dispatch we must validate the
-        # user-supplied tag against the build SHA and fail closed on mismatch.
+        # commit by construction; a formal release has no manual tag/version
+        # override path and therefore cannot build A and publish it as tag B.
         run: |
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            echo "tag push: GITHUB_SHA is the tag commit (${GITHUB_SHA}) by construction"
-            exit 0
-          fi
+          test "${{ github.event_name }}" = "push" || { echo "FAIL: formal release is tag-push only" >&2; exit 1; }
           TAG_REF="${{ steps.meta.outputs.tag }}"
           git fetch --tags --force origin
           TAG_SHA="$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || true)"
-          if [ -z "$TAG_SHA" ]; then
-            echo "FAIL: tag ${TAG_REF} does not exist — refusing to auto-create a release tag" >&2
-            exit 1
-          fi
-          echo "tag ${TAG_REF} resolves to ${TAG_SHA}"
-          echo "build SHA is ${GITHUB_SHA}"
-          if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
-            echo "FAIL: tag SHA != build SHA — refusing to build A and publish it as tag B" >&2
-            exit 1
-          fi
+          test -n "$TAG_SHA" || { echo "FAIL: pushed tag ${TAG_REF} cannot be resolved" >&2; exit 1; }
+          test "$TAG_SHA" = "$GITHUB_SHA" || { echo "FAIL: tag SHA != build SHA" >&2; exit 1; }
+          echo "tag ${TAG_REF} and build SHA ${GITHUB_SHA} are identical"
       - name: "Fail-closed: Stable tag demands every Stable-only gate PASS"
         # §24 — a Stable publish is FORBIDDEN unless every mandatory Stable-only
         # gate succeeded. NOT RUN (an RC job that short-circuited) is never
@@ -1665,7 +1661,7 @@ jobs:
           echo "path=${RUNNER_TEMP}/body.md" >> "$GITHUB_OUTPUT"
       - name: Create release
         # --verify-tag: GitHub refuses to create the release if the tag does not
-        # exist at publish time (tag push / workflow_dispatch path). Combined
+        # exist at publish time. Combined
         # with the explicit tag→SHA fail-closed check above, a release can never
         # be created for a tag that isn't exactly the artifact build commit.
         run: |

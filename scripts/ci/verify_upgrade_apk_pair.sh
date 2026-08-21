@@ -15,15 +15,16 @@
 # a missing tool can never silently become a pass.
 #
 # Usage:
-#   scripts/ci/verify_upgrade_apk_pair.sh <old.apk> <new.apk>
+#   scripts/ci/verify_upgrade_apk_pair.sh <old.apk> <new.apk> [published-baseline.apk]
 set -euo pipefail
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: $0 <old.apk> <new.apk>" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "usage: $0 <old.apk> <new.apk> [published-baseline.apk]" >&2
   exit 2
 fi
 OLD_APK="$1"
 NEW_APK="$2"
+PUBLISHED_BASELINE_APK="${3:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
@@ -134,6 +135,24 @@ elif [ "${OLD_CERT}" = "${NEW_CERT}" ]; then
   pass "signing cert identical (SHA-256 ${NEW_CERT})"
 else
   fail "signing cert mismatch: old=${OLD_CERT} new=${NEW_CERT} (same-cert upgrade impossible)"
+fi
+
+if [ -n "${PUBLISHED_BASELINE_APK}" ]; then
+  [ -f "${PUBLISHED_BASELINE_APK}" ] || { echo "FAIL: published baseline APK missing: ${PUBLISHED_BASELINE_APK}" >&2; exit 1; }
+  PUBLISHED_BASELINE_CERT="$(cert_sha "${PUBLISHED_BASELINE_APK}")"
+  if [ -z "${PUBLISHED_BASELINE_CERT}" ]; then
+    fail "apksigner could not extract the real published baseline certificate"
+  elif [ "${PUBLISHED_BASELINE_CERT}" = "${OLD_CERT}" ] && [ "${PUBLISHED_BASELINE_CERT}" = "${NEW_CERT}" ]; then
+    pass "published baseline cert == rebuilt baseline cert == current cert (SHA-256 ${PUBLISHED_BASELINE_CERT})"
+  else
+    fail "published baseline cert mismatch: published=${PUBLISHED_BASELINE_CERT} rebuilt=${OLD_CERT} current=${NEW_CERT}"
+  fi
+  echo "PUBLISHED_BASELINE_APK_SHA256=$(sha256sum "${PUBLISHED_BASELINE_APK}" | awk '{print $1}')"
+  echo "REBUILT_BASELINE_APK_SHA256=$(sha256sum "${OLD_APK}" | awk '{print $1}')"
+  echo "CURRENT_X86_TEST_APK_SHA256=$(sha256sum "${NEW_APK}" | awk '{print $1}')"
+  echo "PUBLISHED_BASELINE_CERT_SHA256=${PUBLISHED_BASELINE_CERT}"
+  echo "REBUILT_BASELINE_CERT_SHA256=${OLD_CERT}"
+  echo "CURRENT_X86_TEST_CERT_SHA256=${NEW_CERT}"
 fi
 
 if [ "${FAILURES}" -ne 0 ]; then
