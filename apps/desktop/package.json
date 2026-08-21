@@ -1,7 +1,7 @@
 {
   "name": "interest-growth-desktop",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.0.10",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
