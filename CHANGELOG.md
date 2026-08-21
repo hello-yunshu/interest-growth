@@ -3,9 +3,29 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.17 — v1.0.17 Stable target (2026-08-21)
+## 1.0.18 — v1.0.18 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix).
+
+`v1.0.17` was never published: its Release run failed the Stable-only
+`android-upgrade-in-place` TLS edge (`FAIL: TLS edge did not become healthy`),
+because the ephemeral Caddy site was configured as `https://127.0.0.1`, which
+only matched a host whose SNI was `127.0.0.1`; curl / rustls do not send SNI
+for an IP-literal host, so the TLS handshake failed. Per the immutable-tag
+governance this ships as `1.0.18` — it contains no `4`/`11`.
+
+**Fixes (Release pipeline only):**
+- Caddy TLS edge: changed the `boot_tls_server.sh` site config from
+  `https://127.0.0.1` to `:443` (with `bind 0.0.0.0`), so Caddy matches every
+  host/IP regardless of SNI and the host port mapping becomes reachable.
+- Android `versionCode` advanced to `1000019` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.17 — v1.0.17 Stable target (unpublished)
+
+**Status**: unpublished — the `v1.0.17` Release run failed the Stable-only
+`android-upgrade-in-place` TLS edge (see `1.0.18` for the fix and this
+version's other synced-lockfile work).
 
 `v1.0.16` was never published: its tag pointed to an incomplete commit whose
 two lockfiles (`apps/desktop/package-lock.json`, `apps/desktop/src-tauri/
