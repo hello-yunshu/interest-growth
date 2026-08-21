@@ -1086,6 +1086,24 @@ pub fn assert_relative_path(path: &str) -> Result<(), String> {
 /// trust an ephemeral CI CA that fronts the self-hosted server over real
 /// HTTPS. A loadable PEM root is added here; `None` keeps the exact production
 /// behavior (fail-closed: nothing weakened when no root is injected).
+fn http_client() -> Result<reqwest::Client, String> {
+    #[cfg(feature = "android-ci-trust-root")]
+    {
+        return http_client_with_trust_root(None);
+    }
+    #[cfg(not(feature = "android-ci-trust-root"))]
+    {
+        reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .user_agent(format!("interest-growth-desktop/{CLIENT_APP_VERSION}"))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(feature = "android-ci-trust-root")]
 fn http_client_with_trust_root(
     trust_root: Option<reqwest::Certificate>,
 ) -> Result<reqwest::Client, String> {
@@ -1105,6 +1123,7 @@ fn http_client_with_trust_root(
 /// Phase 4d. Fail-closed: an unreadable or invalid PEM is a hard error, never a
 /// silent fallthrough to the default roots (an operator who opts into a custom
 /// CA must not be silently degraded to no verification of that CA).
+#[cfg(feature = "android-ci-trust-root")]
 pub fn load_pem_trust_root(pem_path: &Path) -> Result<reqwest::Certificate, String> {
     let bytes = std::fs::read(pem_path)
         .map_err(|error| format!("cannot read TLS trust root {}: {error}", pem_path.display()))?;
@@ -1118,7 +1137,7 @@ pub fn load_pem_trust_root(pem_path: &Path) -> Result<reqwest::Certificate, Stri
 /// TLS trust root. `__system_property_get` is part of the always-linked bionic
 /// libc; any app may read system properties, so this introduces no new
 /// privilege. Reading an unset property returns `None`.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]
 pub fn android_system_property(name: &str) -> Option<String> {
     use std::ffi::{c_char, CStr, CString};
     // PROP_VALUE_MAX is 92 in bionic libc.
@@ -1153,7 +1172,7 @@ pub fn android_system_property(name: &str) -> Option<String> {
 /// path, loads and returns it as an additional trust root. Default (unset) →
 /// `Ok(None)` = production Mozilla-roots behavior unchanged. Fail-closed: the
 /// property is set but the path is unreadable or invalid → `Err`.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]
 pub fn ci_tls_trust_root() -> Result<Option<reqwest::Certificate>, String> {
     match android_system_property("ig.ci.tls_ca_path") {
         Some(path) => load_pem_trust_root(Path::new(path.trim())).map(Some),
@@ -1173,9 +1192,23 @@ impl RemoteBroker {
         store: Arc<dyn CredentialStore>,
         runtime_id: &str,
     ) -> Result<Self, String> {
-        Self::with_expected_runtime_and_trust_root(store, runtime_id, None)
+        if !is_remote_runtime_id(runtime_id) {
+            return Err(remote_error(
+                ERR_INTERNAL,
+                format!("expected runtime must be a remote runtime, got: {runtime_id}"),
+            ));
+        }
+        Ok(Self {
+            client: http_client().map_err(|error| {
+                remote_error(ERR_INTERNAL, format!("cannot build HTTP client: {error}"))
+            })?,
+            store,
+            state: Arc::new(RemoteBrokerState::new()),
+            expected_runtime_id: Arc::new(tokio::sync::Mutex::new(runtime_id.to_string())),
+        })
     }
 
+    #[cfg(feature = "android-ci-trust-root")]
     /// Like [`with_expected_runtime`], but additionally trusts a TLS root.
     ///
     /// Phase 4d — CI-only. `None` (the production default) is exactly the
@@ -1213,7 +1246,7 @@ impl RemoteBroker {
     /// Gate R0.3 — switch the required runtime for the remainder of this
     /// session. Session-immutable in production; used by tests to prove the
     /// Android client does not borrow desktop-remote.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "android-ci-trust-root"))]
     async fn set_expected_runtime(&self, runtime_id: &str) {
         if is_remote_runtime_id(runtime_id) {
             *self.expected_runtime_id.lock().await = runtime_id.to_string();

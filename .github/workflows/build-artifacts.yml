@@ -73,14 +73,17 @@ jobs:
       - name: Locate verify APK
         id: apk
         run: |
-          APK="$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | head -1)"
-          if [ -z "${APK}" ]; then
-            echo "no debug APK found" >&2
+          mapfile -t APK_MATCHES < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -path '*/debug/*-debug.apk' -type f 2>/dev/null | sort)
+          if [ "${#APK_MATCHES[@]}" -ne 1 ]; then
+            echo "expected exactly one debug APK, found ${#APK_MATCHES[@]}" >&2
             exit 1
           fi
+          APK="${APK_MATCHES[0]}"
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           mkdir -p dist/android
-          cp "${APK}" dist/android/interest-growth-v1.0.19-android-arm64-debug.apk
-          echo "path=dist/android/interest-growth-v1.0.19-android-arm64-debug.apk" >> "$GITHUB_OUTPUT"
+          OUT="dist/android/interest-growth-${VERSION}-android-arm64-debug.apk"
+          cp "${APK}" "${OUT}"
+          echo "path=${OUT}" >> "$GITHUB_OUTPUT"
       - name: APK static verification
         run: bash scripts/ci/verify_android_apk.sh "${{ steps.apk.outputs.path }}"
       - name: Generate SHA256SUMS for artifacts

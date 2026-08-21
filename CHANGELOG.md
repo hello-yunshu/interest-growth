@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.20 — v1.0.20 Stable Candidate (2026-08-22)
+
+**Status**: pending Stable Candidate Actions verification.
+
+This candidate supersedes the immutable v1.0.19 tag after release-engineering closure.
+
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 

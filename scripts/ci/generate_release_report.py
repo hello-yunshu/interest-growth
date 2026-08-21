@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the release verification report (prompt §28 / §30).
 
-`V0_7_RELEASE_VERIFICATION.md` is produced by GitHub Actions from THIS run's
+`Vx_y_RELEASE_VERIFICATION.md` is produced by GitHub Actions from THIS run's
 real data. Nothing is hardcoded: every value is read from the environment /
 the asset files actually produced. Items with no evidence are written as
 "NOT RUN" (never as PASS).
@@ -13,8 +13,8 @@ GITHUB_SHA, GITHUB_RUN_ID, RUNNER_OS).
 
 Usage:
     python scripts/ci/generate_release_report.py \
-        --out V1_0_RELEASE_VERIFICATION.md \
-        --asset dist/.../interest-growth-v1.0.0-android-arm64.apk \
+        --out Vx_y_RELEASE_VERIFICATION.md \
+        --asset dist/.../interest-growth-X.Y.Z-android-arm64.apk \
         --field "Android SDK=36" --field "NDK=27.1"
 """
 

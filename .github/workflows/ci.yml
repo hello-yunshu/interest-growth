@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
       - name: Run actionlint on all workflows
         # Pinned to a specific image digest (immutable, supply-chain hardening);
         # `:latest` is mutable and would let the lint tool change under the CI.
@@ -34,12 +36,16 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Verify repository integrity (symlink/path/FileProvider/manifest scope)
         run: bash scripts/ci/verify_repo.sh
+      - name: Verify third-party dependency versions are unchanged
+        run: python scripts/release/verify_dependency_versions_unchanged.py --base-ref HEAD^
 
   host:
     name: Python ${{ matrix.python-version }}

@@ -94,6 +94,23 @@ check_contents() {
     fail "network_security_config.xml is missing: ${apk}"
   fi
 
+  # Production arm64 is built without the CI-only trust-root feature. Inspect
+  # native strings rather than source paths: the compile-time contract is that
+  # the property, loader marker and upgrade-test/WebView-debug hooks are absent
+  # from the production binary. The x86_64 release-test APK is intentionally
+  # allowed to contain these markers and is never a release asset.
+  local base
+  base="$(basename "${apk}")"
+  if [[ "${base}" == *arm64* && "${base}" != *release-test* ]]; then
+    local apk_strings
+    apk_strings="$(while read -r entry; do unzip -p "${apk}" "${entry}" 2>/dev/null || true; done < <(unzip -Z1 "${apk}") | strings || true)"
+    for needle in 'ig.ci.tls_ca_path' 'android-ci-trust-root' 'upgrade-test' 'ENABLE_WEBVIEW_REMOTE_DEBUGGING' 'setWebContentsDebuggingEnabled'; do
+      if grep -qF "${needle}" <<<"${apk_strings}"; then
+        fail "production arm64 APK contains CI/test marker (${needle}): ${apk}"
+      fi
+    done
+  fi
+
   # Native .so hygiene: at least one ABI lib dir, and exactly one canonical
   # cdylib name across all of them (libapp_<ident> is the Tauri Rust dylib).
   local libdirs
@@ -137,7 +154,6 @@ check_metadata() {
   done
   # The artifact naming rule (prompt §21): a universal APK must actually carry
   # every supported ABI; an arm64-only APK must never be named universal.
-  local base
   base="$(basename "${apk}")"
   local native_codes
   native_codes="$(grep -oE "native-code: '[^']+'" <<<"${badging}" | sed -E "s/native-code: '([^']+)'/\1/" | tr ' ' '\n')"

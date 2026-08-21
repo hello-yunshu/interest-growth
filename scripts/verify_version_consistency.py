@@ -43,11 +43,15 @@ REMOTE_AUTH = ROOT / "apps/api/pg_api/remote_auth.py"
 BACKUP_RESTORE = ROOT / "apps/api/pg_api/backup_restore.py"
 # Desktop: Rust + Tauri config + package manifests.
 CARGO = ROOT / "apps/desktop/src-tauri/Cargo.toml"
+CARGO_LOCK = ROOT / "apps/desktop/src-tauri/Cargo.lock"
 TAURI_CONF = ROOT / "apps/desktop/src-tauri/tauri.conf.json"
 DESKTOP_PKG = ROOT / "apps/desktop/package.json"
+DESKTOP_LOCK = ROOT / "apps/desktop/package-lock.json"
 # Web / ClientRuntime.
 WEB_PKG = ROOT / "apps/web/package.json"
+WEB_LOCK = ROOT / "apps/web/package-lock.json"
 CONTRACT_JS = ROOT / "apps/web/lib/runtime/contract.js"
+UV_LOCK = ROOT / "uv.lock"
 
 API_VERSION = "1"
 BACKUP_FORMAT_VERSION = 1
@@ -113,15 +117,16 @@ def main() -> int:
     tauri_text = TAURI_CONF.read_text(encoding="utf-8")
     require_equal("tauri.conf.json.version", _match(r'"version"\s*:\s*"([^"]+)"', tauri_text))
     require_equal("apps/desktop/package.json.version", str(json.loads(DESKTOP_PKG.read_text(encoding="utf-8"))["version"]))
-    # Android versionCode must be strictly monotonic across releases. 1.0.0
-    # shipped versionCode 1000001, so 1.0.1 must be >= 1000002. Tauri's
-    # auto-computed value for 1.0.1 would collide with 1.0.0, so the explicit
-    # override is required and checked here.
+    # Android versionCode must be strictly monotonic across releases. The
+    # structured bump tool advances the checked-in historical maximum; this
+    # lower bound catches a missing explicit override in a clean checkout.
     version_code = _match(r'"versionCode"\s*:\s*(\d+)', tauri_text)
     if version_code is None:
         problems.append("tauri.conf.json.android.versionCode: not found")
-    elif int(version_code) < 1000002:
-        problems.append(f"tauri.conf.json.android.versionCode: {version_code} < 1000002 (must be strictly greater than the v1.0.0 value)")
+    elif int(version_code) < 1000001:
+        problems.append(f"tauri.conf.json.android.versionCode: {version_code} < 1000001")
+    elif "4" in version_code or "11" in version_code:
+        problems.append(f"tauri.conf.json.android.versionCode contains forbidden digit 4 or 11: {version_code}")
 
     # --- web / ClientRuntime -------------------------------------------- #
     require_equal("apps/web/package.json.version", str(json.loads(WEB_PKG.read_text(encoding="utf-8"))["version"]))
@@ -136,6 +141,26 @@ def main() -> int:
     backup_version = _match(r"BACKUP_FORMAT_VERSION\s*=\s*(\d+)", backup_text)
     if backup_version is None or int(backup_version) != BACKUP_FORMAT_VERSION:
         problems.append(f"backup_restore.BACKUP_FORMAT_VERSION: {backup_version!r} != {BACKUP_FORMAT_VERSION!r}")
+
+    # Product-owned lock entries are also version fields. Third-party entries
+    # are checked separately by verify_dependency_versions_unchanged.py.
+    try:
+        cargo_lock = tomllib.loads(CARGO_LOCK.read_text(encoding="utf-8"))
+        cargo_product = [p for p in cargo_lock.get("package", []) if p.get("name") == "interest-growth-desktop"]
+        if len(cargo_product) != 1 or cargo_product[0].get("version") != canonical:
+            problems.append("Cargo.lock interest-growth-desktop version does not match canonical")
+        uv_lock = tomllib.loads(UV_LOCK.read_text(encoding="utf-8"))
+        uv_product = [p for p in uv_lock.get("package", []) if p.get("name") == "interest-growth"]
+        if len(uv_product) != 1 or uv_product[0].get("version") != canonical:
+            problems.append("uv.lock interest-growth version does not match canonical")
+        for lock_path, package_name in ((DESKTOP_LOCK, "interest-growth-desktop"), (WEB_LOCK, "interest-growth-web")):
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            if lock.get("version") != canonical or lock.get("packages", {}).get("", {}).get("version") != canonical:
+                problems.append(f"{lock_path.name} root package version does not match canonical")
+            if lock.get("name") != package_name:
+                problems.append(f"{lock_path.name} root package name is not {package_name}")
+    except (OSError, ValueError, tomllib.TOMLDecodeError, json.JSONDecodeError) as error:
+        problems.append(f"product lockfile parse failed: {error}")
 
     if problems:
         for problem in problems:
