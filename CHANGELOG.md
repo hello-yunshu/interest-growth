@@ -3,10 +3,34 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.13 — v1.0.13 Stable target (2026-08-21)
+## 1.0.15 — v1.0.15 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.13` was never published: its Release run failed the Stable-only
+`android-upgrade-in-place` old-APK build at the npm stage. The previous tag
+resolved was `v1.0.12` (healthy lockfile, so the cargo-regeneration guard
+did not fire), but the guard's wrapper stepped out of `apps/desktop` to
+`apps/` before `npm ci`, so the lockfile was not found and `npm ci` aborted.
+Fixed by running the guard inside a `( ... )` subshell that stays in
+`apps/desktop`. Per the immutable-tag governance this ships as `1.0.15` —
+`1.0.14` is skipped because it contains `4`.
+
+**Fixes (Release pipeline only):**
+- The prior-tag lockfile regeneration guard in the old-APK build step now
+  runs in a subshell, preserving `apps/desktop` as the cwd for the subsequent
+  `npm ci` (the previous version jumped to `apps/` and failed clean install).
+- Android `versionCode` advanced to `1000016` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.13 — v1.0.13 Stable target (unpublished)
+
+**Status**: unpublished — the Release run failed the Stable-only
+`android-upgrade-in-place` old-APK build because the lockfile self-repair
+guard's `cd ../..` left the cwd at `apps/` (not `apps/desktop`), so `npm ci`
+could not find the package-lock.json. Guard reworked to a subshell in
+`1.0.15`.
 
 `v1.0.12` was never published: its Release run failed the Stable-only
 `android-upgrade-in-place` N-side baseline build. The immediately-preceding
@@ -15,20 +39,8 @@ un-published `webpki-root-certs 1.0.10` (the corruption that `1.0.12` had
 already fixed on its own source but that still lived in the earlier tag's
 tree), so `cargo --locked` could not resolve it while the old same-cert
 release-test APK was being rebuilt. Per the immutable-tag governance this
-ships as `1.0.13` — `1.0.13` contains no `4` or `11`.
-
-**Fixes (Release pipeline only):**
-- `android-upgrade-in-place`'s old-APK build step now guards against an
-  unresolvable previous-tag lockfile: it runs `cargo metadata --locked` and,
-  only if that fails (e.g. a pinned crates.io version was never published),
-  regenerates the lockfile from the committed manifest so genuine dependency
-  versions resolve. For healthy tags this changes nothing (the rebuild of a
-  good lockfile is byte-identical); for a one-off same-cert CI-release-test
-  APK it exactly restores the genuine versions (verified: regenerating
-  `v1.0.10`'s lockfile alone flips `webpki-root-certs` back `1.0.10`→`1.0.9`).
-- Android `versionCode` advanced to `1000015` (monotonic; contains no `4` or
-  `11` — `1000014` is skipped because it contains `4`); `MIN_CLIENT_VERSION`
-  stays `1.0.0` (patch release, no protocol change).
+was to ship as `1.0.13`; that slot is now recorded as unpublished and the
+hardened pipeline landed in `1.0.15`.
 
 ## 1.0.12 — v1.0.12 Stable target (unpublished)
 
@@ -36,7 +48,7 @@ ships as `1.0.13` — `1.0.13` contains no `4` or `11`.
 `android-upgrade-in-place` old-side build because the immediately-preceding
 tag (`v1.0.10`) still committed the corrupted `webpki-root-certs 1.0.10` lock
 entry, which `cargo --locked` could not resolve. The pipeline hardening that
-makes prior-tag lockfiles self-repairing ships in `1.0.13`.
+makes prior-tag lockfiles self-repairing ships in `1.0.15`.
 
 `v1.0.10` was never published: its Release run failed the Rust / Android /
 macOS cargo gates because a dependency version was corrupted during the version
