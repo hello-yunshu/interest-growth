@@ -3,10 +3,37 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.7 — v1.0.7 Stable target (2026-08-21)
+## 1.0.8 — v1.0.8 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.7` was never published: its Release run reached stable-only gates that
+had never run before (RC runs skip them) and surfaced two bugs — (1) the
+`android-upgrade-in-place` job built the Android toolchain with
+`docker/build-push-action --cache-to type=gha` but had no `setup-buildx-action`,
+so it used the default `docker` driver that cannot export the gha cache
+(`Cache export is not supported for the docker driver`); (2) the Server
+multi-device assertion checked `len(devs) >= 2` against the `/auth/devices`
+response, which is the object `{"devices": [...]}`, so it always compared the
+dict's key count (1). Per the immutable-tag governance the fixes ship as the
+next patch `1.0.8` (contains no `4` or `11`).
+
+**Fixes over the v1.0.7 tag SHA** (Release workflow hardening only):
+- `android-upgrade-in-place` now sets up Docker Buildx (docker-container
+  driver) before building the toolchain image, so the gha layer cache works —
+  mirrors the `android-signed-build` job.
+- Server multi-device device-list assertion corrected to `len(devs["devices"])
+  >= 2`.
+- Android `versionCode` advanced to `1000009` (monotonic; contains no `4` or
+  `11`); `MIN_CLIENT_VERSION` stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.7 — v1.0.7 Stable target (unpublished)
+
+**Status**: unpublished — the Release run reached the stable-only gates
+(upgrade-in-place, cross-device) for the first time; the toolchain image build
+lacked a docker-container builder and the device-list assertion read a dict.
+Both fixed in `1.0.8`.
 
 `v1.0.6` was never published: its Release run failed at the Android shared-cert
 step because `apksigner verify --print-certs` emits one `certificate SHA-256

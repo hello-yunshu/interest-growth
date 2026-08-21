@@ -1,6 +1,6 @@
 [package]
 name = "interest-growth-desktop"
-version = "1.0.7"
+version = "1.0.8"
 description = "Interest Growth desktop runtime"
 authors = ["Interest Growth"]
 edition = "2021"
