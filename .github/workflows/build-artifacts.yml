@@ -89,7 +89,7 @@ jobs:
       - name: Generate SHA256SUMS for artifacts
         run: python3 scripts/ci/generate_release_checksums.py --out dist/SHA256SUMS.txt dist/android/*.apk
       - name: Upload Android verify APK
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: interest-growth-android-arm64-debug
           path: |
@@ -151,7 +151,7 @@ jobs:
           cp "$SIDE" "$(dirname "$EXE")/psychology-growth-core.exe"
           bash scripts/ci/verify_packaged_startup.sh "$EXE" --win
       - name: Upload unsigned Windows artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: interest-growth-windows-x64-unsigned
           path: apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**
@@ -208,7 +208,7 @@ jobs:
           test -x "$BIN" || { echo "no app binary: $BIN" >&2; exit 1; }
           bash scripts/ci/verify_packaged_startup.sh "$BIN" --mac
       - name: Upload ad-hoc macOS artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: interest-growth-macos-arm64-adhoc
           path: apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/**
