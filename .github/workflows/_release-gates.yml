@@ -1383,8 +1383,9 @@ jobs:
             exit 1
           fi
           find dist/incoming/interest-growth-server-bundle -type f -name '*.tar.gz' -exec cp {} dist/release/ \;
+          # Tauri's current Windows bundle is NSIS (.exe); MSI is optional and
+          # is included automatically if a future bundle configuration emits it.
           test -n "$(find dist/incoming/desktop-package-windows -type f -name '*.exe' -print -quit)" || { echo "FAIL: Windows EXE missing" >&2; exit 1; }
-          test -n "$(find dist/incoming/desktop-package-windows -type f -name '*.msi' -print -quit)" || { echo "FAIL: Windows MSI missing" >&2; exit 1; }
           find dist/release -maxdepth 1 -type f -print
           for forbidden in 'x86_64' 'debug' 'release-test' '.pem' '.jks' '.keystore' 'raw-log'; do
             if find dist/release -maxdepth 1 -type f -iname "*${forbidden}*" | grep -q .; then
