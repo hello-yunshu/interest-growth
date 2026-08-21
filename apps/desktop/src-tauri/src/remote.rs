@@ -1123,7 +1123,6 @@ fn http_client_with_trust_root(
 /// Phase 4d. Fail-closed: an unreadable or invalid PEM is a hard error, never a
 /// silent fallthrough to the default roots (an operator who opts into a custom
 /// CA must not be silently degraded to no verification of that CA).
-#[cfg(feature = "android-ci-trust-root")]
 pub fn load_pem_trust_root(pem_path: &Path) -> Result<reqwest::Certificate, String> {
     let bytes = std::fs::read(pem_path)
         .map_err(|error| format!("cannot read TLS trust root {}: {error}", pem_path.display()))?;
@@ -1246,7 +1245,7 @@ impl RemoteBroker {
     /// Gate R0.3 — switch the required runtime for the remainder of this
     /// session. Session-immutable in production; used by tests to prove the
     /// Android client does not borrow desktop-remote.
-    #[cfg(all(test, feature = "android-ci-trust-root"))]
+    #[cfg(test)]
     async fn set_expected_runtime(&self, runtime_id: &str) {
         if is_remote_runtime_id(runtime_id) {
             *self.expected_runtime_id.lock().await = runtime_id.to_string();
