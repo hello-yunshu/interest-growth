@@ -3,10 +3,40 @@
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
 
-## 1.0.12 — v1.0.12 Stable target (2026-08-21)
+## 1.0.13 — v1.0.13 Stable target (2026-08-21)
 
 **Status**: pending remote Actions verification (single unified Stable matrix,
 see `Interest_Growth_最终稳定版_v1.0.1_最终统一Actions验收_完整执行提示词.md`).
+
+`v1.0.12` was never published: its Release run failed the Stable-only
+`android-upgrade-in-place` N-side baseline build. The immediately-preceding
+tag resolved was `v1.0.10`, whose committed `Cargo.lock` still pinned the
+un-published `webpki-root-certs 1.0.10` (the corruption that `1.0.12` had
+already fixed on its own source but that still lived in the earlier tag's
+tree), so `cargo --locked` could not resolve it while the old same-cert
+release-test APK was being rebuilt. Per the immutable-tag governance this
+ships as `1.0.13` — `1.0.13` contains no `4` or `11`.
+
+**Fixes (Release pipeline only):**
+- `android-upgrade-in-place`'s old-APK build step now guards against an
+  unresolvable previous-tag lockfile: it runs `cargo metadata --locked` and,
+  only if that fails (e.g. a pinned crates.io version was never published),
+  regenerates the lockfile from the committed manifest so genuine dependency
+  versions resolve. For healthy tags this changes nothing (the rebuild of a
+  good lockfile is byte-identical); for a one-off same-cert CI-release-test
+  APK it exactly restores the genuine versions (verified: regenerating
+  `v1.0.10`'s lockfile alone flips `webpki-root-certs` back `1.0.10`→`1.0.9`).
+- Android `versionCode` advanced to `1000015` (monotonic; contains no `4` or
+  `11` — `1000014` is skipped because it contains `4`); `MIN_CLIENT_VERSION`
+  stays `1.0.0` (patch release, no protocol change).
+
+## 1.0.12 — v1.0.12 Stable target (unpublished)
+
+**Status**: unpublished — the Release run failed the Stable-only
+`android-upgrade-in-place` old-side build because the immediately-preceding
+tag (`v1.0.10`) still committed the corrupted `webpki-root-certs 1.0.10` lock
+entry, which `cargo --locked` could not resolve. The pipeline hardening that
+makes prior-tag lockfiles self-repairing ships in `1.0.13`.
 
 `v1.0.10` was never published: its Release run failed the Rust / Android /
 macOS cargo gates because a dependency version was corrupted during the version
