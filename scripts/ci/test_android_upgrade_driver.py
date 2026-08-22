@@ -10,6 +10,7 @@ Verifies the pure, WebView-independent parts:
 
 Run:  python3 scripts/ci/test_android_upgrade_driver.py
 """
+import inspect
 import json
 import os
 import tempfile
@@ -50,6 +51,12 @@ def test_press_enter_dispatches_keydown_and_keyup_without_shift():
     assert "key:'Enter'" in js
     assert "shiftKey:false" in js  # PromptBar submits only on non-shift Enter
     assert "bubbles:true" in js
+
+
+def test_create_question_submits_prompt_after_filling():
+    # Filling the React-controlled textarea is not enough; the real product
+    # path must receive the Enter event that submits the question.
+    assert "js_press_enter(\"textarea\")" in inspect.getsource(d.create_question)
 
 
 # ---------------------------------------------------------------------------
