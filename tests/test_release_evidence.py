@@ -149,7 +149,8 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "adb shell am start -W -n app.psychologygrowth.desktop/.MainActivity" in reusable
     assert "adb shell pidof app.psychologygrowth.desktop" in reusable
     assert "adb_root_ok=false" in reusable
-    assert "for _ in $(seq 1 3); do if adb root;" in reusable
+    assert "adb_root_ok=false; for _ in $(seq 1 3); do if adb root;" in reusable
+    assert "done; if [ \"$adb_root_ok\" != true ]; then" in reusable
     assert "for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop" in reusable
     assert "for attempt in 1 2 3; do if npm run tauri -- android build" in reusable
     assert "Final Release Run ID" in (ROOT / "scripts/ci/finalize_release_report.py").read_text(
