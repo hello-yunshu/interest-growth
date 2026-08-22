@@ -4,12 +4,13 @@
 
 - **Current product version:** `1.0.20`
 - **Current source:** the commit containing this document; exact SHA, Candidate run IDs, tag SHA and Release run IDs are generated in `V<VERSION>_RELEASE_VERIFICATION.md`
-- **Current Stable Candidate SHA:** pending final push
-- **Current Candidate Actions run:** not triggered yet
-- **Current release status:** `PENDING_VERIFICATION`; no Stable tag is created before successful Candidate Promotion
+- **Current Stable Candidate target:** the final `main` commit after the release-closure changes in this document are pushed
+- **Current Candidate Actions run:** not yet verified for that final SHA
+- **Current release status:** `PENDING_STABLE_CANDIDATE`; no Stable tag is created before successful Candidate Promotion
 - **Latest published Stable:** none
 - **Latest published prerelease:** `v1.0.0-rc.3` (published and used as the frozen first-Stable upgrade fallback)
-- **Current blockers:** Stable Candidate exact-SHA matrix, Promotion, clean-extract server restore, Android production negative hook audit, and remote Actions evidence are pending
+- **Known source-level BLOCKER/HIGH issues:** none
+- **Remaining release verification:** exact-SHA Stable Candidate full matrix → Promotion → immutable `v1.0.20` → exact-tag Release full matrix → post-release checksum verification
 
 The current source closure adds compile-time isolation for the CI Android trust
 root, a structured product-version bump tool with dependency drift checking,

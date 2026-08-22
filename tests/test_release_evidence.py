@@ -77,6 +77,65 @@ def test_finalize_release_report_appends_exact_identity(tmp_path):
     ) == 1
 
 
+def test_finalize_release_report_rejects_invalid_identity_fields(tmp_path):
+    module = load_script("finalize_release_report.py")
+
+    def invoke(**overrides):
+        report = tmp_path / "report.md"
+        report.write_text("# report\n", encoding="utf-8")
+        values = {
+            "candidate_sha": "a" * 40,
+            "candidate_run_id": "123456789",
+            "candidate_run_url": "https://github.com/example/run/123456789",
+            "candidate_conclusion": "success",
+            "tag": "v1.0.20",
+            "tag_sha": "b" * 40,
+            "release_run_id": "987654321",
+            "release_run_url": "https://github.com/example/run/987654321",
+        }
+        values.update(overrides)
+        argv = ["--report", str(report)]
+        for key, value in values.items():
+            argv.extend([f"--{key.replace('_', '-')}", value])
+        return module.main(argv)
+
+    assert invoke(candidate_sha="not-a-sha") == 1
+    assert invoke(tag_sha="B" * 40) == 1
+    assert invoke(candidate_conclusion="failure") == 1
+    assert invoke(candidate_run_id="0") == 1
+    assert invoke(tag="release-1.0.20") == 1
+    assert invoke(release_run_url="http://github.com/example/run/987654321") == 1
+
+
+def test_finalize_release_report_accepts_prerelease_not_applicable_candidate(tmp_path):
+    module = load_script("finalize_release_report.py")
+    report = tmp_path / "V1_0_20_RELEASE_VERIFICATION.md"
+    report.write_text("# report\n", encoding="utf-8")
+
+    assert module.main(
+        [
+            "--report",
+            str(report),
+            "--candidate-sha",
+            "NOT APPLICABLE",
+            "--candidate-run-id",
+            "NOT APPLICABLE",
+            "--candidate-run-url",
+            "NOT APPLICABLE",
+            "--candidate-conclusion",
+            "NOT APPLICABLE",
+            "--tag",
+            "v1.0.20-rc.1",
+            "--tag-sha",
+            "b" * 40,
+            "--release-run-id",
+            "987654321",
+            "--release-run-url",
+            "https://github.com/example/run/987654321",
+        ]
+    ) == 0
+
+
 def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     reusable = (ROOT / ".github/workflows/_release-gates.yml").read_text(encoding="utf-8")

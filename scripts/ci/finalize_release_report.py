@@ -10,11 +10,62 @@ verified and before the final checksum is regenerated.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 
 IDENTITY_HEADER = "## Release Evidence Identity"
+FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+POSITIVE_INTEGER_RE = re.compile(r"[1-9][0-9]*")
+TAG_RE = re.compile(
+    r"v[0-9]+\.[0-9]+\.[0-9]+"
+    r"(?:-(?:rc|beta|alpha|dev|pre)\.[0-9]+)?"
+)
+
+
+def _is_na(value: str) -> bool:
+    return value == "NOT APPLICABLE"
+
+
+def _validate_sha(name: str, value: str, *, allow_na: bool = False) -> None:
+    if allow_na and _is_na(value):
+        return
+    if FULL_SHA_RE.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a full lowercase commit SHA")
+
+
+def _validate_run_id(name: str, value: str, *, allow_na: bool = False) -> None:
+    if allow_na and _is_na(value):
+        return
+    if POSITIVE_INTEGER_RE.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a positive integer string")
+
+
+def _validate_url(name: str, value: str, *, allow_na: bool = False) -> None:
+    if allow_na and _is_na(value):
+        return
+    if not value.startswith("https://"):
+        raise ValueError(f"{name} must start with https://")
+
+
+def _validate_identity(args) -> None:
+    if TAG_RE.fullmatch(args.tag) is None:
+        raise ValueError("tag must match vX.Y.Z or a supported prerelease format")
+
+    is_prerelease = "-" in args.tag
+    _validate_sha("candidate SHA", args.candidate_sha, allow_na=is_prerelease)
+    _validate_sha("tag SHA", args.tag_sha)
+    _validate_run_id("candidate Run ID", args.candidate_run_id, allow_na=is_prerelease)
+    _validate_run_id("release Run ID", args.release_run_id)
+    _validate_url("candidate Run URL", args.candidate_run_url, allow_na=is_prerelease)
+    _validate_url("release Run URL", args.release_run_url)
+
+    expected_conclusion = "NOT APPLICABLE" if is_prerelease else "success"
+    if args.candidate_conclusion != expected_conclusion:
+        raise ValueError(
+            f"candidate conclusion must be {expected_conclusion} for this tag"
+        )
 
 
 def main(argv=None) -> int:
@@ -42,6 +93,12 @@ def main(argv=None) -> int:
             f"RELEASE REPORT FINALIZATION FAIL: identity section already exists: {report}",
             file=sys.stderr,
         )
+        return 1
+
+    try:
+        _validate_identity(args)
+    except ValueError as exc:
+        print(f"RELEASE REPORT FINALIZATION FAIL: {exc}", file=sys.stderr)
         return 1
 
     section = "\n".join(
