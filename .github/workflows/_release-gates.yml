@@ -821,20 +821,8 @@ jobs:
             # context on API 34+). adb root escalates so setprop is accepted.
             adb wait-for-device
             adb_root_ok=false
-            for _ in $(seq 1 3); do
-              if adb root; then
-                adb_root_ok=true
-                break
-              fi
-              echo "adb root not ready; retrying after emulator connection settles" >&2
-              sleep 5
-              adb wait-for-device
-            done
-            if [ "$adb_root_ok" != true ]; then
-              echo "FAIL: adb root did not become available after retries" >&2
-              adb get-state >&2 || true
-              exit 1
-            fi
+            for _ in $(seq 1 3); do if adb root; then adb_root_ok=true; break; fi; echo "adb root not ready; retrying after emulator connection settles" >&2; sleep 5; adb wait-for-device; done
+            if [ "$adb_root_ok" != true ]; then echo "FAIL: adb root did not become available after retries" >&2; adb get-state >&2 || true; exit 1; fi
             adb wait-for-device
             adb shell setprop ig.ci.tls_ca_path /data/local/tmp/ig_ca.pem
             adb push dist/android/ca.pem /data/local/tmp/ig_ca.pem
@@ -843,43 +831,15 @@ jobs:
             adb install -r dist/android/prev/interest-growth-android-x86_64-release.apk
             adb shell am force-stop app.psychologygrowth.desktop || true
             adb shell am start -W -n app.psychologygrowth.desktop/.MainActivity
-            for _ in $(seq 1 60); do
-              if adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then
-                echo "old upgrade app process is running"
-                break
-              fi
-              sleep 2
-            done
-            if ! adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then
-              echo "FAIL: old upgrade app did not remain running after launch" >&2
-              echo "--- old upgrade app crash buffer ---" >&2
-              adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true
-              echo "--- old upgrade app activity/process diagnostics ---" >&2
-              adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true
-              adb shell pidof app.psychologygrowth.desktop >&2 || true
-              exit 1
-            fi
+            for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then echo "old upgrade app process is running"; break; fi; sleep 2; done
+            if ! adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then echo "FAIL: old upgrade app did not remain running after launch" >&2; echo "--- old upgrade app crash buffer ---" >&2; adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true; echo "--- old upgrade app activity/process diagnostics ---" >&2; adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true; adb shell pidof app.psychologygrowth.desktop >&2 || true; exit 1; fi
             python3 scripts/ci/android_upgrade_driver.py --stage create --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_create.json --timeout-s 300
             echo "create stage: PASS"
             adb install -r dist/android/interest-growth-android-x86_64-release.apk
             adb shell am force-stop app.psychologygrowth.desktop || true
             adb shell am start -W -n app.psychologygrowth.desktop/.MainActivity
-            for _ in $(seq 1 60); do
-              if adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then
-                echo "new upgrade app process is running"
-                break
-              fi
-              sleep 2
-            done
-            if ! adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then
-              echo "FAIL: new upgrade app did not remain running after launch" >&2
-              echo "--- new upgrade app crash buffer ---" >&2
-              adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true
-              echo "--- new upgrade app activity/process diagnostics ---" >&2
-              adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true
-              adb shell pidof app.psychologygrowth.desktop >&2 || true
-              exit 1
-            fi
+            for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then echo "new upgrade app process is running"; break; fi; sleep 2; done
+            if ! adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then echo "FAIL: new upgrade app did not remain running after launch" >&2; echo "--- new upgrade app crash buffer ---" >&2; adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true; echo "--- new upgrade app activity/process diagnostics ---" >&2; adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true; adb shell pidof app.psychologygrowth.desktop >&2 || true; exit 1; fi
             echo "--- new app versionName/versionCode after install -r ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
             python3 scripts/ci/android_upgrade_driver.py --stage verify --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_verify.json --timeout-s 300
             grep -q '"result": "PASS"' /tmp/ig_upg_verify.json && echo "UPGRADE_IN_PLACE = PASS" || { echo "UPGRADE_IN_PLACE = FAIL (verify result)" >&2; exit 1; }
