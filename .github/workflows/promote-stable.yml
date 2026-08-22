@@ -63,16 +63,26 @@ jobs:
             exit 1
           fi
 
-          RUNS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/stable-candidate.yml/runs?event=workflow_dispatch&per_page=100")"
+          # `--paginate` can return multiple JSON documents. `--slurp` wraps
+          # every page in one JSON array so the parser never feeds a
+          # concatenated stream to json.loads().
+          RUNS="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/workflows/stable-candidate.yml/runs?event=workflow_dispatch&per_page=100")"
           CANDIDATE_SHA="${CANDIDATE_SHA}" python3 - <<'PY' "${RUNS}"
           import json
           import os
           import sys
 
           target = os.environ["CANDIDATE_SHA"]
-          payload = json.loads(sys.argv[1])
+          pages = json.loads(sys.argv[1])
+          if isinstance(pages, dict):
+              pages = [pages]
+          payload = [
+              run
+              for page in pages
+              for run in page.get("workflow_runs", [])
+          ]
           matches = [
-              run for run in payload.get("workflow_runs", [])
+              run for run in payload
               if run.get("head_sha") == target
               and run.get("status") == "completed"
               and run.get("conclusion") == "success"
