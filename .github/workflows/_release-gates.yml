@@ -825,15 +825,30 @@ jobs:
             adb push dist/android/ca.pem /data/local/tmp/ig_ca.pem
             adb shell getprop ig.ci.tls_ca_path | grep -q /data/local/tmp/ig_ca.pem || { echo "FAIL: TLS trust-root property not set" >&2; exit 1; }
             adb reverse tcp:18443 tcp:18443
+            launch_upgrade_app() {
+              adb shell am force-stop app.psychologygrowth.desktop || true
+              adb shell am start -W -n app.psychologygrowth.desktop/.MainActivity
+              for _ in $(seq 1 60); do
+                if adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then
+                  echo "upgrade app process is running"
+                  return 0
+                fi
+                sleep 2
+              done
+              echo "FAIL: upgrade app did not remain running after launch" >&2
+              echo "--- upgrade app crash buffer ---" >&2
+              adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true
+              echo "--- upgrade app activity/process diagnostics ---" >&2
+              adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true
+              adb shell pidof app.psychologygrowth.desktop >&2 || true
+              return 1
+            }
             adb install -r dist/android/prev/interest-growth-android-x86_64-release.apk
-            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
-            sleep 25
+            launch_upgrade_app
             python3 scripts/ci/android_upgrade_driver.py --stage create --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_create.json --timeout-s 300
             echo "create stage: PASS"
-            adb shell am force-stop app.psychologygrowth.desktop
             adb install -r dist/android/interest-growth-android-x86_64-release.apk
-            adb shell am start -n app.psychologygrowth.desktop/.MainActivity
-            sleep 30
+            launch_upgrade_app
             echo "--- new app versionName/versionCode after install -r ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
             python3 scripts/ci/android_upgrade_driver.py --stage verify --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_verify.json --timeout-s 300
             grep -q '"result": "PASS"' /tmp/ig_upg_verify.json && echo "UPGRADE_IN_PLACE = PASS" || { echo "UPGRADE_IN_PLACE = FAIL (verify result)" >&2; exit 1; }
