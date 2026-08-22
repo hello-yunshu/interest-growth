@@ -22,7 +22,7 @@ def main() -> int:
         "llama-index-core": "0.14.",
         "lightrag-hku": "1.5.",
         "graphrag": "3.1.",
-        "pageindex": "0.1.3",
+        "pageindex": "0.2.8",
     }
     for name, prefix in expected.items():
         if not versions[name].startswith(prefix):
@@ -39,12 +39,7 @@ def main() -> int:
     assert inspect.iscoroutinefunction(graphrag_api.build_index)
     assert inspect.iscoroutinefunction(graphrag_api.local_search)
     assert callable(PageIndexClient)
-    for method in (
-        "submit_document",
-        "get_tree_result",
-        "submit_retrieval_query",
-        "get_retrieval_result",
-    ):
+    for method in ("submit_document", "get_document", "get_tree", "submit_query", "get_retrieval"):
         assert callable(getattr(PageIndexClient, method))
 
     print(json.dumps(versions, sort_keys=True))
