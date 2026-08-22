@@ -89,6 +89,7 @@ jobs:
               echo "FAIL: tag '${TAG}' is not a supported Stable or prerelease tag" >&2
               exit 1
             fi
+            python3 scripts/ci/verify_release_identity.py --tag "${TAG}"
             ;;
           *)
             echo "FAIL: unsupported reusable release mode: '${{ inputs.mode }}'" >&2

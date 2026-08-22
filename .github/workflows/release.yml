@@ -77,6 +77,12 @@ jobs:
             echo "is_stable=${STABLE}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: "Fail-closed: tag version must match source version"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/verify_release_identity.py --tag "${{ steps.meta.outputs.tag }}"
+
       - name: "Fail-closed: tag must resolve to the exact build SHA"
         id: tag-proof
         shell: bash
