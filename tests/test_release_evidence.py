@@ -79,7 +79,10 @@ def test_finalize_release_report_appends_exact_identity(tmp_path):
 
 def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    reusable = (ROOT / ".github/workflows/_release-gates.yml").read_text(encoding="utf-8")
     assert "sha256sum -c SHA256SUMS.txt" in workflow
+    assert "verify_release_identity.py --tag" in workflow
+    assert "verify_release_identity.py --tag" in reusable
     assert "id: candidate-proof" in workflow
     assert "candidate_run_id=" in workflow
     assert "finalize_release_report.py" in workflow
@@ -87,6 +90,22 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "Final Release Run ID" in (ROOT / "scripts/ci/finalize_release_report.py").read_text(
         encoding="utf-8"
     )
+
+
+def test_release_identity_accepts_stable_and_rc_tags_and_rejects_mismatch(tmp_path):
+    module = load_script("verify_release_identity.py")
+    source = tmp_path / "pyproject.toml"
+    source.write_text('[project]\nversion = "1.0.20"\n', encoding="utf-8")
+
+    assert module.verify("v1.0.20", source) == ("1.0.20", "1.0.20")
+    assert module.verify("v1.0.20-rc.1", source) == ("1.0.20", "1.0.20")
+
+    try:
+        module.verify("v1.1.0-rc.1", source)
+    except ValueError as exc:
+        assert "tag version 1.1.0 != source version 1.0.20" in str(exc)
+    else:
+        raise AssertionError("mismatched release identity must fail")
 
 
 def test_checksum_fixture_matches_sha256(tmp_path):
