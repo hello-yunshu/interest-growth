@@ -176,6 +176,10 @@ def create_question(cdp, text, log, deadline):
     if not set_r.get("ok"):
         raise UpgradeError(f"set PromptBar textarea failed: {set_r}")
     log.append({"step": "prompt_fill", "ok": True, "chars": set_r.get("value")})
+    submit_r = _coerce(cdp.evaluate(js_press_enter("textarea")), {})
+    if not submit_r.get("ok"):
+        raise UpgradeError(f"submit PromptBar textarea failed: {submit_r}")
+    log.append({"step": "prompt_submit", "ok": True})
     ok = cae._wait_for(cdp, lambda: _body_contains(cdp, text),
                        "question rendered in the table", deadline, log)
     if not ok:
