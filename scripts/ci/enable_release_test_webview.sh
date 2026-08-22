@@ -37,13 +37,19 @@ anchor = "  override fun onCreate(savedInstanceState: Bundle?) {\n"
 if anchor not in text:
     raise SystemExit("MainActivity onCreate anchor not found")
 block = (
-    anchor
-    + "    // CI-only release-test CDP hook; never committed or shipped.\n"
+    "    // CI-only release-test CDP hook; never committed or shipped.\n"
+    + "    // Keep Android Keystore NDK initialization ahead of this call because\n"
+    + "    // native create() starts the Rust setup thread immediately afterward.\n"
     + "    if (CiFlags.ENABLE_WEBVIEW_REMOTE_DEBUGGING) {\n"
     + "      android.webkit.WebView.setWebContentsDebuggingEnabled(true)\n"
     + "    }\n"
 )
-path.write_text(text.replace(anchor, block, 1), encoding="utf-8")
+keyring_anchor = "    Keyring.initializeNdkContext(applicationContext)\n"
+if keyring_anchor in text:
+    text = text.replace(keyring_anchor, keyring_anchor + block, 1)
+else:
+    text = text.replace(anchor, anchor + block, 1)
+path.write_text(text, encoding="utf-8")
 PY
 
 echo "release-test WebView CDP hook enabled in throw-away source"
