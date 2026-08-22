@@ -59,6 +59,28 @@ def test_create_question_submits_prompt_after_filling():
     assert "js_press_enter(\"textarea\")" in inspect.getsource(d.create_question)
 
 
+def test_resilient_cdp_reconnects_after_transport_close():
+    class BrokenCdp:
+        def evaluate(self, _expression):
+            raise BrokenPipeError("closed")
+
+    class HealthyCdp:
+        def evaluate(self, _expression):
+            return {"ok": True}
+
+    session = object.__new__(d.ResilientCdp)
+    session._cdp = BrokenCdp()
+    reconnects = []
+
+    def reconnect():
+        reconnects.append(True)
+        session._cdp = HealthyCdp()
+
+    session._connect = reconnect
+    assert session.evaluate("1") == {"ok": True}
+    assert reconnects == [True]
+
+
 # ---------------------------------------------------------------------------
 # markers
 # ---------------------------------------------------------------------------

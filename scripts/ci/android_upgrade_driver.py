@@ -124,6 +124,32 @@ class UpgradeError(Exception):
     pass
 
 
+class ResilientCdp:
+    """Reconnect once when Android WebView reloads and closes its CDP socket."""
+
+    def __init__(self, adb, package, devtools_port):
+        self.adb = adb
+        self.package = package
+        self.devtools_port = devtools_port
+        self.pid = None
+        self._cdp = None
+        self._connect()
+
+    def _connect(self):
+        self.pid = cae.youtube_forward_devtools(
+            self.adb, self.package, self.devtools_port
+        )
+        ws_url = cae.discover_ws_url(self.devtools_port)
+        self._cdp = cae.Cdp(ws_url)
+
+    def evaluate(self, expression):
+        try:
+            return self._cdp.evaluate(expression)
+        except (BrokenPipeError, ConnectionError, OSError, cae.WsError):
+            self._connect()
+            return self._cdp.evaluate(expression)
+
+
 # ---------------------------------------------------------------------------
 # Flow building blocks.
 # ---------------------------------------------------------------------------
@@ -311,10 +337,8 @@ def main(argv=None):
         sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         return 1
     try:
-        pid = cae.youtube_forward_devtools(args.adb, args.package, args.devtools_port)
-        payload["app_pid"] = pid
-        ws_url = cae.discover_ws_url(args.devtools_port)
-        cdp = cae.Cdp(ws_url)
+        cdp = ResilientCdp(args.adb, args.package, args.devtools_port)
+        payload["app_pid"] = cdp.pid
 
         if args.stage == "create":
             nmarker = unique_marker()
