@@ -38,15 +38,15 @@ if anchor not in text:
     raise SystemExit("MainActivity onCreate anchor not found")
 block = (
     "    // CI-only release-test CDP hook; never committed or shipped.\n"
-    + "    // Keep Android Keystore NDK initialization ahead of this call because\n"
-    + "    // native create() starts the Rust setup thread immediately afterward.\n"
+    + "    // Runs after super.onCreate(): Tauri starts the native Rust setup thread\n"
+    + "    // during super, so enabling CDP must not race broker initialization.\n"
     + "    if (CiFlags.ENABLE_WEBVIEW_REMOTE_DEBUGGING) {\n"
     + "      android.webkit.WebView.setWebContentsDebuggingEnabled(true)\n"
     + "    }\n"
 )
-keyring_anchor = "    Keyring.initializeNdkContext(applicationContext)\n"
-if keyring_anchor in text:
-    text = text.replace(keyring_anchor, keyring_anchor + block, 1)
+super_anchor = "    super.onCreate(savedInstanceState)\n"
+if super_anchor in text:
+    text = text.replace(super_anchor, super_anchor + block, 1)
 else:
     text = text.replace(anchor, anchor + block, 1)
 path.write_text(text, encoding="utf-8")

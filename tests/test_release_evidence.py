@@ -164,9 +164,9 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     webview_patcher = (ROOT / "scripts/ci/enable_release_test_webview.sh").read_text(
         encoding="utf-8"
     )
-    assert "keyring_anchor =" in patcher
-    assert "keyring_anchor =" in webview_patcher
-    assert "Keep Android Keystore NDK initialization first" in patcher
+    assert "super_anchor =" in patcher
+    assert "super_anchor =" in webview_patcher
+    assert "must not race broker initialization" in webview_patcher
 
 
 def test_release_identity_accepts_stable_and_rc_tags_and_rejects_mismatch(tmp_path):
