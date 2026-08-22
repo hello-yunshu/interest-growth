@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_script(name: str):
+    path = ROOT / "scripts" / "ci" / name
+    spec = importlib.util.spec_from_file_location(name.replace(".py", ""), path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_finalize_release_report_appends_exact_identity(tmp_path):
+    module = load_script("finalize_release_report.py")
+    report = tmp_path / "V1_0_20_RELEASE_VERIFICATION.md"
+    report.write_text("# Interest Growth v1.0.20 — Release Verification Report\n", encoding="utf-8")
+
+    result = module.main(
+        [
+            "--report",
+            str(report),
+            "--candidate-sha",
+            "a" * 40,
+            "--candidate-run-id",
+            "123456789",
+            "--candidate-run-url",
+            "https://github.com/hello-yunshu/interest-growth/actions/runs/123456789",
+            "--candidate-conclusion",
+            "success",
+            "--tag",
+            "v1.0.20",
+            "--tag-sha",
+            "b" * 40,
+            "--release-run-id",
+            "987654321",
+            "--release-run-url",
+            "https://github.com/hello-yunshu/interest-growth/actions/runs/987654321",
+        ]
+    )
+
+    assert result == 0
+    content = report.read_text(encoding="utf-8")
+    assert "## Release Evidence Identity" in content
+    assert "| Stable Candidate SHA | `" + "a" * 40 + "` |" in content
+    assert "| Stable Candidate Run ID | `123456789` |" in content
+    assert "| Final Tag SHA | `" + "b" * 40 + "` |" in content
+    assert "| Final Release Run ID | `987654321` |" in content
+
+    assert module.main(
+        [
+            "--report",
+            str(report),
+            "--candidate-sha",
+            "NOT APPLICABLE",
+            "--candidate-run-id",
+            "NOT APPLICABLE",
+            "--candidate-run-url",
+            "NOT APPLICABLE",
+            "--candidate-conclusion",
+            "NOT APPLICABLE",
+            "--tag",
+            "v1.0.20",
+            "--tag-sha",
+            "b" * 40,
+            "--release-run-id",
+            "987654321",
+            "--release-run-url",
+            "NOT APPLICABLE",
+        ]
+    ) == 1
+
+
+def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "sha256sum -c SHA256SUMS.txt" in workflow
+    assert "id: candidate-proof" in workflow
+    assert "candidate_run_id=" in workflow
+    assert "finalize_release_report.py" in workflow
+    assert "generate_release_checksums.py" in workflow
+    assert "Final Release Run ID" in (ROOT / "scripts/ci/finalize_release_report.py").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_checksum_fixture_matches_sha256(tmp_path):
+    module = load_script("generate_release_checksums.py")
+    asset = tmp_path / "asset.txt"
+    asset.write_bytes(b"release evidence\n")
+    sums = tmp_path / "SHA256SUMS.txt"
+
+    assert module.main(["--out", str(sums), str(asset)]) == 0
+    expected = hashlib.sha256(asset.read_bytes()).hexdigest()
+    assert sums.read_text(encoding="utf-8") == f"{expected}  asset.txt\n"

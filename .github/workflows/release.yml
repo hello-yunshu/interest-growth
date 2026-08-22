@@ -45,6 +45,17 @@ jobs:
           name: formal-release-assets
           path: dist/release
 
+      - name: Verify downloaded canonical assets against SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/release/SHA256SUMS.txt
+          (
+            cd dist/release
+            sha256sum -c SHA256SUMS.txt
+          )
+          echo "CANONICAL RELEASE ASSET CHECKSUM SELF-VERIFICATION: PASS"
+
       - name: Resolve tag and release kind
         id: meta
         shell: bash
@@ -67,6 +78,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: "Fail-closed: tag must resolve to the exact build SHA"
+        id: tag-proof
         shell: bash
         run: |
           set -euo pipefail
@@ -77,8 +89,10 @@ jobs:
             exit 1
           }
           echo "tag ${TAG_SHA} and build SHA ${GITHUB_SHA} are identical"
+          echo "tag_sha=${TAG_SHA}" >> "${GITHUB_OUTPUT}"
 
       - name: "Fail-closed: Stable tag requires exact-SHA successful Candidate"
+        id: candidate-proof
         if: steps.meta.outputs.is_stable == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -89,7 +103,7 @@ jobs:
           # --slurp makes paginated gh output one JSON value. The flattening
           # below remains correct for the single-page case as well.
           RUNS="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/workflows/stable-candidate.yml/runs?event=workflow_dispatch&per_page=100")"
-          TARGET_SHA="${TARGET_SHA}" python3 - <<'PY' "${RUNS}"
+          CANDIDATE_PROOF="$(TARGET_SHA="${TARGET_SHA}" GITHUB_SERVER_URL="${GITHUB_SERVER_URL}" GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" python3 - <<'PY' "${RUNS}"
           import json
           import os
           import sys
@@ -108,8 +122,79 @@ jobs:
           ]
           if not matches:
               raise SystemExit("FAIL: Stable tag lacks exact-SHA successful Stable Candidate")
-          print(f"Candidate success run: {max(matches, key=lambda item: item.get('run_number', 0)).get('id')}")
+          candidate = max(matches, key=lambda item: item.get('run_number', 0))
+          run_id = candidate.get("id")
+          candidate_sha = candidate.get("head_sha")
+          run_url = candidate.get("html_url") or (
+              f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+              f"/actions/runs/{run_id}"
+          )
+          if not run_id or not candidate_sha:
+              raise SystemExit("FAIL: exact Stable Candidate result lacks identity fields")
+          print(f"candidate_run_id={run_id}")
+          print(f"candidate_sha={candidate_sha}")
+          print(f"candidate_url={run_url}")
+          print("candidate_conclusion=success")
           PY
+          )"
+          printf '%s\n' "${CANDIDATE_PROOF}" | tee -a "${GITHUB_OUTPUT}"
+
+      - name: Finalize release verification report with caller identity
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate-proof.outputs.candidate_sha }}
+          CANDIDATE_RUN_ID: ${{ steps.candidate-proof.outputs.candidate_run_id }}
+          CANDIDATE_RUN_URL: ${{ steps.candidate-proof.outputs.candidate_url }}
+          CANDIDATE_CONCLUSION: ${{ steps.candidate-proof.outputs.candidate_conclusion }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          REPORT="dist/release/V${VERSION//./_}_RELEASE_VERIFICATION.md"
+          TAG="${{ steps.meta.outputs.tag }}"
+          TAG_SHA="${{ steps.tag-proof.outputs.tag_sha }}"
+          if [ "${{ steps.meta.outputs.is_stable }}" = "true" ]; then
+            test -n "${CANDIDATE_SHA}"
+            test -n "${CANDIDATE_RUN_ID}"
+            test -n "${CANDIDATE_RUN_URL}"
+            test "${CANDIDATE_CONCLUSION}" = "success"
+          else
+            CANDIDATE_SHA="NOT APPLICABLE"
+            CANDIDATE_RUN_ID="NOT APPLICABLE"
+            CANDIDATE_RUN_URL="NOT APPLICABLE"
+            CANDIDATE_CONCLUSION="NOT APPLICABLE"
+          fi
+          python3 scripts/ci/finalize_release_report.py \
+            --report "${REPORT}" \
+            --candidate-sha "${CANDIDATE_SHA}" \
+            --candidate-run-id "${CANDIDATE_RUN_ID}" \
+            --candidate-run-url "${CANDIDATE_RUN_URL}" \
+            --candidate-conclusion "${CANDIDATE_CONCLUSION}" \
+            --tag "${TAG}" \
+            --tag-sha "${TAG_SHA}" \
+            --release-run-id "${GITHUB_RUN_ID}" \
+            --release-run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Regenerate final release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' FINAL_ASSETS < <(
+            find dist/release -maxdepth 1 -type f \
+              ! -name 'SHA256SUMS.txt' -print0 | sort -z
+          )
+          test "${#FINAL_ASSETS[@]}" -gt 0
+          python3 scripts/ci/generate_release_checksums.py \
+            --out dist/release/SHA256SUMS.txt "${FINAL_ASSETS[@]}"
+
+      - name: Verify final canonical assets against SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd dist/release
+            sha256sum -c SHA256SUMS.txt
+          )
+          echo "FINAL CANONICAL RELEASE ASSET CHECKSUM SELF-VERIFICATION: PASS"
 
       - name: Verify canonical formal asset contract
         shell: bash
