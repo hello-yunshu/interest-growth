@@ -153,6 +153,8 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "done; if [ \"$adb_root_ok\" != true ]; then" in reusable
     assert "for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop" in reusable
     assert "for attempt in 1 2 3; do if npm run tauri -- android build" in reusable
+    assert "create-stage crash buffer" in reusable
+    assert "verify-stage crash buffer" in reusable
     assert "Final Release Run ID" in (ROOT / "scripts/ci/finalize_release_report.py").read_text(
         encoding="utf-8"
     )
