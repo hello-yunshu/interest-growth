@@ -102,6 +102,17 @@ version strings look identical.
 
 All of: architecture intact, host canonical, P0–P4 journey complete, general interest works, psychology safety works, all three runtimes work, Android RuntimeConnect/compat/secure-storage/streaming-upload/export/minimal-capability correct, remote auth/revoke/refresh secure, cross-device verified, migration fixtures pass, backup clean restore pass, upgrade-in-place pass, desktop/Android builds pass, emulator product flow pass, repo integrity + source manifest + Python 3.11/3.12 + native core + RAG + web + rust + security gates pass, tag SHA == artifact SHA, release-gate green, SHA256SUMS + SBOM/provenance + release verification generated.
 
+### 6.1 Publication evidence integrity
+
+The caller-side publication job must verify the downloaded `formal-release-assets`
+bundle with `sha256sum -c SHA256SUMS.txt` before using any asset. After the
+exact-SHA Stable Candidate proof is resolved, it appends the Candidate SHA/run,
+final tag/tag SHA and Final Release run identity to
+`Vx_y_RELEASE_VERIFICATION.md`, regenerates `SHA256SUMS.txt`, and verifies the
+final checksum file again before attestation and publication. Stable Candidate
+identity is `NOT APPLICABLE` for RC releases, never an inferred or fabricated
+value.
+
 ## 7. External blockers (recorded honestly, never masked)
 
 Official 1.0 desktop signing assets require credentials the Coding Agent cannot fabricate:
