@@ -148,6 +148,7 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "generate_release_checksums.py" in workflow
     assert "adb shell am start -W -n app.psychologygrowth.desktop/.MainActivity" in reusable
     assert "adb shell pidof app.psychologygrowth.desktop" in reusable
+    assert "adb_root_ok=false" in reusable
     assert "Final Release Run ID" in (ROOT / "scripts/ci/finalize_release_report.py").read_text(
         encoding="utf-8"
     )

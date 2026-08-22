@@ -819,7 +819,22 @@ jobs:
             # google_apis is a userdebug image; the unprivileged shell domain
             # cannot set the arbitrary `ig.ci.*` property (SELinux property
             # context on API 34+). adb root escalates so setprop is accepted.
-            adb root
+            adb wait-for-device
+            adb_root_ok=false
+            for _ in $(seq 1 3); do
+              if adb root; then
+                adb_root_ok=true
+                break
+              fi
+              echo "adb root not ready; retrying after emulator connection settles" >&2
+              sleep 5
+              adb wait-for-device
+            done
+            if [ "$adb_root_ok" != true ]; then
+              echo "FAIL: adb root did not become available after retries" >&2
+              adb get-state >&2 || true
+              exit 1
+            fi
             adb wait-for-device
             adb shell setprop ig.ci.tls_ca_path /data/local/tmp/ig_ca.pem
             adb push dist/android/ca.pem /data/local/tmp/ig_ca.pem
