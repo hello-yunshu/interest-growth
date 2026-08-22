@@ -3682,6 +3682,21 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn mock_chunked_parser_rejects_malformed_chunk_size() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = TcpStream::connect(address).await.unwrap();
+        let (mut server, _) = listener.accept().await.unwrap();
+        let mut buffer = b"not-a-hex-size\r\n".to_vec();
+
+        let error = read_chunked_body(&mut server, &mut buffer, 0)
+            .await
+            .expect_err("malformed chunk size must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        drop(client);
+    }
+
     async fn read_chunked_body(
         stream: &mut TcpStream,
         buffer: &mut Vec<u8>,
@@ -3699,8 +3714,13 @@ mod tests {
             }
             let line_end = cursor + find_subsequence(&buffer[cursor..], b"\r\n").unwrap();
             let size_line = String::from_utf8_lossy(&buffer[cursor..line_end]);
-            let size = usize::from_str_radix(size_line.split(';').next().unwrap_or_default().trim(), 16)
-                .unwrap_or(0);
+            let size_text = size_line.split(';').next().unwrap_or_default().trim();
+            let size = usize::from_str_radix(size_text, 16).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid chunk size: {size_text:?}"),
+                )
+            })?;
             cursor = line_end + 2;
             if size == 0 {
                 // Consume the terminating CRLF and any optional trailers.

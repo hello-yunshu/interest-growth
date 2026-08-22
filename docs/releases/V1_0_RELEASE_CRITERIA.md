@@ -55,7 +55,7 @@ Before any 1.0 RC:
 
 ### 3.1 Version single-source consistency
 
-All user-visible version locations must agree with the canonical product version in `pyproject.toml` and are enforced by `scripts/verify_version_consistency.py` (wired into `scripts/verify.py` → CI `host` gate):
+All current-version fields must agree with the canonical product version in `pyproject.toml`. `MIN_CLIENT_VERSION` is separately validated as a compatibility floor and is not required to equal `SERVER_VERSION`. These rules are enforced by `scripts/verify_version_consistency.py` (wired into `scripts/verify.py` → CI `host` gate):
 
 - `pyproject.toml` → `project.version` (canonical)
 - `apps/api/pg_api/remote_auth.py` → `SERVER_VERSION`, `MIN_CLIENT_VERSION`

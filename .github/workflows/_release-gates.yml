@@ -2,8 +2,9 @@ name: Release Gates
 
 # Tag-triggered formal/RC release. Re-runs the critical gates on the tag
 # commit itself (never trusts "main was green"), builds + signs + verifies the
-# artifacts, then publishes a GitHub Release. Any required gate failure keeps
-# the release unpublished / draft (prompt §15 / §33).
+# artifacts, then hands a canonical read-only asset bundle to the caller.
+# Publication is intentionally owned by release.yml, where write permissions
+# are scoped to the caller-side publication job (prompt §15 / §33).
 #
 # Android signing is fail-closed: the release APK build REQUIRES the signing
 # material from GitHub secrets and FAILS if any piece is missing. A debug key
@@ -15,8 +16,9 @@ name: Release Gates
 #     (they are not an RC requirement, and are NEVER reported as PASS).
 #   * a Stable tag (vX.Y.Z) additionally requires the Stable-only gates:
 #     upgrade-in-place, cross-device, Windows/macOS packages, desktop
-#     package audit, and the exact-tag extended matrix. `publish-release`
-#     FAILS CLOSED for a Stable tag unless every Stable-only gate passes.
+#     package audit, and the exact-tag extended matrix. The caller-side
+#     publication job fails closed for a Stable tag unless every Stable-only
+#     gate passes.
 #
 # The Stable-only jobs deliberately run for BOTH tag kinds so GitHub's job
 # skip-propagation never drops them from `needs`; each one short-circuits on
@@ -1330,21 +1332,32 @@ jobs:
           bash scripts/ci/verify_clean_server_bundle.sh "${ARCHIVE}"
 
   release-asset-allowlist:
-    name: Stable release asset allowlist and SBOM dry-run
+    name: Canonical release asset staging, allowlist and SBOM
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [release-meta, android-signed-build, windows-package, macos-package, server-bundle]
+    needs:
+      - release-meta
+      - repo-integrity
+      - python-host
+      - python-3-11
+      - web
+      - rust
+      - docker-integration
+      - security-dependency
+      - android-signed-build
+      - android-emulator
+      - stable-exact-tag-extended
+      - android-upgrade-in-place
+      - cross-device
+      - windows-package
+      - macos-package
+      - desktop-package-audit
+      - server-bundle
+      - server-bundle-deployment
     steps:
-      - name: Stable-only gate — N/A for RC tag
-        if: needs.release-meta.outputs.is_stable != 'true'
-        run: |
-          echo "release-asset-allowlist: N/A for RC tag"
-          echo "Reported as NOT RUN for the RC; never PASS."
       - name: Check out source
-        if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download candidate artifacts
-        if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: interest-growth-android-artifacts
@@ -1368,24 +1381,45 @@ jobs:
           name: interest-growth-server-bundle
           path: dist/incoming/interest-growth-server-bundle
       - name: Validate formal release allowlist and checksums
-        if: needs.release-meta.outputs.is_stable == 'true'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/release dist/sbom-input
           cp dist/incoming/interest-growth-android-artifacts/interest-growth-android-arm64.apk dist/release/
-          find dist/incoming/desktop-package-windows -type f \( -name '*.exe' -o -name '*.msi' \) -exec cp {} dist/release/ \;
-          MAC_APP="$(find dist/incoming/desktop-package-macos -type d -name 'Interest Growth.app' -print -quit)"
-          if [ -n "${MAC_APP}" ]; then
+          if [ "${{ needs.release-meta.outputs.is_stable }}" = "true" ]; then
+            mapfile -t EXES < <(find dist/incoming/desktop-package-windows -type f -name '*.exe' | sort)
+            test "${#EXES[@]}" -eq 1 || {
+              echo "FAIL: expected exactly one Windows NSIS EXE, found ${#EXES[@]}" >&2
+              exit 1
+            }
+            cp "${EXES[0]}" dist/release/interest-growth-windows-x64-installer.exe
+
+            mapfile -t MSIS < <(find dist/incoming/desktop-package-windows -type f -name '*.msi' | sort)
+            if [ "${#MSIS[@]}" -gt 1 ]; then
+              echo "FAIL: expected zero or one Windows MSI, found ${#MSIS[@]}" >&2
+              exit 1
+            elif [ "${#MSIS[@]}" -eq 1 ]; then
+              cp "${MSIS[0]}" dist/release/interest-growth-windows-x64.msi
+            fi
+
+            mapfile -t MAC_APPS < <(find dist/incoming/desktop-package-macos -type d -name 'Interest Growth.app' | sort)
+            test "${#MAC_APPS[@]}" -eq 1 || {
+              echo "FAIL: expected exactly one macOS Interest Growth.app, found ${#MAC_APPS[@]}" >&2
+              exit 1
+            }
+            MAC_APP="${MAC_APPS[0]}"
             tar -czf 'dist/release/interest-growth-macos-arm64-app.tar.gz' -C "$(dirname "${MAC_APP}")" 'Interest Growth.app'
+
+            mapfile -t SERVER_ASSETS < <(find dist/incoming/interest-growth-server-bundle -maxdepth 1 -type f -name 'interest-growth-server-*.tar.gz' | sort)
+            test "${#SERVER_ASSETS[@]}" -eq 1 || {
+              echo "FAIL: expected exactly one server bundle, found ${#SERVER_ASSETS[@]}" >&2
+              exit 1
+            }
+            cp "${SERVER_ASSETS[0]}" dist/release/
           else
-            echo "FAIL: macOS Interest Growth.app missing from package artifact" >&2
-            exit 1
+            echo "RC asset contract: Android arm64 APK only; Stable-only desktop/server assets are NOT RUN."
           fi
-          find dist/incoming/interest-growth-server-bundle -type f -name '*.tar.gz' -exec cp {} dist/release/ \;
-          # Tauri's current Windows bundle is NSIS (.exe); MSI is optional and
-          # is included automatically if a future bundle configuration emits it.
-          test -n "$(find dist/incoming/desktop-package-windows -type f -name '*.exe' -print -quit)" || { echo "FAIL: Windows EXE missing" >&2; exit 1; }
+
           find dist/release -maxdepth 1 -type f -print
           for forbidden in 'x86_64' 'debug' 'release-test' '.pem' '.jks' '.keystore' 'raw-log'; do
             if find dist/release -maxdepth 1 -type f -iname "*${forbidden}*" | grep -q .; then
@@ -1394,20 +1428,71 @@ jobs:
             fi
           done
           test -s dist/release/interest-growth-android-arm64.apk
-          test -n "$(find dist/release -maxdepth 1 -type f -name 'interest-growth-server-*.tar.gz' -print -quit)"
-          python3 scripts/ci/generate_release_checksums.py --out dist/release/SHA256SUMS.txt dist/release/*
           cp dist/release/interest-growth-android-arm64.apk dist/sbom-input/
       - name: Generate candidate SBOM
-        if: needs.release-meta.outputs.is_stable == 'true'
         uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
         with:
           path: dist/sbom-input
           format: spdx-json
           output-file: dist/release/interest-growth-android-arm64.spdx.json
           upload-artifact: false
-      - name: Candidate release asset audit passed
-        if: needs.release-meta.outputs.is_stable == 'true'
-        run: 'echo "RELEASE ASSET ALLOWLIST + CHECKSUM + SBOM DRY-RUN: PASS"'
+      - name: Generate release verification report from this gate run
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
+          STABLE="${{ needs.release-meta.outputs.is_stable }}"
+          s() { if [ "${STABLE}" = "true" ]; then echo "$1=$2"; else echo "$1=NOT RUN (RC)"; fi; }
+          REPORT_ARGS=()
+          mapfile -d '' REPORT_ASSETS < <(find dist/release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
+          for asset in "${REPORT_ASSETS[@]}"; do REPORT_ARGS+=(--asset "${asset}"); done
+          ST_EXTENDED="$(s "stable-exact-tag-extended" "${{ needs.stable-exact-tag-extended.result }}")"
+          ST_UPGRADE="$(s "android-upgrade-in-place" "${{ needs.android-upgrade-in-place.result }}")"
+          ST_CROSS="$(s "cross-device" "${{ needs.cross-device.result }}")"
+          ST_WIN="$(s "windows-package" "${{ needs.windows-package.result }}")"
+          ST_MAC="$(s "macos-package" "${{ needs.macos-package.result }}")"
+          ST_DESK="$(s "desktop-package-audit" "${{ needs.desktop-package-audit.result }}")"
+          ST_SERVER="$(s "server-bundle" "${{ needs.server-bundle.result }}")"
+          ST_SERVER_DEPLOY="$(s "server-bundle-clean-deployment" "${{ needs.server-bundle-deployment.result }}")"
+          python3 scripts/ci/generate_release_report.py \
+            --out "dist/release/${REPORT}" \
+            "${REPORT_ARGS[@]}" \
+            --field "Node=22" --field "JDK=17" --field "Android SDK=36" --field "NDK=27.1" \
+            --field "Android ABI (release)=arm64-v8a" --field "Android ABI (emulator)=x86_64" \
+            --field "ReleaseKind=${{ needs.release-meta.outputs.is_candidate == 'true' && 'STABLE_CANDIDATE' || (needs.release-meta.outputs.is_stable == 'true' && 'STABLE' || 'RC') }}" \
+            --test-result "repo-integrity=${{ needs.repo-integrity.result }}" \
+            --test-result "python-host(3.12)=${{ needs.python-host.result }}" \
+            --test-result "python-host(3.11)=${{ needs.python-3-11.result }}" \
+            --test-result "web/ClientRuntime=${{ needs.web.result }}" \
+            --test-result "rust=${{ needs.rust.result }}" \
+            --test-result "docker-integration=${{ needs.docker-integration.result }}" \
+            --test-result "security-dependency=${{ needs.security-dependency.result }}" \
+            --test-result "android-signed-build=${{ needs.android-signed-build.result }}" \
+            --test-result "android-emulator=${{ needs.android-emulator.result }}" \
+            --test-result "android-ui-ipc-e2e=${{ needs.android-emulator.result }}" \
+            --test-result "${ST_EXTENDED}" --test-result "${ST_UPGRADE}" \
+            --test-result "${ST_CROSS}" --test-result "${ST_WIN}" \
+            --test-result "${ST_MAC}" --test-result "${ST_DESK}" \
+            --test-result "${ST_SERVER}" --test-result "${ST_SERVER_DEPLOY}" \
+            --not-run "physical Android device" \
+            --not-run "real public internet TLS (contract verified via Docker ephemeral HTTPS in CI)" \
+            --not-run "Windows code-signing certificate (external-managed; build+smoke verified, not signed)" \
+            --not-run "macOS Developer ID / notarization credentials (external-managed; build+smoke verified, not signed)"
+
+          CHECKSUM_ASSETS=()
+          mapfile -d '' CHECKSUM_ASSETS < <(find dist/release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
+          test "${#CHECKSUM_ASSETS[@]}" -gt 0
+          python3 scripts/ci/generate_release_checksums.py \
+            --out dist/release/SHA256SUMS.txt "${CHECKSUM_ASSETS[@]}"
+      - name: Upload canonical release asset staging
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: formal-release-assets
+          path: dist/release/*
+          if-no-files-found: error
+      - name: Canonical release asset audit passed
+        run: 'echo "RELEASE ASSET ALLOWLIST + CANONICAL STAGING + CHECKSUM + SBOM: PASS"'
 
   # ===========================================================================
 
@@ -1439,250 +1524,3 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: All required gates green
         run: 'echo "release-gate: PASS (all required jobs succeeded)"'
-
-  publish-release:
-    name: Publish GitHub Release
-    runs-on: ubuntu-latest
-    if: needs.release-meta.outputs.is_candidate != 'true'
-    needs:
-      - release-meta
-      - release-gate
-      - repo-integrity
-      - python-host
-      - python-3-11
-      - web
-      - rust
-      - docker-integration
-      - security-dependency
-      - android-signed-build
-      - android-emulator
-      - stable-exact-tag-extended
-      - android-upgrade-in-place
-      - cross-device
-      - windows-package
-      - macos-package
-      - desktop-package-audit
-      - server-bundle
-      - server-bundle-deployment
-      - release-asset-allowlist
-    environment: release
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Download signed release artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: interest-growth-android-artifacts
-          path: dist/android
-      - name: Download desktop package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: desktop-package-windows
-          path: dist/windows
-      - name: Download macOS package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: desktop-package-macos
-          path: dist/macos
-      - name: Download server bundle artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: interest-growth-server-bundle
-          path: dist/server
-      - name: Determine tag and prerelease flag
-        id: meta
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            PRE=false
-          elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+|beta\.[0-9]+|alpha\.[0-9]+|dev\.[0-9]+|pre\.[0-9]+)$ ]]; then
-            PRE=true
-          else
-            echo "FAIL: tag '${TAG}' is not a supported Stable or prerelease tag" >&2
-            exit 1
-          fi
-          STABLE=$([ "$PRE" = "true" ] && echo false || echo true)
-          {
-            echo "tag=${TAG}"
-            echo "prerelease=${PRE}"
-            echo "is_stable=${STABLE}"
-          } >> "$GITHUB_OUTPUT"
-      - name: "Fail-closed: tag must resolve to the exact build SHA"
-        # §16 / R0 — a formal release must never attach artifacts built from a
-        # different commit than the tag. For tag pushes GITHUB_SHA is the tag
-        # commit by construction; a formal release has no manual tag/version
-        # override path and therefore cannot build A and publish it as tag B.
-        run: |
-          test "${{ inputs.mode }}" = "release" || { echo "FAIL: formal release gates require mode=release" >&2; exit 1; }
-          TAG_REF="${{ steps.meta.outputs.tag }}"
-          git fetch --tags --force origin
-          TAG_SHA="$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || true)"
-          test -n "$TAG_SHA" || { echo "FAIL: pushed tag ${TAG_REF} cannot be resolved" >&2; exit 1; }
-          test "$TAG_SHA" = "$GITHUB_SHA" || { echo "FAIL: tag SHA != build SHA" >&2; exit 1; }
-          echo "tag ${TAG_REF} and build SHA ${GITHUB_SHA} are identical"
-      - name: "Fail-closed: Stable tag demands every Stable-only gate PASS"
-        # §24 — a Stable publish is FORBIDDEN unless every mandatory Stable-only
-        # gate succeeded. NOT RUN (an RC job that short-circuited) is never
-        # treated as PASS for a Stable tag. Because a Stable tag forces those
-        # jobs to run for real (they only short-circuit for RC), reaching here
-        # with is_stable=true already implies they ran; this step re-asserts it
-        # defensively so a future `needs` mistake cannot slip a Stable release
-        # through without the full matrix.
-        run: |
-          if [ "${{ steps.meta.outputs.is_stable }}" != "true" ]; then
-            echo "RC prerelease: Stable-only gates not required for this tag."
-            exit 0
-          fi
-          for job in stable-exact-tag-extended android-upgrade-in-place cross-device windows-package macos-package desktop-package-audit; do
-            case "${{ needs[format('{0}', job)].result }}" in
-              success) ;;
-              *) echo "FAIL: Stable-only gate ${job} is not success — Stable publish denied" >&2; exit 1 ;;
-            esac
-          done
-          echo "all Stable-only gates PASS — Stable publish permitted"
-      - name: "Package + hash release assets (never the debug APK)"
-        # §16 — the x86_64 debug APK exists only as an internal emulator
-        # artifact; it must never appear in the formal release checksums. All
-        # formal release assets (Android APK, Windows x64 package, macOS arm64
-        # package, server bundle) are hashed from the ACTUAL downloaded files.
-        # The macOS .app bundle directory is archived to a single .tar.gz so it
-        # can be a first-class release asset.
-        run: |
-          mkdir -p dist/release
-          cp dist/android/interest-growth-android-arm64.apk dist/release/
-          MAC_APP="$(find dist/macos -type d -name 'Interest Growth.app' -print -quit)"
-          if [ -z "${MAC_APP}" ]; then
-            echo "FAIL: macOS Interest Growth.app missing from package artifact" >&2
-            exit 1
-          fi
-          tar -czf dist/release/interest-growth-macos-arm64-app.tar.gz -C "$(dirname "${MAC_APP}")" "Interest Growth.app"
-          find dist/windows -type f \( -name "*.exe" -o -name "*.msi" \) -exec cp {} dist/release/ \; 2>/dev/null || true
-          find dist/server -type f -name "*.tar.gz" -exec cp {} dist/release/ \; 2>/dev/null || true
-          RELEASE_ASSETS=$(ls dist/release/)
-          echo "release assets:"
-          echo "$RELEASE_ASSETS"
-          [ -n "$RELEASE_ASSETS" ] || { echo "FAIL: no release assets collected" >&2; exit 1; }
-          # Single SHA256SUMS.txt over exactly the attached release files.
-          python3 scripts/ci/generate_release_checksums.py --out dist/release/SHA256SUMS.txt dist/release/*
-      - name: "Isolated SBOM scope (single formal release APK only) — §15"
-        # syft v1.x forces a `dir:` source, so we scan an isolated directory
-        # that contains ONLY the formal release APK — never the x86 debug APK
-        # or checksums. This keeps the SPDX subject's digest equal to the
-        # release asset.
-        run: |
-          rm -rf dist/sbom-input
-          mkdir -p dist/sbom-input
-          cp dist/release/interest-growth-android-arm64.apk dist/sbom-input/
-          echo "sbom-input now contains only the formal release APK:"
-          ls -la dist/sbom-input/
-      - name: Generate SBOM for release artifact (SPDX) — §12.4
-        uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
-        with:
-          path: dist/sbom-input
-          format: spdx-json
-          output-file: dist/release/interest-growth-android-arm64.spdx.json
-          artifact-name: interest-growth-sbom
-      - name: Attest build provenance for release artifact — §12.5
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
-        with:
-          subject-path: dist/release/interest-growth-android-arm64.apk
-      - name: Generate release verification report (per-job truthful)
-        # §16 — the report records the REAL conclusion of every job, not the
-        # aggregate. For an RC tag the Stable-only jobs short-circuit to
-        # `success`, so we re-label them as "NOT RUN (RC)" here; a Stable tag
-        # records their actual result. NOT RUN is never rendered as PASS.
-        run: |
-          STABLE="${{ steps.meta.outputs.is_stable }}"
-          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
-          s() { if [ "${STABLE}" = "true" ]; then echo "$1=$2"; else echo "$1=NOT RUN (RC)"; fi; }
-          ST_EXTENDED="$(s "stable-exact-tag-extended" "${{ needs.stable-exact-tag-extended.result }}")"
-          ST_UPGRADE="$(s "android-upgrade-in-place" "${{ needs.android-upgrade-in-place.result }}")"
-          ST_CROSS="$(s "cross-device" "${{ needs.cross-device.result }}")"
-          ST_WIN="$(s "windows-package" "${{ needs.windows-package.result }}")"
-          ST_MAC="$(s "macos-package" "${{ needs.macos-package.result }}")"
-          ST_DESK="$(s "desktop-package-audit" "${{ needs.desktop-package-audit.result }}")"
-          ST_SERVER="$(s "server-bundle" "${{ needs.server-bundle.result }}")"
-          ST_SERVER_DEPLOY="$(s "server-bundle-clean-deployment" "${{ needs.server-bundle-deployment.result }}")"
-          ST_ASSETS="$(s "release-asset-allowlist-sbom-checksum" "${{ needs.release-asset-allowlist.result }}")"
-          python3 scripts/ci/generate_release_report.py \
-            --out "dist/release/${REPORT}" \
-            --asset dist/release/interest-growth-android-arm64.apk \
-            --field "Node=22" --field "JDK=17" --field "Android SDK=36" --field "NDK=27.1" \
-            --field "Android ABI (release)=arm64-v8a" --field "Android ABI (emulator)=x86_64" \
-            --field "ReleaseKind=${{ steps.meta.outputs.is_stable == 'true' && 'STABLE' || 'RC' }}" \
-            --test-result "repo-integrity=${{ needs.repo-integrity.result }}" \
-            --test-result "python-host(3.12)=${{ needs.python-host.result }}" \
-            --test-result "python-host(3.11)=${{ needs.python-3-11.result }}" \
-            --test-result "web/ClientRuntime=${{ needs.web.result }}" \
-            --test-result "rust=${{ needs.rust.result }}" \
-            --test-result "docker-integration=${{ needs.docker-integration.result }}" \
-            --test-result "security-dependency=${{ needs.security-dependency.result }}" \
-            --test-result "android-signed-build=${{ needs.android-signed-build.result }}" \
-            --test-result "android-emulator=${{ needs.android-emulator.result }}" \
-            --test-result "android-ui-ipc-e2e=${{ needs.android-emulator.result }}" \
-            --test-result "${ST_EXTENDED}" \
-            --test-result "${ST_UPGRADE}" \
-            --test-result "${ST_CROSS}" \
-            --test-result "${ST_WIN}" \
-            --test-result "${ST_MAC}" \
-            --test-result "${ST_DESK}" \
-            --test-result "${ST_SERVER}" \
-            --test-result "${ST_SERVER_DEPLOY}" \
-            --test-result "${ST_ASSETS}" \
-            --not-run "physical Android device" \
-            --not-run "real public internet TLS (contract verified via Docker ephemeral HTTPS in CI)" \
-            --not-run "Windows code-signing certificate (external-managed; build+smoke verified, not signed)" \
-            --not-run "macOS Developer ID / notarization credentials (external-managed; build+smoke verified, not signed)"
-      - name: Build release body
-        id: body
-        run: |
-          STABLE="${{ steps.meta.outputs.is_stable }}"
-          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
-          if [ "${STABLE}" = "true" ]; then
-            EXTRA="
-              - **Stable gates:** exact-tag extended matrix + upgrade-in-place + cross-device + Windows x64 package + macOS arm64 package + desktop package audit + self-hosted server bundle + clean deployment + asset/SBOM/checksum audit all PASS
-              - **Desktop signing:** Windows Authenticode and Apple Developer ID / notarization are NOT RUN (external-managed credentials); desktop packages are built + startup-smoked, NOT claimed as officially signed"
-          else
-            EXTRA="
-              - **Stable-only gates:** N/A for this RC tag (Stable-only gates run on vX.Y.Z)"
-          fi
-          cat > "$RUNNER_TEMP/body.md" <<EOF
-          # Interest Growth ${{ steps.meta.outputs.tag }}
-
-          - **Commit:** ${{ github.sha }}
-          - **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          - **Supported platforms:** Android (arm64-v8a), Windows x64, macOS arm64$EXTRA
-          - **Verification:** source integrity + Host regression (3.11 + 3.12) + Web/ClientRuntime + Rust + Docker integration + Android signed build + APK static verification + Android emulator remote slice (see verification report asset)
-          - **Signing:** release certificate SHA-256 fingerprint is reported in the verification report (non-secret)
-          - **Known limitations / NOT RUN:** see ${REPORT} asset
-          - **Server compatibility:** v${VERSION} authenticated self-hosted Core (online-first, no offline sync)
-
-          Checksums are in SHA256SUMS.txt per asset set; the verification report is ${REPORT}.
-          EOF
-          echo "path=${RUNNER_TEMP}/body.md" >> "$GITHUB_OUTPUT"
-      - name: Create release
-        # --verify-tag: GitHub refuses to create the release if the tag does not
-        # exist at publish time. Combined
-        # with the explicit tag→SHA fail-closed check above, a release can never
-        # be created for a tag that isn't exactly the artifact build commit.
-        run: |
-          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
-          gh release create "${{ steps.meta.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --title "Interest Growth ${{ steps.meta.outputs.tag }}" \
-            --notes-file "${{ steps.body.outputs.path }}" \
-            --prerelease="${{ steps.meta.outputs.prerelease }}" \
-            --verify-tag \
-            dist/release/interest-growth-android-arm64.apk \
-            dist/release/SHA256SUMS.txt \
-            dist/release/interest-growth-android-arm64.spdx.json \
-            "dist/release/${REPORT}" \
-            dist/release/interest-growth-windows-*.exe \
-            dist/release/interest-growth-windows-*.msi \
-            dist/release/interest-growth-macos-arm64-app.tar.gz \
-            dist/release/interest-growth-server-*.tar.gz
-        env:
-          GH_TOKEN: ${{ github.token }}

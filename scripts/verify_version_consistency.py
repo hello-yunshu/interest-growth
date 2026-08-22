@@ -78,7 +78,7 @@ def _semver_lte(left: str, right: str) -> bool:
     a = _parse_semver(left)
     b = _parse_semver(right)
     if a is None or b is None:
-        return True  # non-strict-version strings are not compared arithmetically
+        return False  # invalid versions must never pass a compatibility check
     return a <= b
 
 
@@ -105,6 +105,10 @@ def main() -> int:
     min_client = _match(r'MIN_CLIENT_VERSION\s*=\s*"([^"]+)"', remote_text)
     if min_client is None:
         problems.append("remote_auth.MIN_CLIENT_VERSION: version not found")
+    elif _parse_semver(min_client) is None:
+        problems.append(f"remote_auth.MIN_CLIENT_VERSION: invalid semver {min_client!r}")
+    elif _parse_semver(canonical) is None:
+        problems.append(f"canonical product version: invalid semver {canonical!r}")
     elif not _semver_lte(min_client, canonical):
         problems.append(f"remote_auth.MIN_CLIENT_VERSION: {min_client!r} > canonical {canonical!r} (must never exceed the server version)")
     api_version = _match(r'API_VERSION\s*=\s*"([^"]+)"', remote_text)

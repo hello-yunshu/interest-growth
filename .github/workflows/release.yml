@@ -1,21 +1,204 @@
 name: Release
 
-# Formal publication is tag-push only. The reusable gate implementation lives
-# in _release-gates.yml and receives an explicit mode, so Stable/RC semantics
-# never depend on guessing the caller event or a manual prerelease boolean.
+# Formal publication is tag-push only. The reusable gate implementation is
+# read-only and produces the canonical asset staging artifact; only this
+# caller-side job receives publication and provenance permissions.
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  actions: read
+  contents: read
 
 jobs:
   release-gates:
+    permissions:
+      actions: read
+      contents: read
     uses: ./.github/workflows/_release-gates.yml
     with:
       mode: release
     secrets: inherit
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    if: needs.release-gates.result == 'success'
+    needs: release-gates
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    environment: release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download canonical release asset staging
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: formal-release-assets
+          path: dist/release
+
+      - name: Resolve tag and release kind
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            PRE=false
+          elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+|beta\.[0-9]+|alpha\.[0-9]+|dev\.[0-9]+|pre\.[0-9]+)$ ]]; then
+            PRE=true
+          else
+            echo "FAIL: tag '${TAG}' is not a supported Stable or prerelease tag" >&2
+            exit 1
+          fi
+          STABLE=$([ "${PRE}" = "true" ] && echo false || echo true)
+          {
+            echo "tag=${TAG}"
+            echo "prerelease=${PRE}"
+            echo "is_stable=${STABLE}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: "Fail-closed: tag must resolve to the exact build SHA"
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_SHA="$(git rev-list -n 1 "${{ steps.meta.outputs.tag }}" 2>/dev/null || true)"
+          test -n "${TAG_SHA}" || { echo "FAIL: pushed tag cannot be resolved" >&2; exit 1; }
+          test "${TAG_SHA}" = "${GITHUB_SHA}" || {
+            echo "FAIL: tag SHA ${TAG_SHA} != build SHA ${GITHUB_SHA}" >&2
+            exit 1
+          }
+          echo "tag ${TAG_SHA} and build SHA ${GITHUB_SHA} are identical"
+
+      - name: "Fail-closed: Stable tag requires exact-SHA successful Candidate"
+        if: steps.meta.outputs.is_stable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # --slurp makes paginated gh output one JSON value. The flattening
+          # below remains correct for the single-page case as well.
+          RUNS="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/workflows/stable-candidate.yml/runs?event=workflow_dispatch&per_page=100")"
+          TARGET_SHA="${TARGET_SHA}" python3 - <<'PY' "${RUNS}"
+          import json
+          import os
+          import sys
+
+          target = os.environ["TARGET_SHA"]
+          pages = json.loads(sys.argv[1])
+          if isinstance(pages, dict):
+              pages = [pages]
+          matches = [
+              run
+              for page in pages
+              for run in page.get("workflow_runs", [])
+              if run.get("head_sha") == target
+              and run.get("status") == "completed"
+              and run.get("conclusion") == "success"
+          ]
+          if not matches:
+              raise SystemExit("FAIL: Stable tag lacks exact-SHA successful Stable Candidate")
+          print(f"Candidate success run: {max(matches, key=lambda item: item.get('run_number', 0)).get('id')}")
+          PY
+
+      - name: Verify canonical formal asset contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="dist/release/V$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"].replace(".", "_"))')_RELEASE_VERIFICATION.md"
+          assets=(
+            "dist/release/interest-growth-android-arm64.apk"
+            "dist/release/SHA256SUMS.txt"
+            "dist/release/interest-growth-android-arm64.spdx.json"
+            "${REPORT}"
+          )
+          if [ "${{ steps.meta.outputs.is_stable }}" = "true" ]; then
+            assets+=("dist/release/interest-growth-windows-x64-installer.exe")
+            if [ -f dist/release/interest-growth-windows-x64.msi ]; then
+              assets+=("dist/release/interest-growth-windows-x64.msi")
+            fi
+            assets+=("dist/release/interest-growth-macos-arm64-app.tar.gz")
+            mapfile -t server_assets < <(find dist/release -maxdepth 1 -type f -name 'interest-growth-server-*.tar.gz' | sort)
+            test "${#server_assets[@]}" -eq 1 || { echo "FAIL: expected one server bundle" >&2; exit 1; }
+            assets+=("${server_assets[0]}")
+          fi
+          for asset in "${assets[@]}"; do
+            test -s "${asset}" || { echo "FAIL: missing formal release asset ${asset}" >&2; exit 1; }
+          done
+          printf '%s\n' "${assets[@]}"
+
+      - name: Attest Android arm64 provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: dist/release/interest-growth-android-arm64.apk
+
+      - name: Build release body
+        id: body
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          REPORT="V${VERSION//./_}_RELEASE_VERIFICATION.md"
+          if [ "${{ steps.meta.outputs.is_stable }}" = "true" ]; then
+            EXTRA="
+          - **Stable gates:** exact-SHA Candidate + exact-tag full matrix + canonical asset audit PASS
+          - **Desktop signing:** Windows Authenticode and Apple Developer ID / notarization are NOT RUN (external-managed credentials)"
+          else
+            EXTRA="
+          - **Stable-only gates:** NOT RUN for this RC tag"
+          fi
+          cat > "${RUNNER_TEMP}/body.md" <<EOF
+          # Interest Growth ${{ steps.meta.outputs.tag }}
+
+          - **Commit:** ${GITHUB_SHA}
+          - **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - **Verification:** reusable release gates + canonical asset staging + checksums + SBOM + provenance$EXTRA
+          - **Known limitations / NOT RUN:** see ${REPORT} asset
+
+          Checksums are in SHA256SUMS.txt; the verification report is ${REPORT}.
+          EOF
+          echo "path=${RUNNER_TEMP}/body.md" >> "${GITHUB_OUTPUT}"
+
+      - name: Create release with explicit asset array
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="dist/release/V$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"].replace(".", "_"))')_RELEASE_VERIFICATION.md"
+          assets=(
+            "dist/release/interest-growth-android-arm64.apk"
+            "dist/release/SHA256SUMS.txt"
+            "dist/release/interest-growth-android-arm64.spdx.json"
+            "${REPORT}"
+          )
+          if [ "${{ steps.meta.outputs.is_stable }}" = "true" ]; then
+            assets+=("dist/release/interest-growth-windows-x64-installer.exe")
+            if [ -f dist/release/interest-growth-windows-x64.msi ]; then
+              assets+=("dist/release/interest-growth-windows-x64.msi")
+            fi
+            assets+=("dist/release/interest-growth-macos-arm64-app.tar.gz")
+            mapfile -t server_assets < <(find dist/release -maxdepth 1 -type f -name 'interest-growth-server-*.tar.gz' | sort)
+            test "${#server_assets[@]}" -eq 1
+            assets+=("${server_assets[0]}")
+          fi
+          for asset in "${assets[@]}"; do
+            test -s "${asset}"
+          done
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Interest Growth ${{ steps.meta.outputs.tag }}" \
+            --notes-file "${{ steps.body.outputs.path }}" \
+            --prerelease="${{ steps.meta.outputs.prerelease }}" \
+            --verify-tag \
+            "${assets[@]}"
