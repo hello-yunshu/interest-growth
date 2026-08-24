@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import re
 from pathlib import Path
 
 
@@ -169,6 +170,20 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "must not race broker initialization" in webview_patcher
     assert "ci-old-startup-error.txt" in patcher
     assert "CI historical Android plugin surface" in patcher
+
+
+def test_tracked_workflows_use_readable_action_refs():
+    workflow_dir = ROOT / ".github/workflows"
+    bad = []
+    for path in workflow_dir.glob("*.yml"):
+        # This user-owned untracked scratch workflow is intentionally outside
+        # the product workflow set and must remain untouched.
+        if path.name == "release 2.yml":
+            continue
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"uses:.*@[0-9a-f]{40}\b|uses:.*@sha256:", text):
+            bad.append(path.name)
+    assert not bad, f"workflow Action refs must be readable tags/named refs: {bad}"
 
 
 def test_release_identity_accepts_stable_and_rc_tags_and_rejects_mismatch(tmp_path):

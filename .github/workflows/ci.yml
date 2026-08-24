@@ -19,13 +19,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
         with:
           fetch-depth: 2
       - name: Run actionlint on all workflows
-        # Pinned to a specific image digest (immutable, supply-chain hardening);
-        # `:latest` is mutable and would let the lint tool change under the CI.
-        uses: docker://rhysd/actionlint@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7
+        # Keep a readable tool version so the workflow policy does not depend
+        # on an opaque image digest.
+        uses: docker://rhysd/actionlint:1.7.7
         with:
           args: -color
 
@@ -35,11 +35,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
         with:
           fetch-depth: 2
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
       - name: Verify repository integrity (symlink/path/FileProvider/manifest scope)
@@ -57,9 +57,9 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -84,9 +84,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -112,9 +112,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -127,9 +127,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -157,13 +157,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 (latest stable release)
+        uses: dtolnay/rust-toolchain@stable # v1 (latest stable release)
         with:
           toolchain: stable
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -188,9 +188,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -207,7 +207,7 @@ jobs:
           python -m pip install -e ".[rag-graphrag]" pip-audit
           pip-audit --skip-editable --ignore-vuln PYSEC-2026-113
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -218,11 +218,11 @@ jobs:
           npm ci
           npm audit --omit=dev --audit-level=high
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
       - name: Install cargo-audit
-        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907
+        uses: taiki-e/install-action@main
         with:
           tool: cargo-audit
       - name: Audit Rust dependencies (high-confidence advisories)

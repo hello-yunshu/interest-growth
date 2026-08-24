@@ -29,11 +29,11 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@v3 # v3
       - name: Build Android toolchain image
-        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
+        uses: docker/build-push-action@v6 # v6
         with:
           context: .
           file: docker/android/Dockerfile
@@ -89,7 +89,7 @@ jobs:
       - name: Generate SHA256SUMS for artifacts
         run: python3 scripts/ci/generate_release_checksums.py --out dist/SHA256SUMS.txt dist/android/*.apk
       - name: Upload Android verify APK
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: interest-growth-android-arm64-debug
           path: |
@@ -106,18 +106,18 @@ jobs:
       contents: read
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with: { python-version: '3.12' }
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
           target: x86_64-pc-windows-msvc
@@ -151,7 +151,7 @@ jobs:
           cp "$SIDE" "$(dirname "$EXE")/psychology-growth-core.exe"
           bash scripts/ci/verify_packaged_startup.sh "$EXE" --win
       - name: Upload unsigned Windows artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: interest-growth-windows-x64-unsigned
           path: apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**
@@ -166,18 +166,18 @@ jobs:
       contents: read
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with: { python-version: '3.12' }
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
           target: aarch64-apple-darwin
@@ -208,7 +208,7 @@ jobs:
           test -x "$BIN" || { echo "no app binary: $BIN" >&2; exit 1; }
           bash scripts/ci/verify_packaged_startup.sh "$BIN" --mac
       - name: Upload ad-hoc macOS artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: interest-growth-macos-arm64-adhoc
           path: apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/**
