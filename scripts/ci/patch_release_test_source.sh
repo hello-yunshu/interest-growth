@@ -16,14 +16,18 @@
 # CI-release-test APK — it never alters the committed tag, never enables
 # debuggable, and never ships in a production artifact.
 #
-# The three transforms (each skipped if already present):
+# The four transforms (each skipped if already present):
 #   1. CiFlags.kt   -> ENABLE_WEBVIEW_REMOTE_DEBUGGING = true
 #   2. MainActivity -> call WebView.setWebContentsDebuggingEnabled(true) under
-#                      that flag, before super.onCreate (no new import: fully
+#                      that flag, after super.onCreate (no new import: fully
 #                      qualified). This does NOT set android:debuggable.
 #   3. remote.rs    -> http_client() additionally loads a PEM root from the
 #                      system property `ig.ci.tls_ca_path` on Android. Absent
 #                      property = production behavior unchanged (Mozilla roots).
+#   4. lib.rs       -> write a setup error to app-private storage if the old
+#                      release-test process aborts before the black-box driver
+#                      can connect. This is diagnostics only and is never used
+#                      by a production source tree.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -198,6 +202,40 @@ elif has_patch_symbol:
     changes.append("remote.rs: patch trust-root support already present (no-op)")
 else:
     changes.append("remote.rs: native R4 trust-root support present (no-op)")
+
+# ---------- 4. lib.rs startup diagnostics ----------
+# The old release-test APK is built from a historical tag. If its native
+# setup returns an error, Tauri aborts the process and the CDP driver can only
+# report that the app disappeared. Keep the exact setup error in app-private
+# storage so the emulator step can expose it without changing product code.
+lib = os.path.join(src, "apps/desktop/src-tauri/src/lib.rs")
+if not os.path.exists(lib):
+    die("lib.rs not found")
+with open(lib) as fh:
+    lib_txt = fh.read()
+diagnostic_marker = "ci-old-startup-error.txt"
+if diagnostic_marker not in lib_txt:
+    old_run = '''    builder
+        .run(tauri::generate_context!())
+        .expect("error while running Interest Growth desktop");'''
+    new_run = '''    if let Err(error) = builder.run(tauri::generate_context!()) {
+        let detail = format!("CI old Android startup error: {error:?}\\n{error}");
+        for path in [
+            "/data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-error.txt",
+            "/data/data/app.psychologygrowth.desktop/files/ci-old-startup-error.txt",
+        ] {
+            let _ = std::fs::write(path, &detail);
+        }
+        panic!("{detail}");
+    }'''
+    if old_run not in lib_txt:
+        die("lib.rs run error anchor not found")
+    lib_txt = lib_txt.replace(old_run, new_run, 1)
+    with open(lib, "w") as fh:
+        fh.write(lib_txt)
+    changes.append("lib.rs: added throw-away startup error diagnostic")
+else:
+    changes.append("lib.rs: startup error diagnostic already present (no-op)")
 
 for c in changes:
     print("  + " + c)

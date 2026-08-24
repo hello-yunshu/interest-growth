@@ -167,6 +167,7 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "super_anchor =" in patcher
     assert "super_anchor =" in webview_patcher
     assert "must not race broker initialization" in webview_patcher
+    assert "ci-old-startup-error.txt" in patcher
 
 
 def test_release_identity_accepts_stable_and_rc_tags_and_rejects_mismatch(tmp_path):
