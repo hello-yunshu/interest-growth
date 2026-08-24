@@ -16,7 +16,7 @@
 # CI-release-test APK — it never alters the committed tag, never enables
 # debuggable, and never ships in a production artifact.
 #
-# The four transforms (each skipped if already present):
+# The five transforms (each skipped if already present):
 #   1. CiFlags.kt   -> ENABLE_WEBVIEW_REMOTE_DEBUGGING = true
 #   2. MainActivity -> call WebView.setWebContentsDebuggingEnabled(true) under
 #                      that flag, after super.onCreate (no new import: fully
@@ -28,6 +28,10 @@
 #                      release-test process aborts before the black-box driver
 #                      can connect. This is diagnostics only and is never used
 #                      by a production source tree.
+#   5. lib.rs       -> keep shell/updater/dialog/fs plugins desktop-only, so a
+#                      historical Android release-test source does not abort
+#                      during native plugin initialization. This is the same
+#                      minimal Android surface as the current production source.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -236,6 +240,56 @@ if diagnostic_marker not in lib_txt:
     changes.append("lib.rs: added throw-away startup error diagnostic")
 else:
     changes.append("lib.rs: startup error diagnostic already present (no-op)")
+
+# ---------- 5. historical Android plugin surface ----------
+# v1.0.0-rc.3 registers desktop shell/updater/dialog/fs plugins on Android.
+# That old native plugin surface aborts before setup can return a Result on the
+# API 35 release-test emulator. Transplant the later, committed target_os split
+# into the throw-away old APK source. The Android behavior then matches the
+# current production plugin surface; desktop builds of the historical source
+# retain the original plugins. This is deliberately exact-anchor and fail-closed.
+android_plugin_marker = "CI historical Android plugin surface: desktop-only plugins"
+if android_plugin_marker not in lib_txt:
+    old_plugins = '''    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
+        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
+        // Android (no-op plugin on desktop). The SAF bridge lets the native
+        // layer read/write file bytes without a renderer base64 copy.
+        .plugin(android_bridge::init());'''
+    new_plugins = '''    // CI historical Android plugin surface: desktop-only plugins
+    // are excluded from the old release-test APK, matching the current
+    // production Android surface and preventing native plugin-init aborts.
+    let mut builder = tauri::Builder::default();
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder
+            .plugin(tauri_plugin_shell::init())
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_dialog::init())
+            .plugin(tauri_plugin_fs::init())
+            .plugin(tauri_plugin_opener::init());
+    }
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_opener::init());
+    }
+    builder = builder
+        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
+        // Android (no-op plugin on desktop). The SAF bridge lets the native
+        // layer read/write file bytes without a renderer base64 copy.
+        .plugin(android_bridge::init());'''
+    if old_plugins not in lib_txt:
+        die("historical Android plugin registration anchor not found")
+    lib_txt = lib_txt.replace(old_plugins, new_plugins, 1)
+    with open(lib, "w") as fh:
+        fh.write(lib_txt)
+    changes.append("lib.rs: transplanted minimal historical Android plugin surface")
+else:
+    changes.append("lib.rs: historical Android plugin surface already present (no-op)")
 
 for c in changes:
     print("  + " + c)
