@@ -58,7 +58,7 @@ jobs:
       is_candidate: ${{ steps.meta.outputs.is_candidate }}
     steps:
       - name: Check out source for exact-main verification
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Resolve tag, prerelease and stable flags
@@ -112,11 +112,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
         with:
           fetch-depth: 2
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
       - name: Verify repository integrity
@@ -130,9 +130,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -151,9 +151,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -172,9 +172,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -188,13 +188,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -212,7 +212,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Verify Docker integration (clean data volume, current commit)
         run: bash scripts/ci/verify_docker_integration.sh
 
@@ -226,9 +226,9 @@ jobs:
       cert-sha256: ${{ steps.signinfo.outputs.cert-sha256 }}
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@v3 # v3
       - name: "Fail-closed: all release signing secrets must be present"
         env:
           KS_B64: ${{ secrets.PG_ANDROID_KEYSTORE_B64 }}
@@ -247,7 +247,7 @@ jobs:
           chmod 600 "$RUNNER_TEMP/keystore/release.keystore"
           echo "keystore decoded to $RUNNER_TEMP/keystore/release.keystore"
       - name: Build Android toolchain image
-        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
+        uses: docker/build-push-action@v6 # v6
         with:
           context: .
           file: docker/android/Dockerfile
@@ -418,7 +418,7 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/keystore"
       - name: Upload signed release APK + emulator APK + checksums
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: interest-growth-android-artifacts
           path: |
@@ -435,14 +435,14 @@ jobs:
     needs: android-signed-build
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Download emulator x86_64 debug APK
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: interest-growth-android-artifacts
           path: dist/android
       - name: Set up JDK 17
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@v5.5.0 # v5.5.0
         with:
           distribution: temurin
           java-version: "17"
@@ -479,7 +479,7 @@ jobs:
           docker compose -p ig-emulator logs api >&2 || true
           exit 1
       - name: Boot emulator and run real remote vertical slice
-        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        uses: reactivecircus/android-emulator-runner@v2.37.0 # v2.37.0
         with:
           api-level: 35
           target: google_apis
@@ -531,9 +531,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -550,7 +550,7 @@ jobs:
           python -m pip install -e ".[rag-graphrag]" pip-audit
           pip-audit --skip-editable --ignore-vuln PYSEC-2026-113
       - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -561,11 +561,11 @@ jobs:
           npm ci
           npm audit --omit=dev --audit-level=high
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
       - name: Install cargo-audit
-        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907
+        uses: taiki-e/install-action@main
         with:
           tool: cargo-audit
       - name: Audit Rust dependencies (high-confidence advisories)
@@ -593,16 +593,16 @@ jobs:
           echo "Reported as NOT RUN for RC in the verification report; never PASS."
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
       - name: Set up Node
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
@@ -644,7 +644,7 @@ jobs:
           echo "Reported as NOT RUN for RC in the verification report; never PASS."
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: "Fail-closed: all release signing secrets must be present"
         if: needs.release-meta.outputs.is_stable == 'true'
         env:
@@ -669,10 +669,10 @@ jobs:
         # gha cache and fails this toolchain build ("Cache export is not
         # supported for the docker driver"). Mirrors the android-signed-build job.
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@v3 # v3
       - name: Build Android toolchain image
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6
+        uses: docker/build-push-action@v6 # v6
         with:
           context: .
           file: docker/android/Dockerfile
@@ -768,7 +768,7 @@ jobs:
           cp "${APK}" dist/android/prev/interest-growth-android-x86_64-release.apk
       - name: Download current signed release APKs (new side)
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: interest-growth-android-artifacts
           path: dist/android
@@ -787,7 +787,7 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/keystore"
       - name: Set up JDK 17
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@v5.5.0 # v5.5.0
         with:
           distribution: temurin
           java-version: "17"
@@ -807,7 +807,7 @@ jobs:
           test -s dist/android/ca.pem || { echo "FAIL: ephemeral CI CA not staged" >&2; exit 1; }
       - name: Emulator — real N -> N+1 upgrade (black-box CDP, non-debuggable), §11
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        uses: reactivecircus/android-emulator-runner@v2.37.0 # v2.37.0
         with:
           api-level: 35
           target: google_apis
@@ -857,7 +857,7 @@ jobs:
           echo "Reported as NOT RUN for RC in the verification report; never PASS."
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Server multi-device canonical-state integration (§10, layer 1)
         if: needs.release-meta.outputs.is_stable == 'true'
         # Server-level canonical-state proof only (evidence level SERVER_
@@ -968,13 +968,13 @@ jobs:
       # =========================================================================
       - name: Download emulator x86_64 debug APK
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: interest-growth-android-artifacts
           path: dist/android
       - name: Set up JDK 17
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@v5.5.0 # v5.5.0
         with:
           distribution: temurin
           java-version: "17"
@@ -986,7 +986,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: Set up Rust
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
       - name: Install Tauri Linux system dependencies
@@ -1090,7 +1090,7 @@ jobs:
           echo "Desktop A a_create: PASS"
       - name: Boot Android emulator — B slices + A revoke orchestration (§10, layer 2)
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+        uses: reactivecircus/android-emulator-runner@v2.37.0 # v2.37.0
         with:
           api-level: 35
           target: google_apis
@@ -1129,22 +1129,22 @@ jobs:
           echo "Reported as NOT RUN for RC in the verification report; never PASS."
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
       - name: Set up Node
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Set up Rust (x86_64-pc-windows-msvc)
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
@@ -1176,7 +1176,7 @@ jobs:
           bash scripts/ci/verify_packaged_startup.sh "${APP_BIN}" --win
       - name: Upload Windows package artifact
         if: always() && needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: desktop-package-windows
           path: |
@@ -1197,22 +1197,22 @@ jobs:
           echo "Reported as NOT RUN for RC in the verification report; never PASS."
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Python
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
           python-version: "3.12"
       - name: Set up Node
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Set up Rust (aarch64-apple-darwin)
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@stable # v1
         with:
           toolchain: stable
           targets: aarch64-apple-darwin
@@ -1244,7 +1244,7 @@ jobs:
           bash scripts/ci/verify_packaged_startup.sh "${APP_BIN}" --mac
       - name: Upload macOS package artifact
         if: always() && needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: desktop-package-macos
           path: apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/**/*
@@ -1284,7 +1284,7 @@ jobs:
           echo "Reported as NOT RUN for RC in the verification report; never PASS."
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Verify server source integrity
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
@@ -1302,7 +1302,7 @@ jobs:
           ls -la dist/release/server/
       - name: Upload server bundle artifact
         if: always() && needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: interest-growth-server-bundle
           path: dist/release/server/*
@@ -1321,10 +1321,10 @@ jobs:
           echo "Reported as NOT RUN for the RC; never PASS."
       - name: Check out verification script
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Download server bundle
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: interest-growth-server-bundle
           path: dist/server
@@ -1360,27 +1360,27 @@ jobs:
       - server-bundle-deployment
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Download candidate artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: interest-growth-android-artifacts
           path: dist/incoming/interest-growth-android-artifacts
       - name: Download Windows candidate artifact
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: desktop-package-windows
           path: dist/incoming/desktop-package-windows
       - name: Download macOS candidate artifact
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: desktop-package-macos
           path: dist/incoming/desktop-package-macos
       - name: Download server candidate artifact
         if: needs.release-meta.outputs.is_stable == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4 # v4
         with:
           name: interest-growth-server-bundle
           path: dist/incoming/interest-growth-server-bundle
@@ -1434,7 +1434,7 @@ jobs:
           test -s dist/release/interest-growth-android-arm64.apk
           cp dist/release/interest-growth-android-arm64.apk dist/sbom-input/
       - name: Generate candidate SBOM
-        uses: anchore/sbom-action@62ad5284b8ced813296287a0b63906cb364b73ee
+        uses: anchore/sbom-action@main
         with:
           path: dist/sbom-input
           format: spdx-json
@@ -1490,7 +1490,7 @@ jobs:
           python3 scripts/ci/generate_release_checksums.py \
             --out dist/release/SHA256SUMS.txt "${CHECKSUM_ASSETS[@]}"
       - name: Upload canonical release asset staging
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: formal-release-assets
           path: dist/release/*
@@ -1525,6 +1525,6 @@ jobs:
       - release-asset-allowlist
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1 # v7.0.1
       - name: All required gates green
         run: 'echo "release-gate: PASS (all required jobs succeeded)"'
