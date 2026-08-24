@@ -721,11 +721,11 @@ jobs:
           echo "published_baseline_apk=${PUBLISHED}" >> "$GITHUB_ENV"
           echo "PUBLISHED_BASELINE_APK_SHA256=$(sha256sum "${PUBLISHED}" | awk '{print $1}')" >> "$GITHUB_STEP_SUMMARY"
       - name: Build-time transplant CI hooks into old release-test source, §11
-        # The previous exact tag predates R4's WebView CDP enablement and the
-        # native CI TLS trust-root injection. patch_release_test_source.sh applies
-        # exactly those three committed, gated enablers (CiFlags + MainActivity
-        # CDP + remote.rs trust-root). It does NOT set android:debuggable and is
-        # applied ONLY to a throwaway CI-release-test APK, never the product.
+        # The previous exact tag predates R4's WebView CDP/TLS hooks and the
+        # later minimal Android plugin surface. patch_release_test_source.sh
+        # applies only committed, gated CI enablers to a throw-away APK: CDP,
+        # TLS trust-root, startup diagnostics, and the desktop-only plugin split.
+        # It does NOT set android:debuggable and never changes the product.
         if: needs.release-meta.outputs.is_stable == 'true'
         run: bash scripts/ci/patch_release_test_source.sh prev_src
       - name: Create Android sidecar placeholders for the old tauri-build
