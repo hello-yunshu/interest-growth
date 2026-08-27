@@ -2,7 +2,9 @@
 # APK static verification gate (prompt §9.2 / §30).
 #
 # Used identically by PR CI, main artifact builds and tag releases. It proves
-# an APK is honest BEFORE it is uploaded or signed as release material:
+# an APK is honest BEFORE it is uploaded or signed as release material. The
+# caller must declare the build profile; the artifact filename is never used to
+# decide whether debug/test markers are acceptable:
 #
 #   * metadata (applicationId / versionName / versionCode / minSdk / targetSdk)
 #   * ABI set matches the artifact name (never call an arm64-only APK universal)
@@ -13,32 +15,63 @@
 #
 # Content checks run with `unzip -l` so they work on any host. Metadata checks
 # use `aapt dump badging` when aapt/aapt2 is on PATH (e.g. inside the Android
-# Docker toolchain); otherwise the metadata block is reported as SKIPPED so the
-# gate is honest, never a silent pass.
+# Docker toolchain). Debug may skip metadata when the tool is unavailable;
+# release-test and release fail closed.
 #
 # Usage:
-#   scripts/ci/verify_android_apk.sh <apk> [<apk> ...]
-#   e.g. scripts/ci/verify_android_apk.sh apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
-#   Add --require-aapt to fail (not skip) when aapt/aapt2 is not on PATH —
-#   used by release jobs so a missing metadata tool can never become a pass
-#   (Gate R2 §13.1).
+#   scripts/ci/verify_android_apk.sh --profile debug <apk> [<apk> ...]
+#   scripts/ci/verify_android_apk.sh --profile release-test --require-aapt <apk>
+#   scripts/ci/verify_android_apk.sh --profile release --require-aapt <apk>
+#   Add --require-aapt to make the metadata tool requirement explicit for a
+#   release-like caller (release also implies it).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
 REQUIRE_AAPT=0
+PROFILE=""
 APKS=()
-for arg in "$@"; do
-  if [ "${arg}" = "--require-aapt" ]; then
-    REQUIRE_AAPT=1
-  else
-    APKS+=("${arg}")
-  fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --require-aapt)
+      REQUIRE_AAPT=1
+      shift
+      ;;
+    --profile)
+      if [ "$#" -lt 2 ]; then
+        echo "FAIL: --profile requires debug, release-test or release" >&2
+        exit 2
+      fi
+      PROFILE="$2"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE="${1#*=}"
+      shift
+      ;;
+    --)
+      shift
+      APKS+=("$@")
+      break
+      ;;
+    -* )
+      echo "FAIL: unknown option: $1" >&2
+      exit 2
+      ;;
+    *)
+      APKS+=("$1")
+      shift
+      ;;
+  esac
 done
 
+if [[ "${PROFILE}" != "debug" && "${PROFILE}" != "release-test" && "${PROFILE}" != "release" ]]; then
+  echo "FAIL: --profile must be one of: debug, release-test, release" >&2
+  exit 2
+fi
 if [ "${#APKS[@]}" -eq 0 ]; then
-  echo "usage: $0 [--require-aapt] <apk> [<apk> ...]" >&2
+  echo "usage: $0 --profile <debug|release-test|release> [--require-aapt] <apk> [<apk> ...]" >&2
   exit 2
 fi
 
@@ -56,8 +89,8 @@ for cand in aapt aapt2; do
     break
   fi
 done
-if [ -z "${AAPT}" ] && [ "${REQUIRE_AAPT}" -eq 1 ]; then
-  echo "FAIL: aapt/aapt2 not on PATH but --require-aapt was set (Gate R2 §13.1)" >&2
+if [ -z "${AAPT}" ] && { [ "${REQUIRE_AAPT}" -eq 1 ] || [ "${PROFILE}" != "debug" ]; }; then
+  echo "FAIL: aapt/aapt2 not on PATH for ${PROFILE} profile (release-like profiles fail closed; Gate R2 §13.1)" >&2
   exit 1
 fi
 
@@ -94,22 +127,36 @@ check_contents() {
     fail "network_security_config.xml is missing: ${apk}"
   fi
 
-  # Production arm64 is built without the CI-only trust-root feature. Inspect
-  # native strings rather than source paths: the compile-time contract is that
-  # the property, loader marker and upgrade-test/WebView-debug hooks are absent
-  # from the production binary. The x86_64 release-test APK is intentionally
-  # allowed to contain these markers and is never a release asset.
-  local base
-  base="$(basename "${apk}")"
-  if [[ "${base}" == *arm64* && "${base}" != *release-test* ]]; then
-    local apk_strings
-    apk_strings="$(while read -r entry; do unzip -p "${apk}" "${entry}" 2>/dev/null || true; done < <(unzip -Z1 "${apk}") | strings || true)"
-    for needle in 'ig.ci.tls_ca_path' 'android-ci-trust-root' 'upgrade-test' 'ENABLE_WEBVIEW_REMOTE_DEBUGGING' 'setWebContentsDebuggingEnabled'; do
-      if grep -qF "${needle}" <<<"${apk_strings}"; then
-        fail "production arm64 APK contains CI/test marker (${needle}): ${apk}"
-      fi
-    done
-  fi
+  # Marker policy is selected only by the explicit profile. This prevents a
+  # debug APK from becoming a false production failure merely because its
+  # filename contains arm64, and prevents a release APK from becoming lenient
+  # merely because its filename contains release-test.
+  local apk_strings
+  apk_strings="$(while read -r entry; do unzip -p "${apk}" "${entry}" 2>/dev/null || true; done < <(unzip -Z1 "${apk}") | strings || true)"
+  local marker
+  local release_markers=(
+    'ig.ci.tls_ca_path'
+    'android-ci-trust-root'
+    'upgrade-test'
+    'ENABLE_WEBVIEW_REMOTE_DEBUGGING'
+    'setWebContentsDebuggingEnabled'
+  )
+  case "${PROFILE}" in
+    debug)
+      echo "  profile: debug (normal debug tooling markers allowed)"
+      ;;
+    release-test)
+      echo "  profile: release-test (CI-only markers allowed; never a release asset)"
+      ;;
+    release)
+      echo "  profile: release (all CI/test markers forbidden)"
+      for marker in "${release_markers[@]}"; do
+        if grep -qF "${marker}" <<<"${apk_strings}"; then
+          fail "release APK contains CI/test marker (${marker}): ${apk}"
+        fi
+      done
+      ;;
+  esac
 
   # Native .so hygiene: at least one ABI lib dir, and exactly one canonical
   # cdylib name across all of them (libapp_<ident> is the Tauri Rust dylib).
@@ -135,7 +182,7 @@ check_contents() {
 check_metadata() {
   local apk="$1"
   if [ -z "${AAPT}" ]; then
-    echo "[apk:$(basename "${apk}")] metadata checks: SKIPPED (aapt/aapt2 not on PATH)"
+    echo "[apk:$(basename "${apk}")] metadata checks: SKIPPED (debug profile; aapt/aapt2 not on PATH)"
     return
   fi
   echo "[apk:$(basename "${apk}")] metadata checks (${AAPT})"
@@ -146,10 +193,13 @@ check_metadata() {
     return
   fi
   for field in application-label package versionName versionCode sdkVersion targetSdkVersion native-code; do
-    if ! grep -qE "(^|:)${field}" <<<"${badging}"; then
+    if ! grep -qE "(^|[[:space:]:])${field}([=:]|$)" <<<"${badging}"; then
       echo "  ${field}: (absent)"
+      if [[ "${PROFILE}" == "release" || "${PROFILE}" == "release-test" ]] && [[ "${field}" != "application-label" ]]; then
+        fail "release-like APK metadata field is missing (${field}): ${apk}"
+      fi
     else
-      echo "  ${field}: $(grep -E "(^|:)${field}" <<<"${badging}" | head -1 | tr -d '\r')"
+      echo "  ${field}: $(grep -E "(^|[[:space:]:])${field}([=:]|$)" <<<"${badging}" | head -1 | tr -d '\r')"
     fi
   done
   # The artifact naming rule (prompt §21): a universal APK must actually carry

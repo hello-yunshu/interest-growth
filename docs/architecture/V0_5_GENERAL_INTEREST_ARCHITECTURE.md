@@ -1,4 +1,10 @@
-# Interest Growth v0.5 — General Interest Architecture
+# Interest Growth v0.5 — General Interest Architecture (historical)
+
+This historical architecture remains useful for the four-layer and Area
+boundaries. Its old external DeepTutor provider references describe an earlier
+integration phase, not the current Native Tutor runtime. See
+`docs/architecture/01_ARCHITECTURE.md` and
+`docs/development/DEVELOPMENT_CONTRACT.md` for current truth.
 
 ## Product identity
 
@@ -9,7 +15,7 @@ The architecture separates four concepts:
 1. **Interest Area** — what the user is cultivating (Psychology, watercolor, programming, photography, etc.).
 2. **Capability Plugin** — what the product can do (curiosity, research, knowledge/RAG, mastery, practice, notebook, tutor, writing, book, content...).
 3. **Domain Pack** — how those capabilities should behave for a subject/interest family (prompts, evidence policy, mastery profile, skills, personas, capability defaults).
-4. **Capability Provider** — optional external execution (DeepSeek, DeepTutor, future providers).
+4. **Capability Provider** — optional model transport (DeepSeek-compatible API and future providers).
 
 `Plugin = what`, `Domain Pack = how`, `Provider = who executes`, `Interest Area = what the user is cultivating`.
 
@@ -35,8 +41,7 @@ Interest Growth Desktop
 │   ├── general
 │   └── psychology (default)
 └── Optional Capability Providers
-    ├── DeepSeek
-    └── DeepTutor
+    └── DeepSeek-compatible transport and future providers
 ```
 
 The user-owned database, Source vault, Artifact vault, Evidence/Claim ledger, Mastery, Practice, Notes, Writing and Books remain canonical local product data.
@@ -87,7 +92,7 @@ This is trusted first-party capability enforcement, **not** hostile-code sandbox
 
 ## Provider boundary
 
-DeepSeek and DeepTutor adapters receive Domain context but do not own Domain policy. DeepTutor remains a separately disableable provider plugin and sidecar. Disabling it leaves local Areas, Sources, Notes, Practice, Writing, Books and Growth Memory intact.
+Historical DeepSeek/DeepTutor adapters received Domain context but did not own Domain policy. The current Native Tutor runtime is product-owned; optional model transport remains replaceable and disabling it leaves local Areas, Sources, Notes, Practice, Writing, Books and Growth Memory intact.
 
 Retrieval remains `candidate_not_evidence`; provider memory remains auxiliary; provider Book/Notebook/Persona/Skill state is a projection.
 

@@ -1,5 +1,10 @@
 # 02 · Domain Model
 
+**Current runtime note:** Native Tutor is the product-owned canonical Tutor
+runtime. Any DeepTutor wording in this historical model catalog refers only to
+derivative or historical provider projections; it must not be read as a current
+runtime dependency. See `docs/development/DEVELOPMENT_CONTRACT.md`.
+
 ## Product composition entities
 
 | Entity | Meaning |
@@ -97,8 +102,8 @@ General adaptive profile:
 
 `unfamiliar → familiar → understand → practice → apply → reflect → transfer → self_directed`
 
-Practice results, DeepTutor output and AI judgment never automatically promote Mastery; promotion remains user/product-owned and evidence-aware.
+Practice results, model output and AI judgment never automatically promote Mastery; promotion remains user/product-owned and evidence-aware.
 
 ## Provider ownership
 
-DeepSeek/DeepTutor projections are derivative. Upstream session IDs, KB IDs, Persona projections, Notebook records, Question Notebook records, Book IDs and auxiliary Memory never become canonical product identity.
+Provider projections are derivative. External session IDs, KB IDs, Persona projections, Notebook records, Question Notebook records, Book IDs and auxiliary Memory never become canonical product identity.

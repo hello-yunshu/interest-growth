@@ -1,4 +1,9 @@
-# ADR 0002 · DeepTutor is an optional capability provider
+# ADR 0002 · DeepTutor was an optional capability provider (superseded)
+
+**Status:** historical decision; superseded for current runtime by ADR 0006
+and the Native Tutor implementation. The boundary principles below remain
+useful migration history, but DeepTutor is not a current runtime/provider
+dependency.
 
 **Status:** Superseded by ADR 0006 · retained as project history
 

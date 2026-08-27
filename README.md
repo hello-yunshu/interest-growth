@@ -138,7 +138,7 @@ The approved next direction is an additive self-hosted mode rather than a replac
 
 Normative planning documents:
 
-- `docs/ai-coding/13_SELF_HOSTED_CROSS_DEVICE_ANDROID_PROMPT.md`
+- `docs/development/DEVELOPMENT_CONTRACT.md`
 - `docs/architecture/V0_7_SELF_HOSTED_CROSS_DEVICE_BLUEPRINT.md`
 - `docs/roadmap/V0_7_SELF_HOSTED_CROSS_DEVICE_PLAN.md`
 - `docs/design/V0_7_CROSS_DEVICE_CLIENT_DESIGN.md`
@@ -198,7 +198,7 @@ python scripts/self_audit.py
 - `docs/audits/V0_4_1_GENERAL_INTEREST_AUDIT.md`
 - `docs/audits/V0_5_GENERAL_INTEREST_AUDIT.md`
 - `RELEASE_NOTES_v0.5.0-general-interest-core.md`
-- `docs/ai-coding/13_SELF_HOSTED_CROSS_DEVICE_ANDROID_PROMPT.md`
+- `docs/development/DEVELOPMENT_CONTRACT.md`
 - `docs/architecture/V0_7_SELF_HOSTED_CROSS_DEVICE_BLUEPRINT.md`
 - `docs/roadmap/V0_7_SELF_HOSTED_CROSS_DEVICE_PLAN.md`
 - `docs/design/V0_7_CROSS_DEVICE_CLIENT_DESIGN.md`
