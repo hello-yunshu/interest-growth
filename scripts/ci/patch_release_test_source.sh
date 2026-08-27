@@ -262,7 +262,8 @@ if android_plugin_marker not in lib_txt:
         .plugin(android_bridge::init());'''
     new_plugins = '''    // CI historical Android plugin surface: desktop-only plugins
     // are excluded from the old release-test APK, matching the current
-    // production Android surface and preventing native plugin-init aborts.
+    // production broker + WebView surface and preventing native plugin-init
+    // aborts in the historical generated Android host.
     let mut builder = tauri::Builder::default();
     #[cfg(not(target_os = "android"))]
     {
@@ -272,10 +273,6 @@ if android_plugin_marker not in lib_txt:
             .plugin(tauri_plugin_dialog::init())
             .plugin(tauri_plugin_fs::init())
             .plugin(tauri_plugin_opener::init());
-    }
-    #[cfg(target_os = "android")]
-    {
-        builder = builder.plugin(tauri_plugin_opener::init());
     }
     builder = builder
         // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
