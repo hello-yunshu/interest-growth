@@ -140,6 +140,45 @@ if "CiFlags.ENABLE_WEBVIEW_REMOTE_DEBUGGING" not in ma_txt:
 else:
     changes.append("MainActivity.kt: CDP block already present (no-op)")
 
+# ---------- 2b. MainActivity startup boundary diagnostics ----------
+# The Rust mobile entry point runs from TauriActivity.super.onCreate(). If a
+# historical APK aborts before the Rust `run()` body can emit diagnostics, use
+# Android's own log buffer to distinguish the Java/Keystore boundary from the
+# JNI/native entry boundary. This is throw-away CI instrumentation only.
+activity_marker = "CI_OLD_STARTUP: MainActivity onCreate"
+if activity_marker not in ma_txt:
+    on_create_anchor = "  override fun onCreate(savedInstanceState: Bundle?) {\n"
+    if on_create_anchor not in ma_txt:
+        die("MainActivity.kt onCreate anchor not found for startup diagnostics")
+    ma_txt = ma_txt.replace(
+        on_create_anchor,
+        on_create_anchor + '    android.util.Log.e("CI_OLD_STARTUP", "MainActivity onCreate entered")\n',
+        1,
+    )
+    keyring_anchor = "    Keyring.initializeNdkContext(applicationContext)\n"
+    if keyring_anchor not in ma_txt:
+        die("MainActivity.kt Keyring initialization anchor not found")
+    ma_txt = ma_txt.replace(
+        keyring_anchor,
+        '    android.util.Log.e("CI_OLD_STARTUP", "before Keyring.initializeNdkContext")\n'
+        + keyring_anchor
+        + '    android.util.Log.e("CI_OLD_STARTUP", "after Keyring.initializeNdkContext")\n',
+        1,
+    )
+    super_anchor = "    super.onCreate(savedInstanceState)\n"
+    if super_anchor not in ma_txt:
+        die("MainActivity.kt super.onCreate anchor not found for startup diagnostics")
+    ma_txt = ma_txt.replace(
+        super_anchor,
+        super_anchor + '    android.util.Log.e("CI_OLD_STARTUP", "after super.onCreate")\n',
+        1,
+    )
+    with open(ma, "w") as fh:
+        fh.write(ma_txt)
+    changes.append("MainActivity.kt: added Java startup boundary diagnostics")
+else:
+    changes.append("MainActivity.kt: startup boundary diagnostics already present (no-op)")
+
 # ---------- 3. remote.rs ----------
 if not os.path.exists(rem):
     die("remote.rs not found")
