@@ -32,6 +32,9 @@
 #                      historical Android release-test source does not abort
 #                      during native plugin initialization. This is the same
 #                      minimal Android surface as the current production source.
+#   6. lib.rs       -> install a throw-away panic hook and startup marker so a
+#                      historical Android abort exposes the Rust panic payload
+#                      and backtrace in app-private storage.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -288,6 +291,47 @@ if android_plugin_marker not in lib_txt:
     changes.append("lib.rs: transplanted minimal historical Android plugin surface")
 else:
     changes.append("lib.rs: historical Android plugin surface already present (no-op)")
+
+# ---------- 6. historical Android startup panic diagnostics ----------
+# Tauri's Android JNI entry aborts the process when the start thread panics;
+# the native crash backtrace otherwise stops at __start_app and hides the
+# payload. This hook is only installed in the throw-away historical source.
+panic_marker = "CI old Android panic diagnostic hook"
+if panic_marker not in lib_txt:
+    old_run_start = "pub fn run() {\n"
+    new_run_start = '''pub fn run() {
+    // CI old Android panic diagnostic hook (throw-away historical source).
+    let _ = std::fs::write(
+        "/data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-entered.txt",
+        "run entered\\n",
+    );
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("non-string panic payload");
+        let detail = format!(
+            "CI old Android panic: {info}\\npayload={payload}\\nbacktrace={:?}\\n",
+            std::backtrace::Backtrace::force_capture(),
+        );
+        for path in [
+            "/data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-panic.txt",
+            "/data/data/app.psychologygrowth.desktop/files/ci-old-startup-panic.txt",
+        ] {
+            let _ = std::fs::write(path, &detail);
+        }
+    }));
+'''
+    if old_run_start not in lib_txt:
+        die("lib.rs run start anchor not found")
+    lib_txt = lib_txt.replace(old_run_start, new_run_start, 1)
+    with open(lib, "w") as fh:
+        fh.write(lib_txt)
+    changes.append("lib.rs: added throw-away startup panic diagnostic hook")
+else:
+    changes.append("lib.rs: startup panic diagnostic hook already present (no-op)")
 
 for c in changes:
     print("  + " + c)
