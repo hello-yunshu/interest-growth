@@ -16,7 +16,7 @@
 # CI-release-test APK — it never alters the committed tag, never enables
 # debuggable, and never ships in a production artifact.
 #
-# The five transforms (each skipped if already present):
+# The seven transforms (each skipped if already present):
 #   1. CiFlags.kt   -> ENABLE_WEBVIEW_REMOTE_DEBUGGING = true
 #   2. MainActivity -> call WebView.setWebContentsDebuggingEnabled(true) under
 #                      that flag, after super.onCreate (no new import: fully
@@ -32,7 +32,9 @@
 #                      historical Android release-test source does not abort
 #                      during native plugin initialization. This is the same
 #                      minimal Android surface as the current production source.
-#   6. lib.rs       -> install a throw-away panic hook and startup marker so a
+#   6. MainActivity -> write Java startup-boundary markers to app-private files
+#                      for black-box failure diagnosis (CI-only).
+#   7. lib.rs       -> install a throw-away panic hook and startup marker so a
 #                      historical Android abort exposes the Rust panic payload
 #                      and backtrace in app-private storage.
 #
@@ -146,13 +148,21 @@ else:
 # Android's own log buffer to distinguish the Java/Keystore boundary from the
 # JNI/native entry boundary. This is throw-away CI instrumentation only.
 activity_marker = "CI_OLD_STARTUP: MainActivity onCreate"
-if activity_marker not in ma_txt:
+if "ci-old-java-oncreate.txt" not in ma_txt:
     on_create_anchor = "  override fun onCreate(savedInstanceState: Bundle?) {\n"
     if on_create_anchor not in ma_txt:
         die("MainActivity.kt onCreate anchor not found for startup diagnostics")
+    marker_helper = (
+        "  private fun ciMarker(name: String) {\n"
+        "    runCatching { java.io.File(applicationContext.filesDir, name).writeText(\"written\\n\") }\n"
+        "  }\n"
+    )
     ma_txt = ma_txt.replace(
         on_create_anchor,
-        on_create_anchor + '    android.util.Log.e("CI_OLD_STARTUP", "MainActivity onCreate entered")\n',
+        marker_helper
+        + on_create_anchor
+        + '    ciMarker("ci-old-java-oncreate.txt")\n'
+        + '    android.util.Log.e("CI_OLD_STARTUP", "MainActivity onCreate entered")\n',
         1,
     )
     keyring_anchor = "    Keyring.initializeNdkContext(applicationContext)\n"
@@ -160,8 +170,10 @@ if activity_marker not in ma_txt:
         die("MainActivity.kt Keyring initialization anchor not found")
     ma_txt = ma_txt.replace(
         keyring_anchor,
+        '    ciMarker("ci-old-java-before-keyring.txt")\n'
         '    android.util.Log.e("CI_OLD_STARTUP", "before Keyring.initializeNdkContext")\n'
         + keyring_anchor
+        + '    ciMarker("ci-old-java-after-keyring.txt")\n'
         + '    android.util.Log.e("CI_OLD_STARTUP", "after Keyring.initializeNdkContext")\n',
         1,
     )
@@ -170,7 +182,9 @@ if activity_marker not in ma_txt:
         die("MainActivity.kt super.onCreate anchor not found for startup diagnostics")
     ma_txt = ma_txt.replace(
         super_anchor,
-        super_anchor + '    android.util.Log.e("CI_OLD_STARTUP", "after super.onCreate")\n',
+        super_anchor
+        + '    ciMarker("ci-old-java-after-super.txt")\n'
+        + '    android.util.Log.e("CI_OLD_STARTUP", "after super.onCreate")\n',
         1,
     )
     with open(ma, "w") as fh:
