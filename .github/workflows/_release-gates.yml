@@ -375,7 +375,7 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
             interest-growth-android bash -c \
-              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_android_apk.sh --profile release --require-aapt dist/android/interest-growth-android-arm64.apk; bash scripts/ci/verify_android_apk.sh --profile release-test --require-aapt dist/android/interest-growth-android-x86_64-release.apk'
+              'set -euo pipefail; export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_android_apk.sh --profile release --require-aapt dist/android/interest-growth-android-arm64.apk; bash scripts/ci/verify_android_apk.sh --profile release-test --require-aapt dist/android/interest-growth-android-x86_64-release.apk'
           # Verify release signatures (v2/v3) and capture the public cert
           # fingerprint for BOTH release APKs — they must share ONE cert, or
           # same-cert upgrade-in-place would be impossible (Phase 4b preflight).
