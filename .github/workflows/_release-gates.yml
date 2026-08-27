@@ -766,6 +766,7 @@ jobs:
               'cd prev_src/apps/desktop \
                && ( cd src-tauri && cargo metadata --locked >/dev/null ) \
                && npm ci \
+               && bash ../../scripts/ci/patch_release_test_source.sh ../.. \
                && ( for attempt in 1 2 3; do if npm run tauri -- android build --apk --target x86_64; then exit 0; fi; echo "old Android APK build attempt ${attempt} failed; retrying transient Gradle/network errors" >&2; sleep 10; done; exit 1 )'
           mkdir -p dist/android/prev
           mapfile -t APK_MATCHES < <(find prev_src/apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | sort)
