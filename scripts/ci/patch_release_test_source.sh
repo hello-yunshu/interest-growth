@@ -301,10 +301,19 @@ if panic_marker not in lib_txt:
     old_run_start = "pub fn run() {\n"
     new_run_start = '''pub fn run() {
     // CI old Android panic diagnostic hook (throw-away historical source).
-    let _ = std::fs::write(
+    eprintln!("CI_OLD_STARTUP: run entered");
+    for directory in [
+        "/data/user/0/app.psychologygrowth.desktop/files",
+        "/data/data/app.psychologygrowth.desktop/files",
+    ] {
+        let _ = std::fs::create_dir_all(directory);
+    }
+    for path in [
         "/data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-entered.txt",
-        "run entered\\n",
-    );
+        "/data/data/app.psychologygrowth.desktop/files/ci-old-startup-entered.txt",
+    ] {
+        let _ = std::fs::write(path, "run entered\\n");
+    }
     std::panic::set_hook(Box::new(|info| {
         let payload = info
             .payload()
@@ -323,6 +332,7 @@ if panic_marker not in lib_txt:
             let _ = std::fs::write(path, &detail);
         }
     }));
+    eprintln!("CI_OLD_STARTUP: panic hook installed");
 '''
     if old_run_start not in lib_txt:
         die("lib.rs run start anchor not found")
