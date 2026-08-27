@@ -767,11 +767,21 @@ jobs:
                && ( cd src-tauri && cargo metadata --locked >/dev/null ) \
                && npm ci \
                && bash /work/scripts/ci/patch_release_test_source.sh /work/prev_src \
-               && ( for attempt in 1 2 3; do if npm run tauri -- android build --apk --target x86_64; then exit 0; fi; echo "old Android APK build attempt ${attempt} failed; retrying transient Gradle/network errors" >&2; sleep 10; done; exit 1 )'
+               && ( for attempt in 1 2 3; do if npm run tauri -- android android-studio-script --release --target x86_64; then exit 0; fi; echo "old Android native build attempt ${attempt} failed; retrying transient Gradle/network errors" >&2; sleep 10; done; exit 1 ) \
+               && bash /work/scripts/ci/patch_release_test_source.sh /work/prev_src \
+               && ( for attempt in 1 2 3; do if ./src-tauri/gen/android/gradlew --offline --no-daemon --project-dir src-tauri/gen/android :app:assembleUniversalRelease -x rustBuildUniversalRelease -x rustBuildArm64Release -x rustBuildArmRelease -x rustBuildX86Release -x rustBuildX86_64Release; then exit 0; fi; echo "old Android packaging attempt ${attempt} failed; retrying transient Gradle errors" >&2; sleep 10; done; exit 1 )'
           mkdir -p dist/android/prev
           mapfile -t APK_MATCHES < <(find prev_src/apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release -name 'app-universal-release.apk' -type f 2>/dev/null | sort)
           if [ "${#APK_MATCHES[@]}" -ne 1 ]; then echo "expected exactly one previous x86_64 RELEASE-test APK, found ${#APK_MATCHES[@]}" >&2; exit 1; fi
           APK="${APK_MATCHES[0]}"
+          DEX_MARKER_FOUND=false
+          while IFS= read -r DEX; do
+            if unzip -p "${APK}" "${DEX}" | grep -a -q 'ci-old-java-oncreate.txt'; then DEX_MARKER_FOUND=true; break; fi
+          done < <(unzip -Z1 "${APK}" 'classes*.dex')
+          if [ "${DEX_MARKER_FOUND}" != true ]; then
+            echo "FAIL: old x86_64 RELEASE-test APK is missing the post-sync Java startup marker" >&2
+            exit 1
+          fi
           cp "${APK}" dist/android/prev/interest-growth-android-x86_64-release.apk
       - name: Download current signed release APKs (new side)
         if: needs.release-meta.outputs.is_stable == 'true'
