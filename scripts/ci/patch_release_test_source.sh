@@ -28,7 +28,7 @@
 #                      release-test process aborts before the black-box driver
 #                      can connect. This is diagnostics only and is never used
 #                      by a production source tree.
-#   5. lib.rs       -> keep shell/updater/dialog/fs plugins desktop-only, so a
+#   5. lib.rs       -> keep historical Android plugins out of the old APK, so a
 #                      historical Android release-test source does not abort
 #                      during native plugin initialization. This is the same
 #                      minimal Android surface as the current production source.
@@ -242,7 +242,7 @@ else:
     changes.append("lib.rs: startup error diagnostic already present (no-op)")
 
 # ---------- 5. historical Android plugin surface ----------
-# v1.0.0-rc.3 registers desktop shell/updater/dialog/fs plugins on Android.
+# v1.0.0-rc.3 registers desktop shell/updater/dialog/fs/opener and SAF bridge plugins on Android.
 # That old native plugin surface aborts before setup can return a Result on the
 # API 35 release-test emulator. Transplant the later, committed target_os split
 # into the throw-away old APK source. The Android behavior then matches the
@@ -274,11 +274,12 @@ if android_plugin_marker not in lib_txt:
             .plugin(tauri_plugin_fs::init())
             .plugin(tauri_plugin_opener::init());
     }
-    builder = builder
-        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
-        // Android (no-op plugin on desktop). The SAF bridge lets the native
-        // layer read/write file bytes without a renderer base64 copy.
-        .plugin(android_bridge::init());'''
+    // The old upgrade fixture does not exercise the SAF bridge. Keep it out
+    // of the historical Android host; it remains registered in production.
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder.plugin(android_bridge::init());
+    }'''
     if old_plugins not in lib_txt:
         die("historical Android plugin registration anchor not found")
     lib_txt = lib_txt.replace(old_plugins, new_plugins, 1)
