@@ -85,7 +85,7 @@ jobs:
           cp "${APK}" "${OUT}"
           echo "path=${OUT}" >> "$GITHUB_OUTPUT"
       - name: APK static verification
-        run: bash scripts/ci/verify_android_apk.sh "${{ steps.apk.outputs.path }}"
+        run: bash scripts/ci/verify_android_apk.sh --profile debug "${{ steps.apk.outputs.path }}"
       - name: Generate SHA256SUMS for artifacts
         run: python3 scripts/ci/generate_release_checksums.py --out dist/SHA256SUMS.txt dist/android/*.apk
       - name: Upload Android verify APK

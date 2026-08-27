@@ -1,8 +1,13 @@
-# Psychology Growth v0.4 Desktop Architecture
+# Psychology Growth v0.4 Desktop Architecture (historical)
+
+The v0.4 document records the earlier desktop design. Current runtime truth is
+the Native Core plus optional DeepSeek-compatible transport; the old external
+DeepTutor provider wording below is historical and does not describe a current
+runtime dependency. See `docs/development/DEVELOPMENT_CONTRACT.md`.
 
 ## Product identity
 
-Psychology Growth remains an independent, local-first product. Tauri is the desktop shell. Python Core is the product runtime. DeepSeek and DeepTutor are optional capability providers. DeepTutor is not a fork parent, runtime parent, database owner, or required desktop dependency.
+Psychology Growth remains an independent, local-first product. Tauri is the desktop shell. Python Core is the product runtime. DeepSeek-compatible transport is optional. The historical external DeepTutor integration was never a fork parent, runtime parent, database owner, or required desktop dependency, and is not part of the current runtime.
 
 ## Runtime
 

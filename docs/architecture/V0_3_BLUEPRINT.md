@@ -1,12 +1,15 @@
 # Psychology Growth v0.3.1 — Independent Learning Runtime Blueprint
 
-Status: implemented release contract
+Status: historical v0.3 blueprint; superseded current runtime facts are in
+`docs/architecture/01_ARCHITECTURE.md`, `docs/decisions/0006-native-only-product-execution.md`
+and `docs/development/DEVELOPMENT_CONTRACT.md`.
 Date: 2026-08-12
-Current optional capability-provider compatibility target: DeepTutor v1.5.11
+Historical compatibility target: DeepTutor v1.5.11. DeepTutor is not part of
+the current Native Tutor runtime or current release dependency.
 
 ## 1. Why v0.3 exists
 
-Psychology Growth owns Questions, Topics, Sources, Evidence, Claims, Concepts, Mastery, Growth Memory and publication approval. DeepTutor is one optional external capability provider. v0.3 absorbed useful replayable-turn and interactive-learning semantics; v0.3.1 tightens the boundary so no local product plugin depends on the DeepTutor integration plugin and provider execution is gated independently from canonical product behavior.
+Psychology Growth owns Questions, Topics, Sources, Evidence, Claims, Concepts, Mastery, Growth Memory and publication approval. This historical blueprint recorded an optional external DeepTutor provider; later native-only closure moved the canonical Tutor runtime into Interest Growth. The provider-boundary principles remain useful, but the diagram and current-tense runtime claims below are historical.
 
 v0.3 therefore changes the integration unit from **capability call** to **tutor session**.
 

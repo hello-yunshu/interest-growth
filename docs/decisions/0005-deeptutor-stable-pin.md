@@ -1,4 +1,7 @@
-# ADR 0005 · DeepTutor stable version pin
+# ADR 0005 · DeepTutor stable version pin (historical)
+
+**Status:** superseded by the native-only Tutor runtime. This ADR records an
+earlier compatibility policy and is not a current release dependency.
 
 **Status:** Superseded by ADR 0006 · retained as project history
 
