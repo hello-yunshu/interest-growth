@@ -59,6 +59,13 @@ def test_create_question_submits_prompt_after_filling():
     assert "js_press_enter(\"textarea\")" in inspect.getsource(d.create_question)
 
 
+def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
+    source = inspect.getsource(d.navigate_page)
+    assert "a[href=\\\"{path}\\\"]" in source
+    assert "_on_page(cdp, path)" in source
+    assert "curiosity PromptBar did not render" in inspect.getsource(d.create_question)
+
+
 def test_resilient_cdp_reconnects_after_transport_close():
     class BrokenCdp:
         def evaluate(self, _expression):
