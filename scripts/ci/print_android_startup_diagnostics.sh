@@ -31,7 +31,13 @@ for marker in \
   ci-old-before-state-manage.txt \
   ci-old-startup-panic.txt \
   ci-old-startup-error.txt; do
-  echo "marker=${marker}" >&2
-  adb shell cat "${FILES_DIR}/${marker}" 2>/dev/null >&2 || true
-  adb shell cat "${LEGACY_FILES_DIR}/${marker}" 2>/dev/null >&2 || true
+  for directory in "${FILES_DIR}" "${LEGACY_FILES_DIR}"; do
+    path="${directory}/${marker}"
+    if adb shell test -f "${path}" 2>/dev/null; then
+      echo "marker=${path} present" >&2
+      adb exec-out cat "${path}" >&2 || true
+    else
+      echo "marker=${path} missing" >&2
+    fi
+  done
 done
