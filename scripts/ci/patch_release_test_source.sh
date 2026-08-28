@@ -568,7 +568,7 @@ fn ci_old_setup_marker(name: &str) {
         '                    {\n'
         '                        ci_old_setup_marker("ci-old-before-keystore-store.txt");\n'
         '                        AndroidKeystoreStore::new()\n'
-        '                            .map_err(|error| format!("failed to open Android Keystore: {error}"))?,\n'
+        '                            .map_err(|error| format!("failed to open Android Keystore: {error}"))?\n'
         '                    },\n',
         1,
     )
