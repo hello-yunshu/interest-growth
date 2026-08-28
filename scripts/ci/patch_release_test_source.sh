@@ -16,7 +16,7 @@
 # CI-release-test APK — it never alters the committed tag, never enables
 # debuggable, and never ships in a production artifact.
 #
-# The nine transforms (each skipped if already present):
+# The ten transforms (each skipped if already present):
 #   1. CiFlags.kt   -> ENABLE_WEBVIEW_REMOTE_DEBUGGING = true
 #   2. MainActivity -> call WebView.setWebContentsDebuggingEnabled(true) under
 #                      that flag, before super.onCreate (no new import: fully
@@ -28,10 +28,9 @@
 #                      release-test process aborts before the black-box driver
 #                      can connect. This is diagnostics only and is never used
 #                      by a production source tree.
-#   5. lib.rs       -> keep historical Android plugins out of the old APK, so a
-#                      historical Android release-test source does not abort
-#                      during native plugin initialization. This is the same
-#                      minimal Android surface as the current production source.
+#   5. lib.rs       -> omit the production SAF bridge from the old upgrade APK;
+#                      the black-box fixture does not exercise document import/
+#                      export and must not depend on historical reflection.
 #   6. MainActivity -> write Java startup-boundary markers to app-private files
 #                      for black-box failure diagnosis (CI-only).
 #   7. lib.rs       -> install a throw-away panic hook and startup marker so a
@@ -41,6 +40,8 @@
 #                            InvokeArg DTOs in the minified old APK.
 #   9. build.gradle.kts -> carry the explicit release-test build profile into
 #                          the old APK's generated Android project.
+#  10. lib.rs       -> keep the old fixture's Android SAF bridge omitted after
+#                      the current qualified native runtime is transplanted.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -472,6 +473,36 @@ if panic_marker not in lib_txt:
     changes.append("lib.rs: added throw-away startup panic diagnostic hook")
 else:
     changes.append("lib.rs: startup panic diagnostic hook already present (no-op)")
+
+# ---------- 7. historical Android SAF bridge omission ----------
+# The upgrade fixture exercises the broker and WebView only. The current
+# production native runtime registers the SAF Android plugin for document
+# import/export, but the historical generated Android host is not part of the
+# product artifact and does not need that bridge. Keep it out of the old APK
+# so a registration/reflection failure cannot abort the black-box startup.
+# This is a throw-away fixture change; production `lib.rs` remains unchanged.
+bridge_marker = "CI old Android SAF bridge omitted"
+if bridge_marker not in lib_txt:
+    current_bridge = '''    builder = builder
+        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
+        // Android (no-op plugin on desktop). The SAF bridge lets the native
+        // layer read/write file bytes without a renderer base64 copy.
+        .plugin(android_bridge::init());'''
+    replacement_bridge = '''    // CI old Android SAF bridge omitted: the upgrade fixture does not invoke
+    // document import/export, and the historical host must not depend on the
+    // production Kotlin plugin registration during black-box startup.
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder.plugin(android_bridge::init());
+    }'''
+    if current_bridge not in lib_txt:
+        die("current Android SAF bridge registration anchor not found")
+    lib_txt = lib_txt.replace(current_bridge, replacement_bridge, 1)
+    with open(lib, "w") as fh:
+        fh.write(lib_txt)
+    changes.append("lib.rs: omitted Android SAF bridge from old upgrade fixture")
+else:
+    changes.append("lib.rs: old Android SAF bridge already omitted (no-op)")
 
 for c in changes:
     print("  + " + c)
