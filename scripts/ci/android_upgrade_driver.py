@@ -158,6 +158,14 @@ def navigate_page(cdp, path, log, deadline):
     if _on_page(cdp, path):
         log.append({"step": f"nav_{path}", "how": "already_there"})
         return
+    if path == "/curiosity" and not cae._wait_for(
+        cdp, lambda: _shell_ready(cdp), "workspace shell ready", deadline, log
+    ):
+        state = _coerce(cdp.evaluate("({p: location.pathname, href: location.href})"), {})
+        raise UpgradeError(
+            f"workspace shell did not become ready before navigating to {path}; "
+            f"location={state}; body={_read_body(cdp)[:400]}"
+        )
     expr = (
         "(() => { "
         f"const a = document.querySelector('a[href=\"{path}\"], a[href^=\"{path}?\"], a[href*=\"{path}\"]'); "
@@ -180,19 +188,20 @@ def navigate_page(cdp, path, log, deadline):
         log.append({"step": f"nav_{path}", "error": str(e)})
     # The exported Next app normally handles the real Nav anchor above. Some
     # old WebView/Next combinations acknowledge the click without committing
-    # the route, so give that path a short bounded chance and then use a real
-    # document navigation. ResilientCdp reconnects after the reload.
+    # the route. Retry the real in-app anchor after the shell has settled;
+    # hard document reloads are not valid for the tauri.localhost asset
+    # protocol and would turn a recoverable route race into a blank page.
     click_deadline = min(deadline, time.time() + 15)
     if cae._wait_for(cdp, lambda: _on_page(cdp, path),
                      f"navigate to {path} via client route", click_deadline, log):
         return
-    log.append({"step": f"nav_{path}", "fallback": "location_assign"})
+    log.append({"step": f"nav_{path}", "retry": "anchor_click"})
     try:
-        cdp.evaluate(f"(() => {{ location.assign({path!r}); return 1; }})()")
+        cdp.evaluate(expr)
     except Exception as e:  # noqa: BLE001
-        log.append({"step": f"nav_{path}", "fallback_error": str(e)})
+        log.append({"step": f"nav_{path}", "retry_error": str(e)})
     if not cae._wait_for(cdp, lambda: _on_page(cdp, path),
-                         f"navigate to {path} via document reload", deadline, log):
+                         f"navigate to {path} via retry", deadline, log):
         state = _coerce(cdp.evaluate("({p: location.pathname, href: location.href})"), {})
         raise UpgradeError(
             f"could not navigate to {path}; location={state}; "
@@ -212,6 +221,14 @@ def _on_page(cdp, path):
             str(r.get("p", "")).startswith(path) or path == "/"
         )
     return str(r.get("p", "")).startswith(path)
+
+
+def _shell_ready(cdp):
+    r = _coerce(cdp.evaluate(
+        "({boot: document.querySelector('.workspaceBoot') !== null, "
+        "nav: document.querySelector('a[href=\"/curiosity\"]') !== null})"
+    ), {})
+    return not r.get("boot") and bool(r.get("nav"))
 
 
 def create_question(cdp, text, log, deadline):
