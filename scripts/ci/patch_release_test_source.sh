@@ -16,10 +16,10 @@
 # CI-release-test APK — it never alters the committed tag, never enables
 # debuggable, and never ships in a production artifact.
 #
-# The seven transforms (each skipped if already present):
+# The eight transforms (each skipped if already present):
 #   1. CiFlags.kt   -> ENABLE_WEBVIEW_REMOTE_DEBUGGING = true
 #   2. MainActivity -> call WebView.setWebContentsDebuggingEnabled(true) under
-#                      that flag, after super.onCreate (no new import: fully
+#                      that flag, before super.onCreate (no new import: fully
 #                      qualified). This does NOT set android:debuggable.
 #   3. remote.rs    -> http_client() additionally loads a PEM root from the
 #                      system property `ig.ci.tls_ca_path` on Android. Absent
@@ -37,6 +37,8 @@
 #   7. lib.rs       -> install a throw-away panic hook and startup marker so a
 #                      historical Android abort exposes the Rust panic payload
 #                      and backtrace in app-private storage.
+#   8. proguard-rules.pro -> retain the Rust-registered Kotlin plugin and its
+#                            InvokeArg DTOs in the minified old APK.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -105,6 +107,7 @@ if native_marker not in old_lib_txt:
         "apps/desktop/src-tauri/src/runtime_mode.rs",
         "apps/desktop/src-tauri/src/android_bridge.rs",
         "apps/desktop/src-tauri/src/ui_ipc_e2e.rs",
+        "apps/desktop/src-tauri/gen/android/app/proguard-rules.pro",
         "apps/desktop/src-tauri/Cargo.toml",
         "apps/desktop/src-tauri/Cargo.lock",
     ]
