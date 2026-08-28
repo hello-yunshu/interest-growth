@@ -731,7 +731,8 @@ jobs:
         # The previous exact tag predates R4's WebView CDP/TLS hooks and the
         # later minimal Android plugin surface. patch_release_test_source.sh
         # applies only committed, gated CI enablers to a throw-away APK: CDP,
-        # TLS trust-root, startup diagnostics, and the desktop-only plugin split.
+        # TLS trust-root, startup diagnostics, and the historical Android
+        # plugin isolation (desktop, opener, and SAF surfaces are omitted).
         # It does NOT set android:debuggable and never changes the product.
         if: needs.release-meta.outputs.is_stable == 'true'
         run: bash scripts/ci/patch_release_test_source.sh prev_src
