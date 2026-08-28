@@ -43,6 +43,13 @@ def test_click_selector_embedded():
     assert "querySelector" in js and "el.click()" in js
 
 
+def test_connection_tab_click_targets_visible_system_tab():
+    js = c.js_click_connection_tab()
+    assert "button[role=\\\"tab\\\"]" in js
+    assert "trim() === '连接'" in js
+    assert "el.click()" in js
+
+
 def test_double_quote():
     assert c._double_quote("") == '""'
     assert c._double_quote("a b") == '"a b"'
