@@ -169,7 +169,13 @@ def navigate_page(cdp, path, log, deadline):
     expr = (
         "(() => { "
         f"const a = document.querySelector('a[href=\"{path}\"], a[href^=\"{path}?\"], a[href*=\"{path}\"]'); "
-        "if (a && typeof a.click === 'function') { a.click(); return 'clicked_anchor'; } "
+        "if (a && typeof a.click === 'function') { "
+        "  let bubbled = false; "
+        "  const guard = event => { bubbled = true; event.preventDefault(); }; "
+        "  document.addEventListener('click', guard); "
+        "  try { a.click(); } finally { document.removeEventListener('click', guard); } "
+        "  return bubbled ? 'clicked_anchor_guarded' : 'clicked_anchor'; "
+        "} "
         "const g = window.next; "
         "const r = (g && (g.router || g.app && g.app.router)); "
         f"if (r && typeof r.push === 'function') {{ r.push({path!r}).catch(()=>{{}}); return 'pushed'; }} "
@@ -187,42 +193,27 @@ def navigate_page(cdp, path, log, deadline):
     except Exception as e:  # noqa: BLE001
         log.append({"step": f"nav_{path}", "error": str(e)})
     # The exported Next app normally handles the real Nav anchor above. Some
-    # old WebView/Next combinations acknowledge the click without committing
-    # the route. Retry the real in-app anchor after the shell has settled.
-    click_deadline = min(deadline, time.time() + 15)
-    if cae._wait_for(cdp, lambda: _on_page(cdp, path),
-                     f"navigate to {path} via client route", click_deadline, log):
-        return
-    log.append({"step": f"nav_{path}", "retry": "anchor_click"})
-    try:
-        cdp.evaluate(expr)
-    except Exception as e:  # noqa: BLE001
-        log.append({"step": f"nav_{path}", "retry_error": str(e)})
-    if not cae._wait_for(cdp, lambda: _on_page(cdp, path),
-                         f"navigate to {path} via retry", deadline, log):
-        # Tauri's Android asset protocol does not consistently resolve a
-        # directory URL such as /curiosity/ to the exported index.html in old
-        # WebView/Next combinations. The explicit file is still the same
-        # packaged static export and keeps this fallback inside the product's
-        # WebView; it is only reached after both real client-route attempts.
-        static_path = f"{path.rstrip('/')}/index.html"
-        log.append({"step": f"nav_{path}", "fallback": static_path})
-        try:
-            cdp.evaluate(
-                f"(() => {{ location.assign({static_path!r}); return 'assigned_static_export'; }})()"
-            )
-        except Exception as e:  # noqa: BLE001
-            # A navigation can close the CDP socket; ResilientCdp reconnects
-            # on the next poll. Keep the exception in the audit trail.
-            log.append({"step": f"nav_{path}", "fallback_error": str(e)})
+    # old WebView/Next combinations start the click before hydration; the
+    # document-level guard prevents a default full-page asset navigation in
+    # that window. Retry the same real in-app anchor until hydration commits
+    # the route or the driver deadline is reached.
+    for attempt in range(1, 5):
+        click_deadline = min(deadline, time.time() + 15)
         if cae._wait_for(cdp, lambda: _on_page(cdp, path),
-                         f"navigate to {path} via static export", deadline, log):
+                         f"navigate to {path} via client route attempt {attempt}", click_deadline, log):
             return
+        if attempt == 4:
+            break
+        log.append({"step": f"nav_{path}", "retry": "guarded_anchor_click", "attempt": attempt + 1})
+        try:
+            cdp.evaluate(expr)
+        except Exception as e:  # noqa: BLE001
+            log.append({"step": f"nav_{path}", "retry_error": str(e), "attempt": attempt + 1})
         state = _coerce(cdp.evaluate("({p: location.pathname, href: location.href})"), {})
-        raise UpgradeError(
-            f"could not navigate to {path}; location={state}; "
-            f"body={_read_body(cdp)[:400]}"
-        )
+    raise UpgradeError(
+        f"could not navigate to {path}; location={state}; "
+        f"body={_read_body(cdp)[:400]}"
+    )
 
 
 def _on_page(cdp, path):
