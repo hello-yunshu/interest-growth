@@ -24,6 +24,7 @@
 #     --origin https://127.0.0.1:18443 \
 #     --owner-password 'Ci-Owner-Password-2026!' \
 #     --device-name android-upgrade-ci \
+#     --bootstrap-token 'ci-bootstrap-token-7a1f' \
 #     --result-file /tmp/ig_cdp_result.json \
 #     [--adb /path/to/adb]
 import argparse
@@ -322,7 +323,7 @@ def _coerce_result(v, default):
     return v if isinstance(v, dict) else default
 
 
-def enroll(cdp, origin, owner_password, device_name, timeout=120):
+def enroll(cdp, origin, owner_password, device_name, bootstrap_token=None, timeout=120):
     log = []
     deadline = time.time() + timeout
     # --- navigate to the 系统 settings -> 连接 (connection) tab ---
@@ -346,8 +347,32 @@ def enroll(cdp, origin, owner_password, device_name, timeout=120):
         raise EnrollError(f"set #remoteServerUrl failed: {set_r}")
     log.append({"step": "set_server_url", "ok": True})
     _click(cdp, "form:has(#remoteServerUrl) button[type='submit']", log, "probe")
-    _wait_for(cdp, lambda: _has_input(cdp, "#remoteLoginPassword"),
-              "probe result (login form reveals)", deadline, log)
+    if not _wait_for(cdp, lambda: _has_login_or_bootstrap_form(cdp),
+                     "probe result (login/bootstrap form reveals)", deadline, log):
+        raise EnrollError(
+            "probe did not reveal a login or bootstrap form. "
+            f"visible text: {_read_visible_text(cdp)[:1000]}"
+        )
+
+    # A clean CI server has remote auth enabled but no owner row yet. Use the
+    # product's real bootstrap form with the workflow-provided one-time token;
+    # never treat an unconfigured server as an already authenticated session.
+    if _has_input(cdp, "#remoteOwnerPassword"):
+        if not bootstrap_token:
+            raise EnrollError("server requires owner bootstrap but --bootstrap-token was not provided")
+        set_owner = _coerce_result(cdp.evaluate(js_set_input("#remoteOwnerPassword", owner_password)), {})
+        if not set_owner.get("ok"):
+            raise EnrollError(f"set #remoteOwnerPassword failed: {set_owner}")
+        set_bootstrap = _coerce_result(cdp.evaluate(js_set_input("#remoteBootstrapToken", bootstrap_token)), {})
+        if not set_bootstrap.get("ok"):
+            raise EnrollError(f"set #remoteBootstrapToken failed: {set_bootstrap}")
+        _click(cdp, "form:has(#remoteBootstrapToken) button[type='submit']", log, "bootstrap")
+        if not _wait_for(cdp, lambda: _has_input(cdp, "#remoteLoginPassword"),
+                         "bootstrap result (login form reveals)", deadline, log):
+            raise EnrollError(
+                "owner bootstrap did not reveal the login form. "
+                f"visible text: {_read_visible_text(cdp)[:1000]}"
+            )
 
     # fill login + device name + submit
     set_pw = _coerce_result(cdp.evaluate(js_set_input("#remoteLoginPassword", owner_password)), {})
@@ -403,6 +428,10 @@ def _has_input(cdp, selector="#remoteServerUrl"):
     r = _coerce_result(cdp.evaluate(
         f"({{ el: document.querySelector({_double_quote(selector)}) !== null }})"), {})
     return bool(r.get("el"))
+
+
+def _has_login_or_bootstrap_form(cdp):
+    return _has_input(cdp, "#remoteLoginPassword") or _has_input(cdp, "#remoteOwnerPassword")
 
 
 def _has_connection_tab(cdp):
@@ -463,6 +492,7 @@ def main(argv=None):
     ap.add_argument("--origin", required=True, help="HTTPS origin of the self-hosted server")
     ap.add_argument("--owner-password", required=True)
     ap.add_argument("--device-name", required=True)
+    ap.add_argument("--bootstrap-token", help="one-time owner bootstrap token when the CI server is unconfigured")
     ap.add_argument("--result-file", required=True)
     ap.add_argument("--adb", default="adb")
     args = ap.parse_args(argv)
@@ -475,7 +505,7 @@ def main(argv=None):
         payload["app_pid"] = pid
         ws_url = discover_ws_url(args.devtools_port)
         cdp = Cdp(ws_url)
-        steps = enroll(cdp, args.origin, args.owner_password, args.device_name)
+        steps = enroll(cdp, args.origin, args.owner_password, args.device_name, args.bootstrap_token)
         payload.update({"result": "PASS", "steps": steps})
     except Exception as e:  # noqa: BLE001
         payload["detail"] = f"{type(e).__name__}: {e}"

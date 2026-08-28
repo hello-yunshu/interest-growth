@@ -238,11 +238,13 @@ def _login_form_shown(cdp):
 # ---------------------------------------------------------------------------
 # Stage implementations.
 # ---------------------------------------------------------------------------
-def stage_create(cdp, origin, owner_password, device_name, marker_question, deadline):
+def stage_create(cdp, origin, owner_password, device_name, bootstrap_token, marker_question, deadline):
     """Login (real product path) then create canonical server data the verify
     stage must be able to read back after the reinstall."""
     log = []
-    enrolled = cae.enroll(cdp, origin, owner_password, device_name, timeout=_remaining(deadline))
+    enrolled = cae.enroll(cdp, origin, owner_password, device_name,
+                          bootstrap_token=bootstrap_token,
+                          timeout=_remaining(deadline))
     log.extend(enrolled)
     deadline = max(deadline, time.time() + 120)
     navigate_page(cdp, "/curiosity", log, deadline)
@@ -316,6 +318,7 @@ def main(argv=None):
     ap.add_argument("--origin", required=True)
     ap.add_argument("--owner-password", required=True)
     ap.add_argument("--device-name", required=True)
+    ap.add_argument("--bootstrap-token", help="one-time owner bootstrap token for a fresh CI server")
     ap.add_argument("--state-file", help="shared JSON passed from create -> verify")
     ap.add_argument("--result-file", required=True)
     ap.add_argument("--adb", default="adb")
@@ -344,7 +347,7 @@ def main(argv=None):
             nmarker = unique_marker()
             nmutation = unique_marker("ig-upgrade-mutate")
             steps = stage_create(cdp, args.origin, args.owner_password,
-                                 args.device_name, nmarker, deadline)
+                                 args.device_name, args.bootstrap_token, nmarker, deadline)
             payload.update({"result": "PASS", "steps": steps,
                             "marker_question": nmarker,
                             "mutation_question": nmutation})
