@@ -166,6 +166,13 @@ def navigate_page(cdp, path, log, deadline):
             f"workspace shell did not become ready before navigating to {path}; "
             f"location={state}; body={_read_body(cdp)[:400]}"
         )
+    if path == "/curiosity":
+        # Enrollment changes the remote state while the old release's shell
+        # is already mounted. Give that release's React tree a short, bounded
+        # settle window before dispatching the real anchor click; otherwise
+        # the legacy WebView can perform the anchor's default asset
+        # navigation before Next's delegated click handler is hydrated.
+        time.sleep(min(5, _remaining(deadline)))
     expr = (
         "(() => { "
         f"const a = document.querySelector('a[href=\"{path}\"], a[href^=\"{path}?\"], a[href*=\"{path}\"]'); "
