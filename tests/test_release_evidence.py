@@ -175,6 +175,14 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "IG_REPO_ROOT" in patcher
     assert "current qualified native runtime" in patcher
     assert "native_transplanted" in patcher
+    assert "proguard-rules.pro" in patcher
+    proguard = (ROOT / "apps/desktop/src-tauri/gen/android/app/proguard-rules.pro").read_text(
+        encoding="utf-8"
+    )
+    assert "InterestGrowthPlugin" in proguard
+    assert "StageContentUriArgs" in proguard
+    assert "SaveDocumentFromFileArgs" in proguard
+    assert "PickDocumentArgs" in proguard
     assert "--features android-ci-trust-root" in reusable
     diagnostics = (ROOT / "scripts/ci/print_android_startup_diagnostics.sh").read_text(
         encoding="utf-8"
