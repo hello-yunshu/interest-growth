@@ -169,7 +169,7 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     )
     assert "super_anchor =" in patcher
     assert "super_anchor =" in webview_patcher
-    assert "must not race broker initialization" in webview_patcher
+    assert "before super.onCreate" in webview_patcher
     assert "ci-old-startup-error.txt" in patcher
     assert "CI historical Android plugin surface" in patcher
     assert "IG_REPO_ROOT" in patcher
