@@ -1084,8 +1084,10 @@ pub fn assert_relative_path(path: &str) -> Result<(), String> {
 /// NOT enable rustls-platform-verifier / native-tls, so the Android OS trust
 /// store is not consulted). For the upgrade-in-place CDP test the broker must
 /// trust an ephemeral CI CA that fronts the self-hosted server over real
-/// HTTPS. A loadable PEM root is added here; `None` keeps the exact production
-/// behavior (fail-closed: nothing weakened when no root is injected).
+/// HTTPS. A loadable PEM root is used here; `None` keeps the exact production
+/// behavior (fail-closed: nothing weakened when no root is injected). The
+/// CI-only Android path uses the supplied root exclusively because reqwest's
+/// Android platform verifier cannot merge extra roots into its verifier.
 fn http_client() -> Result<reqwest::Client, String> {
     #[cfg(feature = "android-ci-trust-root")]
     {
@@ -1113,7 +1115,7 @@ fn http_client_with_trust_root(
         .user_agent(format!("interest-growth-desktop/{CLIENT_APP_VERSION}"))
         .redirect(reqwest::redirect::Policy::none());
     if let Some(cert) = trust_root {
-        builder = builder.add_root_certificate(cert);
+        builder = builder.tls_certs_only(std::iter::once(cert));
     }
     builder.build().map_err(|error| error.to_string())
 }
