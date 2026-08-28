@@ -178,9 +178,26 @@ def navigate_page(cdp, path, log, deadline):
                 "window.dispatchEvent(new Event('popstate')); } catch(e){} return 1; })()")
     except Exception as e:  # noqa: BLE001
         log.append({"step": f"nav_{path}", "error": str(e)})
+    # The exported Next app normally handles the real Nav anchor above. Some
+    # old WebView/Next combinations acknowledge the click without committing
+    # the route, so give that path a short bounded chance and then use a real
+    # document navigation. ResilientCdp reconnects after the reload.
+    click_deadline = min(deadline, time.time() + 15)
+    if cae._wait_for(cdp, lambda: _on_page(cdp, path),
+                     f"navigate to {path} via client route", click_deadline, log):
+        return
+    log.append({"step": f"nav_{path}", "fallback": "location_assign"})
+    try:
+        cdp.evaluate(f"(() => {{ location.assign({path!r}); return 1; }})()")
+    except Exception as e:  # noqa: BLE001
+        log.append({"step": f"nav_{path}", "fallback_error": str(e)})
     if not cae._wait_for(cdp, lambda: _on_page(cdp, path),
-                         f"navigate to {path}", deadline, log):
-        raise UpgradeError(f"could not navigate to {path}")
+                         f"navigate to {path} via document reload", deadline, log):
+        state = _coerce(cdp.evaluate("({p: location.pathname, href: location.href})"), {})
+        raise UpgradeError(
+            f"could not navigate to {path}; location={state}; "
+            f"body={_read_body(cdp)[:400]}"
+        )
 
 
 def _on_page(cdp, path):
