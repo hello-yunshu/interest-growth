@@ -50,6 +50,23 @@ def test_connection_tab_click_targets_visible_system_tab():
     assert "el.click()" in js
 
 
+class _EvaluateOnly:
+    def __init__(self, value):
+        self.value = value
+
+    def evaluate(self, _expression):
+        return self.value
+
+
+def test_login_success_requires_post_login_marker_and_forms_gone():
+    assert c._login_succeeded(_EvaluateOnly({
+        "connected": True, "loginGone": False, "erred": False,
+    })) is False
+    assert c._login_succeeded(_EvaluateOnly({
+        "connected": True, "loginGone": True, "erred": False,
+    })) is True
+
+
 def test_double_quote():
     assert c._double_quote("") == '""'
     assert c._double_quote("a b") == '"a b"'

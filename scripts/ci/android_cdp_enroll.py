@@ -449,16 +449,21 @@ def _click(cdp, selector, log, label):
 
 
 def _login_succeeded(cdp):
-    # Success: text contains the logged-in marker and no visible error tone.
+    # Success must be the post-login flash, not the probe flash. The probe
+    # itself says "已连接到服务器", so accepting the broader "已连接" marker
+    # would report success while the app is still unenrolled and showing
+    # LOGIN_EXPIRED in the runtime shell.
     expr = (
         "(() => { const body = (document.body.innerText||''); "
         "const erred = Array.from(document.querySelectorAll('*')).some(el => "
         " el && el.textContent && /已连接|登录已过期|无法|失败|错误/.test(el.textContent) "
         " && (el.getAttribute('role')==='alert' || /danger|error/.test(el.className||''))); "
-        "return { connected: /已连接/.test(body) || /已登录服务器/.test(body), erred }; })()"
+        "const loginGone = !document.querySelector('#remoteLoginPassword') "
+        "&& !document.querySelector('#remoteOwnerPassword'); "
+        "return { connected: /已登录服务器/.test(body), loginGone, erred }; })()"
     )
     r = _coerce_result(cdp.evaluate(expr), {})
-    return bool(r.get("connected") and not r.get("erred"))
+    return bool(r.get("connected") and r.get("loginGone") and not r.get("erred"))
 
 
 def _read_visible_text(cdp):
