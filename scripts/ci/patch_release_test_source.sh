@@ -511,7 +511,76 @@ if opener_marker not in lib_txt:
 else:
     changes.append("lib.rs: old Android opener plugin already omitted (no-op)")
 
-# ---------- 8. historical Android SAF bridge omission (legacy anchor) ----------
+# ---------- 9. setup boundary diagnostics ----------
+# Tauri runs the setup hook from its Android event-loop callback. A setup error
+# is converted to a panic there and the mobile entry point aborts the process,
+# so the post-run error handler above cannot observe it. Keep throw-away markers
+# around each fallible startup boundary to identify the exact old-fixture input
+# that fails without changing the production runtime or its secure-store path.
+setup_diag_marker = "CI old Android setup boundary diagnostics"
+if setup_diag_marker not in lib_txt:
+    setup_diag = '''
+// CI old Android setup boundary diagnostics (throw-away fixture only).
+fn ci_old_setup_marker(name: &str) {
+    for path in [
+        format!("/data/user/0/app.psychologygrowth.desktop/files/{name}"),
+        format!("/data/data/app.psychologygrowth.desktop/files/{name}"),
+    ] {
+        let _ = std::fs::write(path, "written\\n");
+    }
+}
+'''
+    setup_anchor = "#[cfg_attr(mobile, tauri::mobile_entry_point)]\n"
+    if setup_anchor not in lib_txt:
+        die("lib.rs mobile entry anchor not found for setup diagnostics")
+    lib_txt = lib_txt.replace(setup_anchor, setup_diag + "\n" + setup_anchor, 1)
+    setup_run_anchor = '    eprintln!("CI_OLD_STARTUP: panic hook installed");\n'
+    if setup_run_anchor not in lib_txt:
+        die("lib.rs panic-hook anchor not found for setup diagnostics")
+    lib_txt = lib_txt.replace(
+        setup_run_anchor,
+        setup_run_anchor + '    ci_old_setup_marker("ci-old-before-builder-run.txt");\n',
+        1,
+    )
+    setup_hook_anchor = "        .setup(move |app| {\n"
+    if setup_hook_anchor not in lib_txt:
+        die("lib.rs setup hook anchor not found for setup diagnostics")
+    lib_txt = lib_txt.replace(
+        setup_hook_anchor,
+        setup_hook_anchor + '            ci_old_setup_marker("ci-old-setup-entered.txt");\n',
+        1,
+    )
+    trust_anchor = "                let trust_root = remote::ci_tls_trust_root()\n"
+    if trust_anchor not in lib_txt:
+        die("lib.rs CI trust-root anchor not found for setup diagnostics")
+    lib_txt = lib_txt.replace(
+        trust_anchor,
+        '                ci_old_setup_marker("ci-old-before-trust-root.txt");\n' + trust_anchor,
+        1,
+    )
+    store_anchor = "                    AndroidKeystoreStore::new()\n"
+    if store_anchor not in lib_txt:
+        die("lib.rs Android Keystore anchor not found for setup diagnostics")
+    lib_txt = lib_txt.replace(
+        store_anchor,
+        '                    ci_old_setup_marker("ci-old-before-keystore-store.txt");\n' + store_anchor,
+        1,
+    )
+    manage_anchor = "            app.manage(DesktopState {\n"
+    if manage_anchor not in lib_txt:
+        die("lib.rs DesktopState anchor not found for setup diagnostics")
+    lib_txt = lib_txt.replace(
+        manage_anchor,
+        '            ci_old_setup_marker("ci-old-before-state-manage.txt");\n' + manage_anchor,
+        1,
+    )
+    with open(lib, "w") as fh:
+        fh.write(lib_txt)
+    changes.append("lib.rs: added throw-away Android setup boundary diagnostics")
+else:
+    changes.append("lib.rs: Android setup boundary diagnostics already present (no-op)")
+
+# ---------- 10. historical Android SAF bridge omission (legacy anchor) ----------
 # The upgrade fixture exercises the broker and WebView only. The current
 # production native runtime registers the SAF Android plugin for document
 # import/export, but the historical generated Android host is not part of the
