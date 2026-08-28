@@ -24,6 +24,11 @@ for marker in \
   ci-old-java-after-keyring.txt \
   ci-old-java-after-super.txt \
   ci-old-startup-entered.txt \
+  ci-old-before-builder-run.txt \
+  ci-old-setup-entered.txt \
+  ci-old-before-trust-root.txt \
+  ci-old-before-keystore-store.txt \
+  ci-old-before-state-manage.txt \
   ci-old-startup-panic.txt \
   ci-old-startup-error.txt; do
   echo "marker=${marker}" >&2
