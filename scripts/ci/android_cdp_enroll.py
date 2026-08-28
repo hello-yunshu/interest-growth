@@ -77,6 +77,22 @@ def js_click(selector):
     )
 
 
+def js_click_connection_tab():
+    """Return CDP JS that opens the System page's Connection tab.
+
+    The System page intentionally defaults to the Runtime tab. Enrollment
+    must use the visible tab control rather than assuming the connection form
+    is mounted immediately after navigating to ``/system``.
+    """
+    return (
+        "(() => { const tabs = Array.from(document.querySelectorAll("
+        "'button[role=\\\"tab\\\"]'));"
+        " const el = tabs.find(tab => (tab.innerText || '').trim() === '连接');"
+        " if (!el) return {ok:false,step:'find',selector:'button[role=tab]:连接'};"
+        " el.click(); return {ok:true}; })()"
+    )
+
+
 def js_snapshot_text(selector):
     """Return the trimmed textContent of nodes matching selector (comma-joined)."""
     selector = _double_quote(selector)
@@ -316,6 +332,12 @@ def enroll(cdp, origin, owner_password, device_name, timeout=120):
     #   B) drive Next router client-side
     #   C) click an <a> whose href matches /system
     _nav(cdp, log, deadline)
+    _wait_for(cdp, lambda: _has_connection_tab(cdp),
+              "system Connection tab", deadline, log)
+    tab_r = _coerce_result(cdp.evaluate(js_click_connection_tab()), {})
+    if not tab_r.get("ok"):
+        raise EnrollError(f"open System Connection tab failed: {tab_r}")
+    log.append({"step": "open_connection_tab", "ok": True})
     _wait_for(cdp, lambda: _has_input(cdp), "connection form (#remoteServerUrl)", deadline, log)
 
     # fill server URL + probe
@@ -380,6 +402,13 @@ def _nav(cdp, log, deadline):
 def _has_input(cdp, selector="#remoteServerUrl"):
     r = _coerce_result(cdp.evaluate(
         f"({{ el: document.querySelector({_double_quote(selector)}) !== null }})"), {})
+    return bool(r.get("el"))
+
+
+def _has_connection_tab(cdp):
+    r = _coerce_result(cdp.evaluate(
+        "({el: Array.from(document.querySelectorAll('button[role=\\\"tab\\\"]'))"
+        ".some(tab => (tab.innerText || '').trim() === '连接')})"), {})
     return bool(r.get("el"))
 
 
