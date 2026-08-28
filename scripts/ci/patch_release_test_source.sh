@@ -16,7 +16,7 @@
 # CI-release-test APK — it never alters the committed tag, never enables
 # debuggable, and never ships in a production artifact.
 #
-# The eight transforms (each skipped if already present):
+# The nine transforms (each skipped if already present):
 #   1. CiFlags.kt   -> ENABLE_WEBVIEW_REMOTE_DEBUGGING = true
 #   2. MainActivity -> call WebView.setWebContentsDebuggingEnabled(true) under
 #                      that flag, before super.onCreate (no new import: fully
@@ -39,6 +39,8 @@
 #                      and backtrace in app-private storage.
 #   8. proguard-rules.pro -> retain the Rust-registered Kotlin plugin and its
 #                            InvokeArg DTOs in the minified old APK.
+#   9. build.gradle.kts -> carry the explicit release-test build profile into
+#                          the old APK's generated Android project.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -108,6 +110,7 @@ if native_marker not in old_lib_txt:
         "apps/desktop/src-tauri/src/android_bridge.rs",
         "apps/desktop/src-tauri/src/ui_ipc_e2e.rs",
         "apps/desktop/src-tauri/gen/android/app/proguard-rules.pro",
+        "apps/desktop/src-tauri/gen/android/app/build.gradle.kts",
         "apps/desktop/src-tauri/Cargo.toml",
         "apps/desktop/src-tauri/Cargo.lock",
     ]

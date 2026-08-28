@@ -321,6 +321,7 @@ jobs:
             -e ANDROID_HOME=/opt/android-sdk \
             -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
             -e PG_RELEASE_BUILD=1 \
+            -e PG_RELEASE_TEST=1 \
             -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
             -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
             -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
@@ -758,6 +759,7 @@ jobs:
             -e ANDROID_HOME=/opt/android-sdk \
             -e ANDROID_NDK_HOME=/opt/android-sdk/ndk/27.1.12297006 \
             -e PG_RELEASE_BUILD=1 \
+            -e PG_RELEASE_TEST=1 \
             -e PG_ANDROID_STORE_FILE=/keystore/release.keystore \
             -e PG_ANDROID_STORE_PASSWORD="${{ secrets.PG_ANDROID_STORE_PASSWORD }}" \
             -e PG_ANDROID_KEY_ALIAS="${{ secrets.PG_ANDROID_KEY_ALIAS }}" \
