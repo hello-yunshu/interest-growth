@@ -558,12 +558,18 @@ fn ci_old_setup_marker(name: &str) {
         '                ci_old_setup_marker("ci-old-before-trust-root.txt");\n' + trust_anchor,
         1,
     )
-    store_anchor = "                    AndroidKeystoreStore::new()\n"
+    store_anchor = '''                    AndroidKeystoreStore::new()
+                        .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
+'''
     if store_anchor not in lib_txt:
         die("lib.rs Android Keystore anchor not found for setup diagnostics")
     lib_txt = lib_txt.replace(
         store_anchor,
-        '                    ci_old_setup_marker("ci-old-before-keystore-store.txt");\n' + store_anchor,
+        '                    {\n'
+        '                        ci_old_setup_marker("ci-old-before-keystore-store.txt");\n'
+        '                        AndroidKeystoreStore::new()\n'
+        '                            .map_err(|error| format!("failed to open Android Keystore: {error}"))?,\n'
+        '                    },\n',
         1,
     )
     manage_anchor = "            app.manage(DesktopState {\n"
