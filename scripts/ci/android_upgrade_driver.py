@@ -226,7 +226,7 @@ def _on_page(cdp, path):
 def _shell_ready(cdp):
     r = _coerce(cdp.evaluate(
         "({boot: document.querySelector('.workspaceBoot') !== null, "
-        "nav: document.querySelector('a[href=\"/curiosity\"]') !== null})"
+        "nav: document.querySelector('a[href^=\"/curiosity\"]') !== null})"
     ), {})
     return not r.get("boot") and bool(r.get("nav"))
 

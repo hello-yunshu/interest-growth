@@ -68,6 +68,11 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "curiosity PromptBar did not render" in inspect.getsource(d.create_question)
 
 
+def test_shell_ready_accepts_static_export_trailing_slash_route():
+    source = inspect.getsource(d._shell_ready)
+    assert 'a[href^=\\"/curiosity\\"]' in source
+
+
 def test_resilient_cdp_reconnects_after_transport_close():
     class BrokenCdp:
         def evaluate(self, _expression):
