@@ -40,8 +40,8 @@
 #                            InvokeArg DTOs in the minified old APK.
 #   9. build.gradle.kts -> carry the explicit release-test build profile into
 #                          the old APK's generated Android project.
-#  10. lib.rs       -> keep the old fixture's Android SAF bridge omitted after
-#                      the current qualified native runtime is transplanted.
+#  10. lib.rs       -> keep the old fixture's Android opener/SAF bridges omitted
+#                      after the current qualified native runtime is transplanted.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -474,7 +474,44 @@ if panic_marker not in lib_txt:
 else:
     changes.append("lib.rs: startup panic diagnostic hook already present (no-op)")
 
-# ---------- 7. historical Android SAF bridge omission ----------
+# ---------- 7. historical Android plugin bridges omitted ----------
+# The old release-test fixture exercises only the broker and WebView. Its
+# generated host has no need for external-link or SAF commands, so omit both
+# Android plugin registrations. This keeps the throw-away APK independent of
+# historical plugin reflection while leaving production registration unchanged.
+opener_marker = "CI old Android opener plugin omitted"
+if opener_marker not in lib_txt:
+    current_opener = '''    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_opener::init());
+    }
+    builder = builder
+        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
+        // Android (no-op plugin on desktop). The SAF bridge lets the native
+        // layer read/write file bytes without a renderer base64 copy.
+        .plugin(android_bridge::init());'''
+    replacement_opener = '''    // CI old Android opener plugin omitted: the upgrade fixture does not
+    // exercise external-link commands; production keeps this registration.
+    // CI old Android SAF bridge omitted: the upgrade fixture does not invoke
+    // document import/export; production keeps this registration.
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder
+            // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
+            // Android (no-op plugin on desktop). The SAF bridge lets the native
+            // layer read/write file bytes without a renderer base64 copy.
+            .plugin(android_bridge::init());
+    }'''
+    if current_opener not in lib_txt:
+        die("current Android opener/SAF registration anchor not found")
+    lib_txt = lib_txt.replace(current_opener, replacement_opener, 1)
+    with open(lib, "w") as fh:
+        fh.write(lib_txt)
+    changes.append("lib.rs: omitted opener and SAF Android plugins from old upgrade fixture")
+else:
+    changes.append("lib.rs: old Android opener plugin already omitted (no-op)")
+
+# ---------- 8. historical Android SAF bridge omission (legacy anchor) ----------
 # The upgrade fixture exercises the broker and WebView only. The current
 # production native runtime registers the SAF Android plugin for document
 # import/export, but the historical generated Android host is not part of the
