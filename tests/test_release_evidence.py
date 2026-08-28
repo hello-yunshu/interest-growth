@@ -183,6 +183,24 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "StageContentUriArgs" in proguard
     assert "SaveDocumentFromFileArgs" in proguard
     assert "PickDocumentArgs" in proguard
+    gradle = (ROOT / "apps/desktop/src-tauri/gen/android/app/build.gradle.kts").read_text(
+        encoding="utf-8"
+    )
+    assert "PG_RELEASE_TEST" in gradle
+    assert "isMinifyEnabled = !releaseTestBuild" in gradle
+    formal_arm64 = reusable.split(
+        "- name: Build signed release APK (arm64-v8a, release signing required)", 1
+    )[1].split("- name: Stage arm64 release APK", 1)[0]
+    current_release_test = reusable.split(
+        "- name: Build CI-only signed release APK (x86_64, same cert, non-debuggable)", 1
+    )[1].split("- name: Enforce removed CI-only WebView hook", 1)[0]
+    previous_release_test = reusable.split(
+        "- name: Build previous signed x86_64 RELEASE-test APK (same cert, non-debuggable), §11",
+        1,
+    )[1].split("- name: Download current signed release APKs", 1)[0]
+    assert "-e PG_RELEASE_TEST=1" not in formal_arm64
+    assert "-e PG_RELEASE_TEST=1" in current_release_test
+    assert "-e PG_RELEASE_TEST=1" in previous_release_test
     assert "--features android-ci-trust-root" in reusable
     diagnostics = (ROOT / "scripts/ci/print_android_startup_diagnostics.sh").read_text(
         encoding="utf-8"
