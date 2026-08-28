@@ -176,6 +176,11 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "current qualified native runtime" in patcher
     assert "native_transplanted" in patcher
     assert "--features android-ci-trust-root" in reusable
+    diagnostics = (ROOT / "scripts/ci/print_android_startup_diagnostics.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "separate shell command" in diagnostics
+    assert "ci-old-startup-panic.txt" in diagnostics
 
 
 def test_tracked_workflows_use_readable_action_refs():
