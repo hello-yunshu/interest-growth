@@ -153,7 +153,7 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "adb_root_ok=false; for _ in $(seq 1 3); do if adb root;" in reusable
     assert "done; if [ \"$adb_root_ok\" != true ]; then" in reusable
     assert "for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop" in reusable
-    assert "for attempt in 1 2 3; do if npm run tauri -- android android-studio-script --release --target x86_64" in reusable
+    assert "for attempt in 1 2 3; do if npm run tauri -- android build --apk --target x86_64" in reusable
     assert ":app:assembleUniversalRelease -x rustBuildUniversalRelease" in reusable
     assert "ci-old-java-oncreate.txt" in reusable
     assert "create-stage crash buffer" in reusable

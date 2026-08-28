@@ -767,7 +767,7 @@ jobs:
                && ( cd src-tauri && cargo metadata --locked >/dev/null ) \
                && npm ci \
                && bash /work/scripts/ci/patch_release_test_source.sh /work/prev_src \
-               && ( for attempt in 1 2 3; do if npm run tauri -- android android-studio-script --release --target x86_64; then exit 0; fi; echo "old Android native build attempt ${attempt} failed; retrying transient Gradle/network errors" >&2; sleep 10; done; exit 1 ) \
+               && ( for attempt in 1 2 3; do if npm run tauri -- android build --apk --target x86_64; then exit 0; fi; echo "old Android APK build attempt ${attempt} failed; retrying transient Gradle/network errors" >&2; sleep 10; done; exit 1 ) \
                && bash /work/scripts/ci/patch_release_test_source.sh /work/prev_src \
                && ( for attempt in 1 2 3; do if ./src-tauri/gen/android/gradlew --offline --no-daemon --project-dir src-tauri/gen/android :app:assembleUniversalRelease -x rustBuildUniversalRelease -x rustBuildArm64Release -x rustBuildArmRelease -x rustBuildX86Release -x rustBuildX86_64Release; then exit 0; fi; echo "old Android packaging attempt ${attempt} failed; retrying transient Gradle errors" >&2; sleep 10; done; exit 1 )'
           mkdir -p dist/android/prev
