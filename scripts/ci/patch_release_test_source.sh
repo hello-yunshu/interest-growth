@@ -187,9 +187,9 @@ if "CiFlags.ENABLE_WEBVIEW_REMOTE_DEBUGGING" not in ma_txt:
         die("MainActivity.kt has no onCreate anchor to patch")
     block = (
 "    // Phase 4c/e \u2014 CI-only release-test APK enables WebView CDP.\n"
-"    // Run after super.onCreate(): Tauri starts the native Rust setup thread\n"
-"    // during super, so enabling CDP must not race Android Keystore/broker\n"
-"    // initialization. WebView debugging is a process-wide setting and applies\n"
+"    // Run before super.onCreate(): Tauri creates the WebView during super, so\n"
+"    // the process-wide debugging flag must be set before that boundary.\n"
+"    // WebView debugging applies\n"
 "    // to the WebView created by Tauri. It does NOT set android:debuggable; the\n"
 "    // flag is inert in production (CiFlags default false).\n"
 "    if (CiFlags.ENABLE_WEBVIEW_REMOTE_DEBUGGING) {\n"
@@ -198,7 +198,7 @@ if "CiFlags.ENABLE_WEBVIEW_REMOTE_DEBUGGING" not in ma_txt:
     )
     super_anchor = "    super.onCreate(savedInstanceState)\n"
     if super_anchor in ma_txt:
-        ma_txt = ma_txt.replace(super_anchor, super_anchor + block, 1)
+        ma_txt = ma_txt.replace(super_anchor, block + super_anchor, 1)
     else:
         ma_txt = ma_txt.replace(
             "override fun onCreate(savedInstanceState: Bundle?) {",
