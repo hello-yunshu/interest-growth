@@ -159,11 +159,12 @@ def navigate_page(cdp, path, log, deadline):
         log.append({"step": f"nav_{path}", "how": "already_there"})
         return
     expr = (
-        "(() => { const g = window.next; "
+        "(() => { "
+        f"const a = document.querySelector('a[href=\"{path}\"], a[href^=\"{path}?\"], a[href*=\"{path}\"]'); "
+        "if (a && typeof a.click === 'function') { a.click(); return 'clicked_anchor'; } "
+        "const g = window.next; "
         "const r = (g && (g.router || g.app && g.app.router)); "
         f"if (r && typeof r.push === 'function') {{ r.push({path!r}).catch(()=>{{}}); return 'pushed'; }} "
-        f"const a = document.querySelector('a[href*=\"{path}\"], a[href*=\"{path.replace('/', '')}\"]'); "
-        "if (a && typeof a.click === 'function') { a.click(); return 'clicked_anchor'; } "
         "return 'no_router_no_anchor'; })()"
     )
     try:
@@ -187,17 +188,23 @@ def _on_page(cdp, path):
         f"({{ el: document.querySelector('textarea') !== null, "
         f"p: location.pathname }})"), {})
     if path in ("/curiosity", "/"):
-        # The create surface is identified by its PromptBar textarea existing
-        # AND the realm being reachable; pathname check is best-effort because
-        # the static host may rewrite routes.
-        return bool(r.get("el")) or str(r.get("p", "")).startswith(path)
+        # The create surface is identified by its PromptBar textarea. A
+        # pathname-only check can race a client-side navigation and leave the
+        # caller on the prior settings page until the full timeout expires.
+        return bool(r.get("el")) and (
+            str(r.get("p", "")).startswith(path) or path == "/"
+        )
     return str(r.get("p", "")).startswith(path)
 
 
 def create_question(cdp, text, log, deadline):
     """POST a canonical question via the curiosity PromptBar (Enter submit)."""
-    cae._wait_for(cdp, lambda: _has_selector(cdp, "textarea"),
-                  "curiosity PromptBar (#textarea)", deadline, log)
+    if not cae._wait_for(cdp, lambda: _has_selector(cdp, "textarea"),
+                         "curiosity PromptBar (#textarea)", deadline, log):
+        raise UpgradeError(
+            "curiosity PromptBar did not render after navigation. "
+            f"body: {_read_body(cdp)[:400]}"
+        )
     set_r = _coerce(cdp.evaluate(js_set_textarea("textarea", text)), {})
     if not set_r.get("ok"):
         raise UpgradeError(f"set PromptBar textarea failed: {set_r}")
