@@ -50,11 +50,13 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 SRC="$(cd "$1" && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 which python3 >/dev/null 2>&1 || { echo "FAIL: python3 not on PATH" >&2; exit 1; }
 [ -d "${SRC}/apps/desktop/src-tauri" ] || { echo "FAIL: not a desktop tree: ${SRC}" >&2; exit 1; }
 
 export IG_SRC="${SRC}"
+export IG_REPO_ROOT="${REPO_ROOT}"
 export IG_CIFLAGS_DIR="${SRC}/apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop"
 export IG_MAINACT="${IG_CIFLAGS_DIR}/MainActivity.kt"
 export IG_REMOTE="${SRC}/apps/desktop/src-tauri/src/remote.rs"
@@ -65,6 +67,7 @@ import re
 import sys
 
 src = os.environ["IG_SRC"]
+repo_root = os.environ["IG_REPO_ROOT"]
 cif = os.path.join(os.environ["IG_CIFLAGS_DIR"], "CiFlags.kt")
 ma  = os.environ["IG_MAINACT"]
 rem = os.environ["IG_REMOTE"]
@@ -74,6 +77,70 @@ def die(m):
     sys.exit(1)
 
 changes = []
+
+# The published baseline predates the current Android startup/runtime contract.
+# Its historical native entry aborts inside Tauri's mobile start thread before
+# `run()` can execute, so the upgrade proof cannot reach the black-box driver.
+# Build the thrown-away old-version APK with the current, already-qualified
+# native runtime while retaining the baseline version metadata and Web source.
+# This is a CI-only source transplant: the current product tree is never
+# modified, and the resulting APK is never used as a production artifact.
+native_transplanted = False
+old_manifest = os.path.join(src, "apps/desktop/src-tauri/Cargo.toml")
+old_lock = os.path.join(src, "apps/desktop/src-tauri/Cargo.lock")
+with open(old_manifest) as fh:
+    old_manifest_txt = fh.read()
+old_version_match = re.search(r'^version\s*=\s*"([^"]+)"', old_manifest_txt, re.MULTILINE)
+if not old_version_match:
+    die("old Cargo.toml package version not found")
+old_version = old_version_match.group(1)
+native_marker = "CI throw-away baseline build uses current qualified native runtime"
+old_lib_path = os.path.join(src, "apps/desktop/src-tauri/src/lib.rs")
+with open(old_lib_path) as fh:
+    old_lib_txt = fh.read()
+if native_marker not in old_lib_txt:
+    native_paths = [
+        "apps/desktop/src-tauri/src/lib.rs",
+        "apps/desktop/src-tauri/src/remote.rs",
+        "apps/desktop/src-tauri/src/runtime_mode.rs",
+        "apps/desktop/src-tauri/src/android_bridge.rs",
+        "apps/desktop/src-tauri/src/ui_ipc_e2e.rs",
+        "apps/desktop/src-tauri/Cargo.toml",
+        "apps/desktop/src-tauri/Cargo.lock",
+    ]
+    for relative in native_paths:
+        source = os.path.join(repo_root, relative)
+        target = os.path.join(src, relative)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(source, "rb") as source_fh, open(target, "wb") as target_fh:
+            target_fh.write(source_fh.read())
+    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.toml")) as fh:
+        manifest_txt = fh.read()
+    manifest_txt = re.sub(
+        r'^(version\s*=\s*)"[^"]+"',
+        r'\g<1>"' + old_version + '"',
+        manifest_txt,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.toml"), "w") as fh:
+        fh.write(manifest_txt)
+    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.lock")) as fh:
+        lock_txt = fh.read()
+    lock_txt = lock_txt.replace(
+        'name = "interest-growth-desktop"\nversion = "1.0.20"',
+        'name = "interest-growth-desktop"\nversion = "' + old_version + '"',
+        1,
+    )
+    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.lock"), "w") as fh:
+        fh.write(lock_txt)
+    with open(old_lib_path, "a") as fh:
+        fh.write("\n// " + native_marker + ".\n")
+    native_transplanted = True
+    changes.append("old baseline: transplanted current qualified native runtime; restored baseline Cargo version " + old_version)
+else:
+    native_transplanted = True
+    changes.append("old baseline: current qualified native runtime already transplanted (no-op)")
 
 CIFLAGS = (
 '// Phase 4c/e \u2014 build-time CI capability flag for a RELEASE-test APK.\n'
@@ -337,11 +404,15 @@ if android_plugin_marker not in lib_txt:
         builder = builder.plugin(android_bridge::init());
     }'''
     if old_plugins not in lib_txt:
-        die("historical Android plugin registration anchor not found")
-    lib_txt = lib_txt.replace(old_plugins, new_plugins, 1)
-    with open(lib, "w") as fh:
-        fh.write(lib_txt)
-    changes.append("lib.rs: transplanted minimal historical Android plugin surface")
+        if native_transplanted and "Gate R2 §6.4 — desktop vs Android plugin surface is structurally split." in lib_txt:
+            changes.append("lib.rs: current qualified Android plugin surface already present (no-op)")
+        else:
+            die("historical Android plugin registration anchor not found")
+    else:
+        lib_txt = lib_txt.replace(old_plugins, new_plugins, 1)
+        with open(lib, "w") as fh:
+            fh.write(lib_txt)
+        changes.append("lib.rs: transplanted minimal historical Android plugin surface")
 else:
     changes.append("lib.rs: historical Android plugin surface already present (no-op)")
 

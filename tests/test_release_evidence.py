@@ -172,6 +172,10 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "must not race broker initialization" in webview_patcher
     assert "ci-old-startup-error.txt" in patcher
     assert "CI historical Android plugin surface" in patcher
+    assert "IG_REPO_ROOT" in patcher
+    assert "current qualified native runtime" in patcher
+    assert "native_transplanted" in patcher
+    assert "--features android-ci-trust-root" in reusable
 
 
 def test_tracked_workflows_use_readable_action_refs():
