@@ -176,6 +176,8 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "current qualified native runtime" in patcher
     assert "native_transplanted" in patcher
     assert "CI old Android SAF bridge omitted" in patcher
+    assert "current x86_64 RELEASE-test standalone startup preflight" in reusable
+    assert "FAIL: current x86_64 RELEASE-test APK did not remain running" in reusable
     assert "proguard-rules.pro" in patcher
     proguard = (ROOT / "apps/desktop/src-tauri/gen/android/app/proguard-rules.pro").read_text(
         encoding="utf-8"
