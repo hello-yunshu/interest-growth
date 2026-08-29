@@ -56,7 +56,9 @@ def test_press_enter_dispatches_keydown_and_keyup_without_shift():
 def test_create_question_submits_prompt_after_filling():
     # Filling the React-controlled textarea is not enough; the real product
     # send button path must receive a trusted pointer event.
-    assert "click_prompt_send(cdp)" in inspect.getsource(d.create_question)
+    source = inspect.getsource(d.create_question)
+    assert "PromptBar send button enabled after fill" in source
+    assert "click_prompt_send(cdp)" in source
 
 
 def test_prompt_send_uses_trusted_cdp_pointer_events():

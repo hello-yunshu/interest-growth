@@ -133,6 +133,17 @@ def click_prompt_send(cdp):
     return True
 
 
+def _prompt_send_ready(cdp):
+    """Return whether the real PromptBar send control has committed state."""
+    result = _coerce(cdp.evaluate(
+        "(() => { const el = document.querySelector('button[aria-label=\"发送\"]');"
+        "if (!el || el.disabled) return {ok:false};"
+        "const r = el.getBoundingClientRect();"
+        "return {ok:r.width > 0 && r.height > 0}; })()"
+    ), {})
+    return bool(result.get("ok"))
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers.
 # ---------------------------------------------------------------------------
@@ -386,6 +397,9 @@ def create_question(cdp, text, log, deadline):
     if not set_r.get("ok"):
         raise UpgradeError(f"set PromptBar textarea failed: {set_r}")
     log.append({"step": "prompt_fill", "ok": True, "chars": set_r.get("value")})
+    if not cae._wait_for(cdp, lambda: _prompt_send_ready(cdp),
+                         "PromptBar send button enabled after fill", deadline, log):
+        raise UpgradeError("PromptBar send button was not visible/enabled")
     if not click_prompt_send(cdp):
         raise UpgradeError("PromptBar send button was not visible/enabled")
     log.append({"step": "prompt_submit", "ok": True, "how": "trusted_pointer"})
