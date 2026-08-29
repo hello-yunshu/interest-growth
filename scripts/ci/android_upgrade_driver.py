@@ -218,6 +218,20 @@ def navigate_page(cdp, path, log, deadline):
             log.append({"step": "quick_navigation", "error": str(e)})
             return False
 
+    def static_export_route():
+        if path != "/curiosity":
+            return False
+        try:
+            result = _coerce(cdp.evaluate(
+                "(() => { "
+                "if (location.pathname.startsWith('/curiosity')) return {ok:false,step:'already_there'}; "
+                "window.location.replace('/curiosity/index.html'); return {ok:true}; })()"
+            ), {})
+            return bool(result.get("ok"))
+        except Exception as e:  # noqa: BLE001
+            log.append({"step": "static_export_navigation", "error": str(e)})
+            return False
+
     # The old Android WebView can treat a real pointer click on a Next <a>
     # element as a full asset navigation.  With Tauri's asset protocol that
     # lands on tauri.localhost/curiosity/ and renders the WebView's generic
@@ -228,7 +242,18 @@ def navigate_page(cdp, path, log, deadline):
     if quick_navigation:
         log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
     else:
-        log.append({"step": f"nav_{path}", "attempt": "quick_navigation_unavailable"})
+        # A legacy Android WebView can expose the hydrated shell but still
+        # lose the React click handler during the first post-enrollment paint.
+        # Its real anchor then performs a full asset navigation to
+        # /curiosity/, which Tauri's static asset protocol cannot resolve.
+        # Use the exported HTML entrypoint as a bounded, app-owned fallback;
+        # the page reload keeps the same app data/session and is still
+        # followed by the black-box PromptBar assertions below.
+        if static_export_route():
+            quick_navigation = True
+            log.append({"step": f"nav_{path}", "attempt": "static_export_entrypoint"})
+        else:
+            log.append({"step": f"nav_{path}", "attempt": "quick_navigation_unavailable"})
 
     expr = (
         "(() => { "
@@ -242,7 +267,7 @@ def navigate_page(cdp, path, log, deadline):
         "return {kind:'none'}; })()"
     )
     try:
-        nav = {"kind": "quick_palette"} if quick_navigation else _coerce(cdp.evaluate(expr), {})
+        nav = {"kind": "quick_navigation"} if quick_navigation else _coerce(cdp.evaluate(expr), {})
         if nav.get("kind") == "anchor" and nav.get("visible"):
             pointer_click(f"document.querySelector({cae._double_quote(anchor_selector)})")
             log.append({"step": f"nav_{path}", "attempt": "clicked_anchor_input"})
