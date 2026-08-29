@@ -66,6 +66,8 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "_shell_ready(cdp)" in source
     assert "Input.dispatchMouseEvent" in source
     assert "clicked_anchor_input" in source
+    assert "clicked_command_palette_input" in source
+    assert "button.commandItem" in source
     assert "location.assign" not in source
     assert "curiosity PromptBar did not render" in inspect.getsource(d.create_question)
 
