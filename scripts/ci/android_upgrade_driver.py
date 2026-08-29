@@ -224,7 +224,8 @@ def navigate_page(cdp, path, log, deadline):
         try:
             result = _coerce(cdp.evaluate(
                 "(() => { "
-                "if (location.pathname.startsWith('/curiosity')) return {ok:false,step:'already_there'}; "
+                "if (document.querySelector('textarea') && location.pathname.startsWith('/curiosity')) "
+                "return {ok:false,step:'already_there'}; "
                 "window.location.replace('/curiosity/index.html'); return {ok:true}; })()"
             ), {})
             return bool(result.get("ok"))
@@ -239,6 +240,12 @@ def navigate_page(cdp, path, log, deadline):
     # client-side route.  The product's command palette uses a button and
     # Next's router, so use that real product path before touching anchors.
     quick_navigation = command_palette_click()
+    if quick_navigation and not cae._wait_for(
+        cdp, lambda: _on_page(cdp, path),
+        "quick navigation target", min(deadline, time.time() + 10), log
+    ):
+        log.append({"step": f"nav_{path}", "attempt": "quick_navigation_unverified"})
+        quick_navigation = False
     if quick_navigation:
         log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
     else:

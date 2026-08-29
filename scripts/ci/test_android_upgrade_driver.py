@@ -72,6 +72,8 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "button.commandItem" in source
     assert "window.location.replace('/curiosity/index.html')" in source
     assert "static_export_entrypoint" in source
+    assert "quick_navigation_unverified" in source
+    assert 'document.querySelector(\'textarea\') && location.pathname.startsWith' in source
     assert "curiosity PromptBar did not render" in inspect.getsource(d.create_question)
 
 
