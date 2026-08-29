@@ -504,18 +504,20 @@ fn ci_old_setup_marker(name: &str) {
         )
     else:
         changes.append("lib.rs: historical setup has no CI trust-root boundary (no-op)")
-    broker_anchor = '            #[cfg(target_os = "android")]\n            let broker = RemoteBroker::with_expected_runtime(\n'
-    if broker_anchor not in lib_txt:
-        die("lib.rs Android broker anchor not found for setup diagnostics")
-    lib_txt = lib_txt.replace(
-        broker_anchor,
-        broker_anchor.replace(
-            '            let broker =',
-            '            ci_old_setup_marker("ci-old-before-keystore-store.txt");\n'
-            '            let broker =',
-        ),
-        1,
+    old_broker_anchor = '            #[cfg(target_os = "android")]\n            let broker = RemoteBroker::with_expected_runtime(\n'
+    current_broker_anchor = '            #[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]\n'
+    broker_diag = (
+        '            #[cfg(target_os = "android")]\n'
+        '            {\n'
+        '                ci_old_setup_marker("ci-old-before-keystore-store.txt");\n'
+        '            }\n'
     )
+    if old_broker_anchor in lib_txt:
+        lib_txt = lib_txt.replace(old_broker_anchor, broker_diag + old_broker_anchor, 1)
+    elif current_broker_anchor in lib_txt:
+        lib_txt = lib_txt.replace(current_broker_anchor, broker_diag + current_broker_anchor, 1)
+    else:
+        die("lib.rs Android broker anchor not found for setup diagnostics")
     manage_anchor = "            app.manage(DesktopState {\n"
     if manage_anchor not in lib_txt:
         die("lib.rs DesktopState anchor not found for setup diagnostics")
