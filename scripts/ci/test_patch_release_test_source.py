@@ -54,6 +54,8 @@ def test_static_forbidden_transplant_markers():
         assert forbidden not in text, forbidden
     assert "preserved historical plugin surface" in text
     assert "android-ci-trust-root" in text
+    assert "tls_certs_only" in text
+    assert "add_root_certificate" not in text
 
 
 def test_fake_old_tree_changes_only_allowlisted_paths_and_is_idempotent():
