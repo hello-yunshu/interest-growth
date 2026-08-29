@@ -46,6 +46,7 @@ import sys
 import time
 
 import android_cdp_enroll as cae
+import android_upgrade_auth as aua
 
 
 # ---------------------------------------------------------------------------
@@ -333,9 +334,9 @@ def _on_page(cdp, path):
         # The create surface is identified by its PromptBar textarea. A
         # pathname-only check can race a client-side navigation and leave the
         # caller on the prior settings page until the full timeout expires.
-        return bool(r.get("el")) and (
-            str(r.get("p", "")).startswith(path) or path == "/"
-        )
+        pathname = str(r.get("p", ""))
+        curiosity_entry = pathname.startswith("/curiosity") or pathname == "/curiosity.html"
+        return bool(r.get("el")) and (curiosity_entry or path == "/")
     return str(r.get("p", "")).startswith(path)
 
 
@@ -392,6 +393,45 @@ def _login_form_shown(cdp):
     return _has_selector(cdp, "#remoteLoginPassword")
 
 
+def _js_tauri_invoke(command, payload=None):
+    """Invoke a native Tauri command through the real WebView bridge."""
+    command_js = json.dumps(command, ensure_ascii=False)
+    payload_js = json.dumps(payload or {}, ensure_ascii=False)
+    return (
+        "(() => { const invoke = window.__TAURI_INTERNALS__ && "
+        "window.__TAURI_INTERNALS__.invoke; "
+        "if (typeof invoke !== 'function') return Promise.resolve({ok:false,error:'tauri invoke unavailable'}); "
+        f"return invoke({command_js}, {payload_js})"
+        ".then(value => ({ok:true,value}))"
+        ".catch(error => ({ok:false,error:String(error)})); })()"
+    )
+
+
+def authenticated_preflight(cdp, log, deadline, auth_mode, auth_evidence):
+    """Prove the native credential is usable with an authenticated API call."""
+    if time.time() >= deadline:
+        raise UpgradeError("authenticated preflight deadline expired")
+    status_result = _coerce(cdp.evaluate(_js_tauri_invoke("remote_session_status")), {})
+    if not status_result.get("ok"):
+        raise UpgradeError("remote_session_status invoke failed: " + aua.redact_secrets(
+            status_result.get("error", "unknown"), []))
+    session = aua.sanitize_session_status(status_result.get("value"))
+    if session.get("authExpired") or session.get("identityChanged"):
+        raise aua.AuthPreflightError("native session reports expired or changed identity")
+    api_result = _coerce(cdp.evaluate(_js_tauri_invoke(
+        "remote_api_request", {"path": "/api/system/capabilities", "method": "GET"}
+    )), {})
+    if not api_result.get("ok"):
+        raise UpgradeError("authenticated API preflight invoke failed: " + str(api_result.get("error", "unknown")))
+    response = _coerce(api_result.get("value"), {})
+    verdict = aua.classify_preflight_status(response.get("status"))
+    evidence = dict(auth_evidence)
+    evidence.update({"preflight_status": verdict["status"], "session_status": session})
+    log.append({"step": "auth_preflight", "result": "PASS", "auth_mode": auth_mode,
+                "status": verdict["status"], "session": session})
+    return evidence
+
+
 # ---------------------------------------------------------------------------
 # Stage implementations.
 # ---------------------------------------------------------------------------
@@ -404,15 +444,27 @@ def stage_create(cdp, origin, owner_password, device_name, bootstrap_token, mark
                           timeout=_remaining(deadline))
     log.extend(enrolled)
     deadline = max(deadline, time.time() + 120)
+    auth_evidence = aua.canonical_auth_evidence(
+        "password_exchange", owner_password=owner_password,
+    )
+    auth_evidence = authenticated_preflight(
+        cdp, log, deadline, "password_exchange", auth_evidence,
+    )
     navigate_page(cdp, "/curiosity", log, deadline)
     create_question(cdp, marker_question, log, deadline)
-    return log
+    return log, auth_evidence
 
 
-def stage_verify(cdp, marker_question, mutation_question, deadline):
+def stage_verify(cdp, marker_question, mutation_question, owner_password, deadline):
     """Post-upgrade proof. Deliberately does NOT call enroll/login: reading the
     pre-upgrade data back must succeed from the restored session alone."""
     log = [{"step": "verify_entry", "re_login_attempted": False}]
+    auth_evidence = aua.canonical_auth_evidence(
+        "legacy_session", session_present=True,
+    )
+    auth_evidence = authenticated_preflight(
+        cdp, log, deadline, "legacy_session", auth_evidence,
+    )
     navigate_page(cdp, "/curiosity", log, deadline)
     ok = cae._wait_for(cdp, lambda: _body_contains(cdp, marker_question),
                        "pre-upgrade data readable (session auto-restored)", deadline, log)
@@ -433,7 +485,7 @@ def stage_verify(cdp, marker_question, mutation_question, deadline):
                          "pre-upgrade data still present after mutation", deadline, log):
         raise UpgradeError("mutation dropped pre-upgrade data")
     log.append({"step": "mutate_ok", "ok": True, "mutation_question": mutation_question})
-    return log
+    return log, auth_evidence
 
 
 def _remaining(deadline):
@@ -480,11 +532,12 @@ def main(argv=None):
     ap.add_argument("--result-file", required=True)
     ap.add_argument("--adb", default="adb")
     ap.add_argument("--timeout-s", type=int, default=240)
+    ap.add_argument("--auth-evidence-file", help="redacted JSON authentication evidence")
     args = ap.parse_args(argv)
 
     started = time.time()
     payload = {"stage": args.stage, "result": "FAIL", "steps": [], "detail": "",
-               "elapsed_s": 0}
+               "elapsed_s": 0, "auth_evidence": {"schema": "android-upgrade-auth-v1", "result": "NOT_RUN"}}
     deadline = time.time() + args.timeout_s
     state = _load_state(args.state_file)
     marker = state.get("marker_question")
@@ -503,20 +556,25 @@ def main(argv=None):
         if args.stage == "create":
             nmarker = unique_marker()
             nmutation = unique_marker("ig-upgrade-mutate")
-            steps = stage_create(cdp, args.origin, args.owner_password,
+            steps, auth_evidence = stage_create(cdp, args.origin, args.owner_password,
                                  args.device_name, args.bootstrap_token, nmarker, deadline)
             payload.update({"result": "PASS", "steps": steps,
                             "marker_question": nmarker,
-                            "mutation_question": nmutation})
+                            "mutation_question": nmutation,
+                            "auth_evidence": auth_evidence})
             state.update({"marker_question": nmarker,
                           "mutation_question": nmutation})
         else:  # verify
-            steps = stage_verify(cdp, marker, mutation, deadline)
+            steps, auth_evidence = stage_verify(cdp, marker, mutation, args.owner_password, deadline)
             payload.update({"result": "PASS", "steps": steps,
                             "marker_question": marker,
-                            "mutation_question": mutation})
+                            "mutation_question": mutation,
+                            "auth_evidence": auth_evidence})
     except Exception as e:  # noqa: BLE001
-        payload["detail"] = f"{type(e).__name__}: {e}"
+        payload["detail"] = aua.redact_secrets(
+            f"{type(e).__name__}: {e}",
+            [args.owner_password, args.bootstrap_token],
+        )
     finally:
         try:
             cae.sh(["forward", "--remove", f"tcp:{args.devtools_port}"],
@@ -525,6 +583,10 @@ def main(argv=None):
             pass
         payload["elapsed_s"] = round(time.time() - started, 2)
         _write_result(args.result_file, payload)
+        if args.auth_evidence_file:
+            aua.write_json(args.auth_evidence_file, payload.get("auth_evidence", {
+                "schema": "android-upgrade-auth-v1", "result": payload["result"]
+            }))
         _save_state(args.state_file, state)
         sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return 0 if payload["result"] == "PASS" else 1

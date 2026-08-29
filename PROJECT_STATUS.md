@@ -9,7 +9,7 @@
 - **Current release status:** `PENDING_STABLE_CANDIDATE`; no Stable tag is created before successful Candidate Promotion
 - **Latest published Stable:** none
 - **Latest published prerelease:** `v1.0.0-rc.3` (published and used as the frozen first-Stable upgrade fallback)
-- **Known source-level BLOCKER/HIGH issues:** none
+- **Known release-evidence blocker:** Android historical N→N+1 evidence is not yet PASS; the OLD APK must be rebuilt from the published baseline with `historical-instrumented` provenance, authenticated preflight, continuity evidence, and an uploaded evidence artifact.
 - **Remaining release verification:** exact-SHA Stable Candidate full matrix → Promotion → immutable `v1.0.20` → exact-tag Release full matrix → post-release checksum verification
 
 The current source closure adds compile-time isolation for the CI Android trust

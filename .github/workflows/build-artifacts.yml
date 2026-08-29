@@ -196,7 +196,10 @@ jobs:
           NEXT_PUBLIC_API_BASE: http://localhost:8000/api
         run: npm --prefix apps/web run build
       - name: Build macOS bundle (ad-hoc test artifact)
-        run: npm --prefix apps/desktop run build -- --target aarch64-apple-darwin
+        # Candidate's official macOS contract is the .app package plus startup
+        # smoke. DMG bundling is not an asset of that contract and can fail on
+        # the runner's signing/image tooling, so do not invoke it here.
+        run: npm --prefix apps/desktop run tauri -- build --target aarch64-apple-darwin --bundles app
       - name: Packaged desktop-local startup smoke (macOS)
         # R0 §4 — launch the packaged .app binary, assert setup survives and
         # the local Core sidecar is spawned. Process/runtime-health evidence is

@@ -155,6 +155,81 @@ if [ -n "${PUBLISHED_BASELINE_APK}" ]; then
   echo "CURRENT_X86_TEST_CERT_SHA256=${NEW_CERT}"
 fi
 
+# Optional machine-readable evidence for the release closure artifact. This
+# records only APK metadata, hashes, and certificate fingerprints; credentials
+# and server tokens never enter this file. The static preflight still owns the
+# pass/fail exit status below.
+if [ -n "${ANDROID_UPGRADE_EVIDENCE_DIR:-}" ]; then
+  mkdir -p "${ANDROID_UPGRADE_EVIDENCE_DIR}"
+  export IG_EVIDENCE_OLD_APK="${OLD_APK}"
+  export IG_EVIDENCE_NEW_APK="${NEW_APK}"
+  export IG_EVIDENCE_PUBLISHED_APK="${PUBLISHED_BASELINE_APK}"
+  export IG_EVIDENCE_OLD_APPID="${OLD_APPID}"
+  export IG_EVIDENCE_NEW_APPID="${NEW_APPID}"
+  export IG_EVIDENCE_OLD_VCODE="${OLD_VCODE}"
+  export IG_EVIDENCE_NEW_VCODE="${NEW_VCODE}"
+  export IG_EVIDENCE_OLD_VNAME="${OLD_VNAME}"
+  export IG_EVIDENCE_NEW_VNAME="${NEW_VNAME}"
+  export IG_EVIDENCE_OLD_NATIVE="${OLD_NATIVE}"
+  export IG_EVIDENCE_NEW_NATIVE="${NEW_NATIVE}"
+  export IG_EVIDENCE_OLD_DBG="${OLD_DBG}"
+  export IG_EVIDENCE_NEW_DBG="${NEW_DBG}"
+  export IG_EVIDENCE_OLD_CERT="${OLD_CERT}"
+  export IG_EVIDENCE_NEW_CERT="${NEW_CERT}"
+  export IG_EVIDENCE_PUBLISHED_CERT="${PUBLISHED_BASELINE_CERT:-}"
+  python3 - <<'PY'
+import hashlib
+import json
+import os
+
+def digest(path):
+    if not path or not os.path.isfile(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+payload = {
+    "schema": "android-upgrade-apk-pair-v1",
+    "old": {
+        "file": os.path.basename(os.environ["IG_EVIDENCE_OLD_APK"]),
+        "sha256": digest(os.environ["IG_EVIDENCE_OLD_APK"]),
+        "application_id": os.environ["IG_EVIDENCE_OLD_APPID"],
+        "version_code": os.environ["IG_EVIDENCE_OLD_VCODE"],
+        "version_name": os.environ["IG_EVIDENCE_OLD_VNAME"],
+        "abi": os.environ["IG_EVIDENCE_OLD_NATIVE"],
+        "debuggable": os.environ["IG_EVIDENCE_OLD_DBG"],
+        "certificate_sha256": os.environ["IG_EVIDENCE_OLD_CERT"],
+    },
+    "new": {
+        "file": os.path.basename(os.environ["IG_EVIDENCE_NEW_APK"]),
+        "sha256": digest(os.environ["IG_EVIDENCE_NEW_APK"]),
+        "application_id": os.environ["IG_EVIDENCE_NEW_APPID"],
+        "version_code": os.environ["IG_EVIDENCE_NEW_VCODE"],
+        "version_name": os.environ["IG_EVIDENCE_NEW_VNAME"],
+        "abi": os.environ["IG_EVIDENCE_NEW_NATIVE"],
+        "debuggable": os.environ["IG_EVIDENCE_NEW_DBG"],
+        "certificate_sha256": os.environ["IG_EVIDENCE_NEW_CERT"],
+    },
+    "published_baseline": {
+        "file": os.path.basename(os.environ["IG_EVIDENCE_PUBLISHED_APK"]) if os.environ["IG_EVIDENCE_PUBLISHED_APK"] else None,
+        "sha256": digest(os.environ["IG_EVIDENCE_PUBLISHED_APK"]),
+        "certificate_sha256": os.environ["IG_EVIDENCE_PUBLISHED_CERT"],
+    },
+    "assertions": {
+        "same_application_id": os.environ["IG_EVIDENCE_OLD_APPID"] == os.environ["IG_EVIDENCE_NEW_APPID"],
+        "same_certificate": os.environ["IG_EVIDENCE_OLD_CERT"] == os.environ["IG_EVIDENCE_NEW_CERT"],
+        "version_code_monotonic": int(os.environ["IG_EVIDENCE_OLD_VCODE"] or 0) < int(os.environ["IG_EVIDENCE_NEW_VCODE"] or 0),
+        "both_non_debuggable": os.environ["IG_EVIDENCE_OLD_DBG"] == "no" and os.environ["IG_EVIDENCE_NEW_DBG"] == "no",
+    },
+}
+with open(os.path.join(os.environ["ANDROID_UPGRADE_EVIDENCE_DIR"], "apk-pair.json"), "w") as fh:
+    json.dump(payload, fh, indent=2, sort_keys=True)
+PY
+fi
+
 if [ "${FAILURES}" -ne 0 ]; then
   echo "UPGRADE APK PAIR PREFLIGHT: FAIL (${FAILURES} issue(s))" >&2
   exit 1

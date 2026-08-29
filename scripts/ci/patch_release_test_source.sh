@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Phase 4e — build-time transplant of the R4 CI-only release-test harness into a
-# source tree, so that a RELEASE-test x86_64 APK can be produced from a tag
-# whose runtime predates the R4 CI hooks (e.g. building the "previous" N side
-# of the upgrade-in-place proof from the exact previous tag).
+# Phase 4e — add the minimal CI-only release-test instrumentation to a
+# historical source tree so that a RELEASE-test x86_64 APK can be produced from
+# the exact previous tag without replacing its native runtime.
 #
 # WHY (upgrade-in-place, prompt §11): the previous exact tag (v1.0.0-rc.3)
 # predates R4's web-view CDP enablement (CiFlags.kt + MainActivity block) and
@@ -10,13 +9,13 @@
 # upgrade test over a REAL HTTPS edge, BOTH the old and new release-test APKs
 # must:
 #   * stay NON-debuggable (android:debuggable=false), and
-#   * expose the same gated CI harness (self-contained, production-off).
-# This script applies exactly those three, committed, gated enablers to a
+#   * expose the smallest gated CI harness needed by the black-box driver.
+# This script applies only CI instrumentation and build metadata to a
 # source root. It is idempotent and applied ONLY while producing a thrown-away
 # CI-release-test APK — it never alters the committed tag, never enables
 # debuggable, and never ships in a production artifact.
 #
-# The ten transforms (each skipped if already present):
+# The transforms (each skipped if already present):
 #   1. CiFlags.kt   -> ENABLE_WEBVIEW_REMOTE_DEBUGGING = true
 #   2. MainActivity -> call WebView.setWebContentsDebuggingEnabled(true) under
 #                      that flag, before super.onCreate (no new import: fully
@@ -28,20 +27,18 @@
 #                      release-test process aborts before the black-box driver
 #                      can connect. This is diagnostics only and is never used
 #                      by a production source tree.
-#   5. lib.rs       -> omit the production SAF bridge from the old upgrade APK;
-#                      the black-box fixture does not exercise document import/
-#                      export and must not depend on historical reflection.
-#   6. MainActivity -> write Java startup-boundary markers to app-private files
+#   5. MainActivity -> write Java startup-boundary markers to app-private files
 #                      for black-box failure diagnosis (CI-only).
-#   7. lib.rs       -> install a throw-away panic hook and startup marker so a
+#   6. lib.rs       -> install a throw-away panic hook and startup marker so a
 #                      historical Android abort exposes the Rust panic payload
 #                      and backtrace in app-private storage.
-#   8. proguard-rules.pro -> retain the Rust-registered Kotlin plugin and its
-#                            InvokeArg DTOs in the minified old APK.
-#   9. build.gradle.kts -> carry the explicit release-test build profile into
+#   7. proguard-rules.pro -> retain the historical Rust-registered Kotlin plugin
+#                            and its InvokeArg DTOs in a minified old APK.
+#   8. build.gradle.kts -> carry the explicit release-test build profile into
 #                          the old APK's generated Android project.
-#  10. lib.rs       -> keep the old fixture's Android opener/SAF bridges omitted
-#                      after the current qualified native runtime is transplanted.
+#   9. Cargo.toml/remote.rs -> declare and implement only the CI TLS trust-root
+#                              feature; the historical native runtime remains
+#                              otherwise unchanged.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -55,16 +52,16 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 SRC="$(cd "$1" && pwd)"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
 which python3 >/dev/null 2>&1 || { echo "FAIL: python3 not on PATH" >&2; exit 1; }
 [ -d "${SRC}/apps/desktop/src-tauri" ] || { echo "FAIL: not a desktop tree: ${SRC}" >&2; exit 1; }
 
 export IG_SRC="${SRC}"
-export IG_REPO_ROOT="${REPO_ROOT}"
 export IG_CIFLAGS_DIR="${SRC}/apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop"
 export IG_MAINACT="${IG_CIFLAGS_DIR}/MainActivity.kt"
 export IG_REMOTE="${SRC}/apps/desktop/src-tauri/src/remote.rs"
+export IG_CARGO="${SRC}/apps/desktop/src-tauri/Cargo.toml"
+export IG_GRADLE="${SRC}/apps/desktop/src-tauri/gen/android/app/build.gradle.kts"
+export IG_PROGUARD="${SRC}/apps/desktop/src-tauri/gen/android/app/proguard-rules.pro"
 
 python3 <<'PY'
 import os
@@ -72,10 +69,12 @@ import re
 import sys
 
 src = os.environ["IG_SRC"]
-repo_root = os.environ["IG_REPO_ROOT"]
 cif = os.path.join(os.environ["IG_CIFLAGS_DIR"], "CiFlags.kt")
 ma  = os.environ["IG_MAINACT"]
 rem = os.environ["IG_REMOTE"]
+cargo = os.environ["IG_CARGO"]
+gradle = os.environ["IG_GRADLE"]
+proguard = os.environ["IG_PROGUARD"]
 
 def die(m):
     print("FAIL: " + m, file=sys.stderr)
@@ -83,71 +82,93 @@ def die(m):
 
 changes = []
 
-# The published baseline predates the current Android startup/runtime contract.
-# Its historical native entry aborts inside Tauri's mobile start thread before
-# `run()` can execute, so the upgrade proof cannot reach the black-box driver.
-# Build the thrown-away old-version APK with the current, already-qualified
-# native runtime while retaining the baseline version metadata and Web source.
-# This is a CI-only source transplant: the current product tree is never
-# modified, and the resulting APK is never used as a production artifact.
-native_transplanted = False
-old_manifest = os.path.join(src, "apps/desktop/src-tauri/Cargo.toml")
-old_lock = os.path.join(src, "apps/desktop/src-tauri/Cargo.lock")
-with open(old_manifest) as fh:
-    old_manifest_txt = fh.read()
-old_version_match = re.search(r'^version\s*=\s*"([^"]+)"', old_manifest_txt, re.MULTILINE)
-if not old_version_match:
-    die("old Cargo.toml package version not found")
-old_version = old_version_match.group(1)
-native_marker = "CI throw-away baseline build uses current qualified native runtime"
 old_lib_path = os.path.join(src, "apps/desktop/src-tauri/src/lib.rs")
 with open(old_lib_path) as fh:
     old_lib_txt = fh.read()
-if native_marker not in old_lib_txt:
-    native_paths = [
-        "apps/desktop/src-tauri/src/lib.rs",
-        "apps/desktop/src-tauri/src/remote.rs",
-        "apps/desktop/src-tauri/src/runtime_mode.rs",
-        "apps/desktop/src-tauri/src/android_bridge.rs",
-        "apps/desktop/src-tauri/src/ui_ipc_e2e.rs",
-        "apps/desktop/src-tauri/gen/android/app/proguard-rules.pro",
-        "apps/desktop/src-tauri/gen/android/app/build.gradle.kts",
-        "apps/desktop/src-tauri/Cargo.toml",
-        "apps/desktop/src-tauri/Cargo.lock",
-    ]
-    for relative in native_paths:
-        source = os.path.join(repo_root, relative)
-        target = os.path.join(src, relative)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(source, "rb") as source_fh, open(target, "wb") as target_fh:
-            target_fh.write(source_fh.read())
-    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.toml")) as fh:
-        manifest_txt = fh.read()
-    manifest_txt = re.sub(
-        r'^(version\s*=\s*)"[^"]+"',
-        r'\g<1>"' + old_version + '"',
-        manifest_txt,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.toml"), "w") as fh:
-        fh.write(manifest_txt)
-    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.lock")) as fh:
-        lock_txt = fh.read()
-    lock_txt = lock_txt.replace(
-        'name = "interest-growth-desktop"\nversion = "1.0.20"',
-        'name = "interest-growth-desktop"\nversion = "' + old_version + '"',
+
+if "CI historical runtime preserved: no native source transplant" not in old_lib_txt:
+    with open(old_lib_path, "a") as fh:
+        fh.write("\n// CI historical runtime preserved: no native source transplant.\n")
+    changes.append("lib.rs: recorded historical runtime provenance (no native transplant)")
+else:
+    changes.append("lib.rs: historical runtime provenance marker already present (no-op)")
+
+# ---------- 0. CI-only feature/build metadata ----------
+if not os.path.exists(cargo):
+    die("Cargo.toml not found")
+with open(cargo) as fh:
+    cargo_txt = fh.read()
+if "android-ci-trust-root = []" not in cargo_txt:
+    if "[features]\n" in cargo_txt:
+        cargo_txt = cargo_txt.replace(
+            "[features]\n", "[features]\nandroid-ci-trust-root = []\n", 1)
+    else:
+        cargo_anchor = 'crate-type = ["staticlib", "cdylib", "rlib"]\n'
+        if cargo_anchor not in cargo_txt:
+            die("Cargo.toml crate-type anchor not found for CI feature")
+        cargo_txt = cargo_txt.replace(
+            cargo_anchor,
+            cargo_anchor + "\n[features]\nandroid-ci-trust-root = []\n",
+            1,
+        )
+    with open(cargo, "w") as fh:
+        fh.write(cargo_txt)
+    changes.append("Cargo.toml: declared android-ci-trust-root CI feature")
+else:
+    changes.append("Cargo.toml: CI trust-root feature already declared (no-op)")
+
+if not os.path.exists(gradle):
+    die("generated Android build.gradle.kts not found")
+with open(gradle) as fh:
+    gradle_txt = fh.read()
+if "val releaseTestBuild = System.getenv(\"PG_RELEASE_TEST\") == \"1\"" not in gradle_txt:
+    gradle_anchor = "\nandroid {\n"
+    if gradle_anchor not in gradle_txt:
+        die("build.gradle.kts android anchor not found")
+    gradle_txt = gradle_txt.replace(
+        gradle_anchor,
+        '\nval releaseTestBuild = System.getenv("PG_RELEASE_TEST") == "1"\n' + gradle_anchor,
         1,
     )
-    with open(os.path.join(src, "apps/desktop/src-tauri/Cargo.lock"), "w") as fh:
-        fh.write(lock_txt)
-    with open(old_lib_path, "a") as fh:
-        fh.write("\n// " + native_marker + ".\n")
-    native_transplanted = True
-    changes.append("old baseline: transplanted current qualified native runtime; restored baseline Cargo version " + old_version)
+if 'getByName("release") {' not in gradle_txt:
+    die("build.gradle.kts release build type anchor not found")
+release_head, release_tail = gradle_txt.split('getByName("release") {', 1)
+if "isMinifyEnabled = !releaseTestBuild" not in release_tail.split("\n        }", 1)[0]:
+    release_body = release_tail.split("\n        }", 1)[0]
+    if "isMinifyEnabled = true" not in release_body:
+        die("release build type has no minify anchor")
+    release_body = release_body.replace("isMinifyEnabled = true", "isMinifyEnabled = !releaseTestBuild", 1)
+    gradle_txt = release_head + 'getByName("release") {' + release_body + "\n        }" + release_tail.split("\n        }", 1)[1]
+if "CI-only release-test profile" not in gradle_txt:
+    gradle_txt = gradle_txt.replace(
+        'isMinifyEnabled = !releaseTestBuild',
+        '/* CI-only release-test profile remains non-debuggable but unminified. */\n            isMinifyEnabled = !releaseTestBuild',
+        1,
+    )
+with open(gradle, "w") as fh:
+    fh.write(gradle_txt)
+changes.append("build.gradle.kts: release-test profile is non-debuggable and unminified")
+
+if not os.path.exists(proguard):
+    die("proguard-rules.pro not found")
+with open(proguard) as fh:
+    proguard_txt = fh.read()
+if "InterestGrowthPlugin" not in proguard_txt:
+    proguard_txt += """
+
+# Historical Android release-test instrumentation: retain Rust-registered
+# plugin DTOs when the old APK is built with normal release shrinking.
+-keep class app.psychologygrowth.desktop.InterestGrowthPlugin { *; }
+-keep class app.psychologygrowth.desktop.StageContentUriArgs { *; }
+-keep class app.psychologygrowth.desktop.SaveDocumentFromFileArgs { *; }
+-keep class app.psychologygrowth.desktop.PickDocumentArgs { *; }
+-keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations,AnnotationDefault
+"""
+    with open(proguard, "w") as fh:
+        fh.write(proguard_txt)
+    changes.append("proguard-rules.pro: retained historical Kotlin plugin DTOs")
 else:
-    native_transplanted = True
-    changes.append("old baseline: current qualified native runtime already transplanted (no-op)")
+    changes.append("proguard-rules.pro: historical plugin keep rules already present (no-op)")
 
 CIFLAGS = (
 '// Phase 4c/e \u2014 build-time CI capability flag for a RELEASE-test APK.\n'
@@ -274,12 +295,12 @@ with open(rem) as fh:
     rem_txt = fh.read()
 
 HELPER = (
-'// Phase 4e (transplanted, CI-only) \u2014 optional TLS trust root for a\n'
+'// Phase 4e (CI-only historical instrumentation) \u2014 optional TLS trust root for a\n'
 '// RELEASE-test APK. Reads the Android system property `ig.ci.tls_ca_path`;\n'
 '// when set, loads that PEM as an additional root. Absent property =>\n'
 '// production behavior (Mozilla roots) unchanged. Fail-closed: a set-but-\n'
 '// unreadable/invalid PEM is a hard error, never a silent fallthrough.\n'
-'#[cfg(target_os = "android")]\n'
+'#[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]\n'
 'fn ci_ci_tls_trust_root_pem_path() -> Option<String> {\n'
 '    use std::ffi::CStr;\n'
 '    let mut value = [0i8; 92];\n'
@@ -302,7 +323,7 @@ NEW_CLIENT = (
 '        .connect_timeout(CONNECT_TIMEOUT)\n'
 '        .user_agent(format!("interest-growth-desktop/{CLIENT_APP_VERSION}"))\n'
 '        .redirect(reqwest::redirect::Policy::none());\n'
-'    #[cfg(target_os = "android")]\n'
+'    #[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]\n'
 '    if let Some(pem) = ci_ci_tls_trust_root_pem_path() {\n'
 '        let bytes = std::fs::read(&pem)\n'
 '            .map_err(|e| format!("cannot read CI TLS trust root {pem}: {e}"))?;\n'
@@ -372,56 +393,10 @@ else:
     changes.append("lib.rs: startup error diagnostic already present (no-op)")
 
 # ---------- 5. historical Android plugin surface ----------
-# v1.0.0-rc.3 registers desktop shell/updater/dialog/fs/opener and SAF bridge plugins on Android.
-# That old native plugin surface aborts before setup can return a Result on the
-# API 35 release-test emulator. Transplant the later, committed target_os split
-# into the throw-away old APK source. The Android behavior then matches the
-# current production plugin surface; desktop builds of the historical source
-# retain the original plugins. This is deliberately exact-anchor and fail-closed.
-android_plugin_marker = "CI historical Android plugin surface: desktop-only plugins"
-if android_plugin_marker not in lib_txt:
-    old_plugins = '''    let mut builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
-        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
-        // Android (no-op plugin on desktop). The SAF bridge lets the native
-        // layer read/write file bytes without a renderer base64 copy.
-        .plugin(android_bridge::init());'''
-    new_plugins = '''    // CI historical Android plugin surface: desktop-only plugins
-    // are excluded from the old release-test APK, matching the current
-    // production broker + WebView surface and preventing native plugin-init
-    // aborts in the historical generated Android host.
-    let mut builder = tauri::Builder::default();
-    #[cfg(not(target_os = "android"))]
-    {
-        builder = builder
-            .plugin(tauri_plugin_shell::init())
-            .plugin(tauri_plugin_updater::Builder::new().build())
-            .plugin(tauri_plugin_dialog::init())
-            .plugin(tauri_plugin_fs::init())
-            .plugin(tauri_plugin_opener::init());
-    }
-    // The old upgrade fixture does not exercise the SAF bridge. Keep it out
-    // of the historical Android host; it remains registered in production.
-    #[cfg(not(target_os = "android"))]
-    {
-        builder = builder.plugin(android_bridge::init());
-    }'''
-    if old_plugins not in lib_txt:
-        if native_transplanted and "Gate R2 §6.4 — desktop vs Android plugin surface is structurally split." in lib_txt:
-            changes.append("lib.rs: current qualified Android plugin surface already present (no-op)")
-        else:
-            die("historical Android plugin registration anchor not found")
-    else:
-        lib_txt = lib_txt.replace(old_plugins, new_plugins, 1)
-        with open(lib, "w") as fh:
-            fh.write(lib_txt)
-        changes.append("lib.rs: transplanted minimal historical Android plugin surface")
-else:
-    changes.append("lib.rs: historical Android plugin surface already present (no-op)")
+# Preserve the exact historical plugin and credential surface. Compatibility
+# changes belong in the explicit feature-gated CI instrumentation only; a
+# current-native plugin transplant would invalidate the provenance claim.
+changes.append("lib.rs: preserved historical plugin surface (no-op)")
 
 # ---------- 6. historical Android startup panic diagnostics ----------
 # Tauri's Android JNI entry aborts the process when the start thread panics;
@@ -474,44 +449,7 @@ if panic_marker not in lib_txt:
 else:
     changes.append("lib.rs: startup panic diagnostic hook already present (no-op)")
 
-# ---------- 7. historical Android plugin bridges omitted ----------
-# The old release-test fixture exercises only the broker and WebView. Its
-# generated host has no need for external-link or SAF commands, so omit both
-# Android plugin registrations. This keeps the throw-away APK independent of
-# historical plugin reflection while leaving production registration unchanged.
-opener_marker = "CI old Android opener plugin omitted"
-if opener_marker not in lib_txt:
-    current_opener = '''    #[cfg(target_os = "android")]
-    {
-        builder = builder.plugin(tauri_plugin_opener::init());
-    }
-    builder = builder
-        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
-        // Android (no-op plugin on desktop). The SAF bridge lets the native
-        // layer read/write file bytes without a renderer base64 copy.
-        .plugin(android_bridge::init());'''
-    replacement_opener = '''    // CI old Android opener plugin omitted: the upgrade fixture does not
-    // exercise external-link commands; production keeps this registration.
-    // CI old Android SAF bridge omitted: the upgrade fixture does not invoke
-    // document import/export; production keeps this registration.
-    #[cfg(not(target_os = "android"))]
-    {
-        builder = builder
-            // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
-            // Android (no-op plugin on desktop). The SAF bridge lets the native
-            // layer read/write file bytes without a renderer base64 copy.
-            .plugin(android_bridge::init());
-    }'''
-    if current_opener not in lib_txt:
-        die("current Android opener/SAF registration anchor not found")
-    lib_txt = lib_txt.replace(current_opener, replacement_opener, 1)
-    with open(lib, "w") as fh:
-        fh.write(lib_txt)
-    changes.append("lib.rs: omitted opener and SAF Android plugins from old upgrade fixture")
-else:
-    changes.append("lib.rs: old Android opener plugin already omitted (no-op)")
-
-# ---------- 9. setup boundary diagnostics ----------
+# ---------- 7. setup boundary diagnostics ----------
 # Tauri runs the setup hook from its Android event-loop callback. A setup error
 # is converted to a panic there and the mobile entry point aborts the process,
 # so the post-run error handler above cannot observe it. Keep throw-away markers
@@ -551,25 +489,24 @@ fn ci_old_setup_marker(name: &str) {
         1,
     )
     trust_anchor = "                let trust_root = remote::ci_tls_trust_root()\n"
-    if trust_anchor not in lib_txt:
-        die("lib.rs CI trust-root anchor not found for setup diagnostics")
-    lib_txt = lib_txt.replace(
-        trust_anchor,
-        '                ci_old_setup_marker("ci-old-before-trust-root.txt");\n' + trust_anchor,
-        1,
-    )
-    store_anchor = '''                    AndroidKeystoreStore::new()
-                        .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
-'''
+    if trust_anchor in lib_txt:
+        lib_txt = lib_txt.replace(
+            trust_anchor,
+            '                ci_old_setup_marker("ci-old-before-trust-root.txt");\n' + trust_anchor,
+            1,
+        )
+    else:
+        changes.append("lib.rs: historical setup has no CI trust-root boundary (no-op)")
+    store_anchor = '                AndroidKeystoreStore::new()\n' \
+        '                    .map_err(|error| format!("failed to open Android Keystore: {error}"))?,\n'
+    if store_anchor not in lib_txt:
+        store_anchor = '                    AndroidKeystoreStore::new()\n' \
+            '                        .map_err(|error| format!("failed to open Android Keystore: {error}"))?,\n'
     if store_anchor not in lib_txt:
         die("lib.rs Android Keystore anchor not found for setup diagnostics")
     lib_txt = lib_txt.replace(
         store_anchor,
-        '                    {\n'
-        '                        ci_old_setup_marker("ci-old-before-keystore-store.txt");\n'
-        '                        AndroidKeystoreStore::new()\n'
-        '                            .map_err(|error| format!("failed to open Android Keystore: {error}"))?\n'
-        '                    },\n',
+        '                ci_old_setup_marker("ci-old-before-keystore-store.txt");\n' + store_anchor,
         1,
     )
     manage_anchor = "            app.manage(DesktopState {\n"
@@ -586,35 +523,9 @@ fn ci_old_setup_marker(name: &str) {
 else:
     changes.append("lib.rs: Android setup boundary diagnostics already present (no-op)")
 
-# ---------- 10. historical Android SAF bridge omission (legacy anchor) ----------
-# The upgrade fixture exercises the broker and WebView only. The current
-# production native runtime registers the SAF Android plugin for document
-# import/export, but the historical generated Android host is not part of the
-# product artifact and does not need that bridge. Keep it out of the old APK
-# so a registration/reflection failure cannot abort the black-box startup.
-# This is a throw-away fixture change; production `lib.rs` remains unchanged.
-bridge_marker = "CI old Android SAF bridge omitted"
-if bridge_marker not in lib_txt:
-    current_bridge = '''    builder = builder
-        // Gate R0.5/R0.6 — registers the Kotlin InterestGrowthPlugin on
-        // Android (no-op plugin on desktop). The SAF bridge lets the native
-        // layer read/write file bytes without a renderer base64 copy.
-        .plugin(android_bridge::init());'''
-    replacement_bridge = '''    // CI old Android SAF bridge omitted: the upgrade fixture does not invoke
-    // document import/export, and the historical host must not depend on the
-    // production Kotlin plugin registration during black-box startup.
-    #[cfg(not(target_os = "android"))]
-    {
-        builder = builder.plugin(android_bridge::init());
-    }'''
-    if current_bridge not in lib_txt:
-        die("current Android SAF bridge registration anchor not found")
-    lib_txt = lib_txt.replace(current_bridge, replacement_bridge, 1)
-    with open(lib, "w") as fh:
-        fh.write(lib_txt)
-    changes.append("lib.rs: omitted Android SAF bridge from old upgrade fixture")
-else:
-    changes.append("lib.rs: old Android SAF bridge already omitted (no-op)")
+# The historical plugin surface, Android bridge, and credential path remain
+# unchanged. This is part of the fail-closed provenance contract.
+changes.append("lib.rs: preserved historical plugin surface and credential path (no-op)")
 
 for c in changes:
     print("  + " + c)

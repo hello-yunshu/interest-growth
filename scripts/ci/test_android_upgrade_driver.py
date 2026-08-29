@@ -59,6 +59,15 @@ def test_create_question_submits_prompt_after_filling():
     assert "js_press_enter(\"textarea\")" in inspect.getsource(d.create_question)
 
 
+def test_authenticated_preflight_uses_native_bridge_and_protected_route():
+    source = inspect.getsource(d.authenticated_preflight)
+    assert "remote_session_status" in source
+    assert "remote_api_request" in source
+    assert "/api/system/capabilities" in source
+    assert "classify_preflight_status" in source
+    assert "auth_mode" in source
+
+
 def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     source = inspect.getsource(d.navigate_page)
     assert "anchor_selector = f'a[href=\"{path}\"]" in source
@@ -81,6 +90,11 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
 def test_shell_ready_accepts_static_export_trailing_slash_route():
     source = inspect.getsource(d._shell_ready)
     assert 'a[href^=\\"/curiosity\\"]' in source
+
+
+def test_curiosity_static_export_entrypoint_counts_as_target_page():
+    source = inspect.getsource(d._on_page)
+    assert 'pathname == "/curiosity.html"' in source
 
 
 def test_resilient_cdp_reconnects_after_transport_close():
