@@ -62,6 +62,8 @@ def test_create_question_submits_prompt_after_filling():
 def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     source = inspect.getsource(d.navigate_page)
     assert "anchor_selector = f'a[href=\"{path}\"]" in source
+    assert "product's command palette" in source
+    assert "if command_palette_click():" in source
     assert "_on_page(cdp, path)" in source
     assert "_shell_ready(cdp)" in source
     assert "Input.dispatchMouseEvent" in source
