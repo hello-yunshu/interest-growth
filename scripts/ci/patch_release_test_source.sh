@@ -396,6 +396,7 @@ else:
 # Preserve the exact historical plugin and credential surface. Compatibility
 # changes belong in the explicit feature-gated CI instrumentation only; a
 # current-native plugin transplant would invalidate the provenance claim.
+# CI historical Android plugin surface is preserved byte-for-byte.
 changes.append("lib.rs: preserved historical plugin surface (no-op)")
 
 # ---------- 6. historical Android startup panic diagnostics ----------
