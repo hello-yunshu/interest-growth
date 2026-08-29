@@ -3,7 +3,7 @@
 
 Verifies the pure, WebView-independent parts:
   * textarea JS generation for the curiosity PromptBar (create / mutation),
-  * Enter-submit key displacement,
+  * Enter-submit key displacement and trusted send-button clicking,
   * marker generation,
   * cross-stage state-file handoff + honest FAIL shaping on failure,
   * stdlib-only runtime (no pip deps).
@@ -55,8 +55,15 @@ def test_press_enter_dispatches_keydown_and_keyup_without_shift():
 
 def test_create_question_submits_prompt_after_filling():
     # Filling the React-controlled textarea is not enough; the real product
-    # path must receive the Enter event that submits the question.
-    assert "js_press_enter(\"textarea\")" in inspect.getsource(d.create_question)
+    # send button path must receive a trusted pointer event.
+    assert "click_prompt_send(cdp)" in inspect.getsource(d.create_question)
+
+
+def test_prompt_send_uses_trusted_cdp_pointer_events():
+    source = inspect.getsource(d.click_prompt_send)
+    assert 'button[aria-label=\\"发送\\"]' in source
+    assert "Input.dispatchMouseEvent" in source
+    assert "mousePressed" in source and "mouseReleased" in source
 
 
 def test_authenticated_preflight_uses_native_bridge_and_protected_route():
