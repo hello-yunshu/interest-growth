@@ -181,6 +181,43 @@ def navigate_page(cdp, path, log, deadline):
         # navigation before Next's delegated click handler is hydrated.
         time.sleep(min(5, _remaining(deadline)))
     anchor_selector = f'a[href="{path}"], a[href^="{path}?"], a[href*="{path}"]'
+    def pointer_click(finder):
+        result = _coerce(cdp.evaluate(
+            "(() => { const el = " + finder + "; if (!el) return {ok:false}; "
+            "const r = el.getBoundingClientRect(); return {ok:r.width > 0 && r.height > 0, "
+            "x:r.left + r.width / 2, y:r.top + r.height / 2}; })()"), {})
+        if not result.get("ok"):
+            return False
+        x, y = float(result["x"]), float(result["y"])
+        cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+        cdp.call("Input.dispatchMouseEvent", {
+            "type": "mousePressed", "x": x, "y": y,
+            "button": "left", "buttons": 1, "clickCount": 1,
+        })
+        cdp.call("Input.dispatchMouseEvent", {
+            "type": "mouseReleased", "x": x, "y": y,
+            "button": "left", "buttons": 0, "clickCount": 1,
+        })
+        return True
+
+    def command_palette_click():
+        if path != "/curiosity":
+            return False
+        try:
+            if not pointer_click("document.querySelector('button.globalSearch')"):
+                return False
+            if not cae._wait_for(cdp, lambda: _has_selector(cdp, ".commandBackdrop"),
+                                 "quick navigation palette", min(deadline, time.time() + 10), log):
+                return False
+            finder = (
+                "Array.from(document.querySelectorAll('button.commandItem')).find("
+                "el => (el.innerText || '').includes('好奇心'))"
+            )
+            return pointer_click(finder)
+        except Exception as e:  # noqa: BLE001
+            log.append({"step": "quick_navigation", "error": str(e)})
+            return False
+
     expr = (
         "(() => { "
         f"const a = document.querySelector({cae._double_quote(anchor_selector)}); "
@@ -195,16 +232,7 @@ def navigate_page(cdp, path, log, deadline):
     try:
         nav = _coerce(cdp.evaluate(expr), {})
         if nav.get("kind") == "anchor" and nav.get("visible"):
-            x, y = float(nav["x"]), float(nav["y"])
-            cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
-            cdp.call("Input.dispatchMouseEvent", {
-                "type": "mousePressed", "x": x, "y": y,
-                "button": "left", "buttons": 1, "clickCount": 1,
-            })
-            cdp.call("Input.dispatchMouseEvent", {
-                "type": "mouseReleased", "x": x, "y": y,
-                "button": "left", "buttons": 0, "clickCount": 1,
-            })
+            pointer_click(f"document.querySelector({cae._double_quote(anchor_selector)})")
             log.append({"step": f"nav_{path}", "attempt": "clicked_anchor_input"})
         else:
             log.append({"step": f"nav_{path}", "attempt": nav.get("kind", "unknown")})
@@ -226,18 +254,12 @@ def navigate_page(cdp, path, log, deadline):
             break
         log.append({"step": f"nav_{path}", "retry": "real_anchor_click", "attempt": attempt + 1})
         try:
-            nav = _coerce(cdp.evaluate(expr), {})
-            if nav.get("kind") == "anchor" and nav.get("visible"):
-                x, y = float(nav["x"]), float(nav["y"])
-                cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
-                cdp.call("Input.dispatchMouseEvent", {
-                    "type": "mousePressed", "x": x, "y": y,
-                    "button": "left", "buttons": 1, "clickCount": 1,
-                })
-                cdp.call("Input.dispatchMouseEvent", {
-                    "type": "mouseReleased", "x": x, "y": y,
-                    "button": "left", "buttons": 0, "clickCount": 1,
-                })
+            if command_palette_click():
+                log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
+            else:
+                nav = _coerce(cdp.evaluate(expr), {})
+                if nav.get("kind") == "anchor" and nav.get("visible"):
+                    pointer_click(f"document.querySelector({cae._double_quote(anchor_selector)})")
         except Exception as e:  # noqa: BLE001
             log.append({"step": f"nav_{path}", "retry_error": str(e), "attempt": attempt + 1})
         state = _coerce(cdp.evaluate("({p: location.pathname, href: location.href})"), {})
