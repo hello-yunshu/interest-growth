@@ -149,6 +149,13 @@ class ResilientCdp:
             self._connect()
             return self._cdp.evaluate(expression)
 
+    def call(self, method, params=None):
+        try:
+            return self._cdp.call(method, params)
+        except (BrokenPipeError, ConnectionError, OSError, cae.WsError):
+            self._connect()
+            return self._cdp.call(method, params)
+
 
 # ---------------------------------------------------------------------------
 # Flow building blocks.
@@ -173,37 +180,43 @@ def navigate_page(cdp, path, log, deadline):
         # the legacy WebView can perform the anchor's default asset
         # navigation before Next's delegated click handler is hydrated.
         time.sleep(min(5, _remaining(deadline)))
+    anchor_selector = f'a[href="{path}"], a[href^="{path}?"], a[href*="{path}"]'
     expr = (
         "(() => { "
-        f"const a = document.querySelector('a[href=\"{path}\"], a[href^=\"{path}?\"], a[href*=\"{path}\"]'); "
-        "if (a && typeof a.click === 'function') { "
-        "  let bubbled = false; "
-        "  const guard = event => { bubbled = true; event.preventDefault(); }; "
-        "  document.addEventListener('click', guard); "
-        "  try { a.click(); } finally { document.removeEventListener('click', guard); } "
-        "  return bubbled ? 'clicked_anchor_guarded' : 'clicked_anchor'; "
-        "} "
+        f"const a = document.querySelector({cae._double_quote(anchor_selector)}); "
+        "if (a) { const r = a.getBoundingClientRect(); "
+        "  return {kind:'anchor', x:r.left + r.width / 2, y:r.top + r.height / 2, "
+        "  visible:r.width > 0 && r.height > 0}; } "
         "const g = window.next; "
         "const r = (g && (g.router || g.app && g.app.router)); "
-        f"if (r && typeof r.push === 'function') {{ r.push({path!r}).catch(()=>{{}}); return 'pushed'; }} "
-        "return 'no_router_no_anchor'; })()"
+        f"if (r && typeof r.push === 'function') {{ r.push({path!r}).catch(()=>{{}}); return {{kind:'pushed'}}; }} "
+        "return {kind:'none'}; })()"
     )
     try:
-        res = _coerce(cdp.evaluate(expr), {})
-        if isinstance(res, dict):
-            res = str(res)
-        log.append({"step": f"nav_{path}", "attempt": res})
-        if res == "no_router_no_anchor":
+        nav = _coerce(cdp.evaluate(expr), {})
+        if nav.get("kind") == "anchor" and nav.get("visible"):
+            x, y = float(nav["x"]), float(nav["y"])
+            cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+            cdp.call("Input.dispatchMouseEvent", {
+                "type": "mousePressed", "x": x, "y": y,
+                "button": "left", "buttons": 1, "clickCount": 1,
+            })
+            cdp.call("Input.dispatchMouseEvent", {
+                "type": "mouseReleased", "x": x, "y": y,
+                "button": "left", "buttons": 0, "clickCount": 1,
+            })
+            log.append({"step": f"nav_{path}", "attempt": "clicked_anchor_input"})
+        else:
+            log.append({"step": f"nav_{path}", "attempt": nav.get("kind", "unknown")})
+        if nav.get("kind") == "none":
             cdp.evaluate(
                 f"(() => {{ try {{ history.replaceState({{}}, '', {path!r}); "
                 "window.dispatchEvent(new Event('popstate')); } catch(e){} return 1; })()")
     except Exception as e:  # noqa: BLE001
         log.append({"step": f"nav_{path}", "error": str(e)})
-    # The exported Next app normally handles the real Nav anchor above. Some
-    # old WebView/Next combinations start the click before hydration; the
-    # document-level guard prevents a default full-page asset navigation in
-    # that window. Retry the same real in-app anchor until hydration commits
-    # the route or the driver deadline is reached.
+    # The exported Next app normally handles the real Nav anchor above. Use a
+    # trusted CDP pointer event on every retry so old WebViews do not treat a
+    # synthetic HTMLElement.click() as an immediate full-page asset load.
     for attempt in range(1, 5):
         click_deadline = min(deadline, time.time() + 15)
         if cae._wait_for(cdp, lambda: _on_page(cdp, path),
@@ -211,9 +224,20 @@ def navigate_page(cdp, path, log, deadline):
             return
         if attempt == 4:
             break
-        log.append({"step": f"nav_{path}", "retry": "guarded_anchor_click", "attempt": attempt + 1})
+        log.append({"step": f"nav_{path}", "retry": "real_anchor_click", "attempt": attempt + 1})
         try:
-            cdp.evaluate(expr)
+            nav = _coerce(cdp.evaluate(expr), {})
+            if nav.get("kind") == "anchor" and nav.get("visible"):
+                x, y = float(nav["x"]), float(nav["y"])
+                cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+                cdp.call("Input.dispatchMouseEvent", {
+                    "type": "mousePressed", "x": x, "y": y,
+                    "button": "left", "buttons": 1, "clickCount": 1,
+                })
+                cdp.call("Input.dispatchMouseEvent", {
+                    "type": "mouseReleased", "x": x, "y": y,
+                    "button": "left", "buttons": 0, "clickCount": 1,
+                })
         except Exception as e:  # noqa: BLE001
             log.append({"step": f"nav_{path}", "retry_error": str(e), "attempt": attempt + 1})
         state = _coerce(cdp.evaluate("({p: location.pathname, href: location.href})"), {})
