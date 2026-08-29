@@ -103,6 +103,36 @@ def js_textarea_value(selector):
     )
 
 
+def click_prompt_send(cdp):
+    """Click the real PromptBar send button with a trusted CDP pointer event.
+
+    The historical Android WebView can treat a synthetic Enter dispatch as a
+    navigation even though PromptBar's React handler calls preventDefault.
+    Clicking the product button exercises the same onClick path without
+    allowing the textarea's native key handling to navigate the asset route.
+    """
+    result = _coerce(cdp.evaluate(
+        "(() => { const el = document.querySelector('button[aria-label=\"发送\"]');"
+        " if (!el || el.disabled) return {ok:false};"
+        " const r = el.getBoundingClientRect();"
+        " return {ok:r.width > 0 && r.height > 0, x:r.left + r.width / 2,"
+        " y:r.top + r.height / 2}; })()"
+    ), {})
+    if not result.get("ok"):
+        return False
+    x, y = float(result["x"]), float(result["y"])
+    cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+    cdp.call("Input.dispatchMouseEvent", {
+        "type": "mousePressed", "x": x, "y": y,
+        "button": "left", "buttons": 1, "clickCount": 1,
+    })
+    cdp.call("Input.dispatchMouseEvent", {
+        "type": "mouseReleased", "x": x, "y": y,
+        "button": "left", "buttons": 0, "clickCount": 1,
+    })
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers.
 # ---------------------------------------------------------------------------
@@ -360,10 +390,9 @@ def create_question(cdp, text, log, deadline):
     if not set_r.get("ok"):
         raise UpgradeError(f"set PromptBar textarea failed: {set_r}")
     log.append({"step": "prompt_fill", "ok": True, "chars": set_r.get("value")})
-    submit_r = _coerce(cdp.evaluate(js_press_enter("textarea")), {})
-    if not submit_r.get("ok"):
-        raise UpgradeError(f"submit PromptBar textarea failed: {submit_r}")
-    log.append({"step": "prompt_submit", "ok": True})
+    if not click_prompt_send(cdp):
+        raise UpgradeError("PromptBar send button was not visible/enabled")
+    log.append({"step": "prompt_submit", "ok": True, "how": "trusted_pointer"})
     ok = cae._wait_for(cdp, lambda: _body_contains(cdp, text),
                        "question rendered in the table", deadline, log)
     if not ok:
