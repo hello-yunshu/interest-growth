@@ -652,6 +652,27 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@v7.0.1 # v7.0.1
+      - name: Initialize Android upgrade evidence
+        if: needs.release-meta.outputs.is_stable == 'true'
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p android-upgrade-evidence
+          python3 - <<'PY'
+          import json, os
+          payload = {
+              "schema": "android-upgrade-evidence-v1",
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "workflow": os.environ.get("GITHUB_WORKFLOW"),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "job": os.environ.get("GITHUB_JOB"),
+              "status": "IN_PROGRESS",
+          }
+          with open("android-upgrade-evidence/metadata.json", "w") as fh:
+              json.dump(payload, fh, indent=2, sort_keys=True)
+          PY
       - name: "Fail-closed: all release signing secrets must be present"
         if: needs.release-meta.outputs.is_stable == 'true'
         env:
@@ -727,12 +748,10 @@ jobs:
           test -s "${PUBLISHED}" || { echo "FAIL: real published baseline APK was not downloaded" >&2; exit 1; }
           echo "published_baseline_apk=${PUBLISHED}" >> "$GITHUB_ENV"
           echo "PUBLISHED_BASELINE_APK_SHA256=$(sha256sum "${PUBLISHED}" | awk '{print $1}')" >> "$GITHUB_STEP_SUMMARY"
-      - name: Build-time transplant CI hooks into old release-test source, §11
-        # The previous exact tag predates R4's WebView CDP/TLS hooks and the
-        # later minimal Android plugin surface. patch_release_test_source.sh
-        # applies only committed, gated CI enablers to a throw-away APK: CDP,
-        # TLS trust-root, startup diagnostics, and the historical Android
-        # plugin isolation (desktop, opener, and SAF surfaces are omitted).
+      - name: Build-time historical-source CI instrumentation, §11
+        # The previous exact tag predates the CDP/TLS hooks. The patch script
+        # adds only throw-away instrumentation and build metadata; it never
+        # transplants current native plugins, SAF, credentials, or runtime code.
         # It does NOT set android:debuggable and never changes the product.
         if: needs.release-meta.outputs.is_stable == 'true'
         run: bash scripts/ci/patch_release_test_source.sh prev_src
@@ -792,6 +811,38 @@ jobs:
         with:
           name: interest-growth-android-artifacts
           path: dist/android
+      - name: Record historical APK provenance, §11
+        if: needs.release-meta.outputs.is_stable == 'true'
+        env:
+          NEW_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          OLD_SOURCE_SHA="$(git -C prev_src rev-parse HEAD)"
+          export OLD_SOURCE_SHA
+          export OLD_BASELINE_TAG="${prev_tag}"
+          python3 scripts/ci/android_upgrade_provenance.py \
+            --old-baseline-tag "${prev_tag}" \
+            --old-source-sha "${OLD_SOURCE_SHA}" \
+            --old-apk dist/android/prev/interest-growth-android-x86_64-release.apk \
+            --new-apk dist/android/interest-growth-android-x86_64-release.apk \
+            --new-source-sha "${NEW_SOURCE_SHA}" \
+            --runtime-provenance historical-instrumented \
+            --web-provenance patched \
+            --instrumentation cdp \
+            --instrumentation ci-tls-trust-root \
+            --instrumentation startup-diagnostics \
+            --auth-evidence-path auth-create.json \
+            --output android-upgrade-evidence/provenance.json
+          python3 - <<'PY'
+          import json
+          import os
+          path = "android-upgrade-evidence/metadata.json"
+          with open(path) as fh: data = json.load(fh)
+          data.update({"old_baseline_tag": os.environ["OLD_BASELINE_TAG"],
+                       "old_source_sha": os.environ["OLD_SOURCE_SHA"]})
+          data["status"] = "STATIC_PAIR_PENDING"
+          with open(path, "w") as fh: json.dump(data, fh, indent=2, sort_keys=True)
+          PY
       - name: Static upgrade-pair preflight (old vs new), §11
         # Before the emulator boots: applicationId old==new, cert SHA-256 old==new,
         # ABI old/new==x86_64, old versionCode < new, both non-debuggable. Any
@@ -800,8 +851,9 @@ jobs:
         run: |
           docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work \
             -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_UPGRADE_EVIDENCE_DIR=/work/android-upgrade-evidence \
             interest-growth-android bash -c \
-              'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_upgrade_apk_pair.sh dist/android/prev/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-release.apk dist/android/published-baseline/interest-growth-android-arm64.apk'
+            'export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"; bash scripts/ci/verify_upgrade_apk_pair.sh dist/android/prev/interest-growth-android-x86_64-release.apk dist/android/interest-growth-android-x86_64-release.apk dist/android/published-baseline/interest-growth-android-arm64.apk'
       - name: Clean up signing material
         if: always()
         run: rm -rf "$RUNNER_TEMP/keystore"
@@ -864,14 +916,51 @@ jobs:
             adb logcat -b all -d -t 300 2>/dev/null | grep -iE 'CI_OLD_STARTUP|psychologygrowth|AndroidRuntime|FATAL|panicked|panic at|failed to initialize|Keystore|keyring|tauri|abort|SIGABRT|error' | tail -160 >&2 || true
             for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then echo "old upgrade app process is running"; break; fi; sleep 2; done
             if ! adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then bash scripts/ci/print_android_startup_diagnostics.sh app.psychologygrowth.desktop; exit 1; fi
-            if python3 scripts/ci/android_upgrade_driver.py --stage create --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --bootstrap-token 'ci-bootstrap-token-7a1f' --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_create.json --timeout-s 300; then echo "create stage: PASS"; else rc=$?; echo "--- create driver result ---" >&2; cat /tmp/ig_upg_create.json >&2 || true; echo "--- create-stage crash buffer ---" >&2; adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true; echo "--- create-stage app startup logcat ---" >&2; adb logcat -b all -d -t 4000 2>/dev/null | grep -iE 'CI_OLD_STARTUP|psychologygrowth|AndroidRuntime|FATAL|panicked|panic at|failed to initialize|Keystore|keyring|tauri|abort|SIGABRT|error' | tail -240 >&2 || true; echo "--- create-stage Java startup markers ---" >&2; for marker in ci-old-java-oncreate.txt ci-old-java-before-keyring.txt ci-old-java-after-keyring.txt ci-old-java-after-super.txt ci-old-before-builder-run.txt ci-old-setup-entered.txt ci-old-before-trust-root.txt ci-old-before-keystore-store.txt ci-old-before-state-manage.txt; do echo "marker=$marker" >&2; adb shell cat "/data/user/0/app.psychologygrowth.desktop/files/$marker" 2>/dev/null >&2 || true; adb shell cat "/data/data/app.psychologygrowth.desktop/files/$marker" 2>/dev/null >&2 || true; done; echo "--- create-stage CI startup marker ---" >&2; adb shell cat /data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-entered.txt 2>/dev/null >&2 || true; adb shell cat /data/data/app.psychologygrowth.desktop/files/ci-old-startup-entered.txt 2>/dev/null >&2 || true; echo "--- create-stage CI panic file ---" >&2; adb shell cat /data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-panic.txt 2>/dev/null >&2 || true; adb shell cat /data/data/app.psychologygrowth.desktop/files/ci-old-startup-panic.txt 2>/dev/null >&2 || true; echo "--- create-stage CI startup error file ---" >&2; adb shell cat /data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-error.txt 2>/dev/null >&2 || true; adb shell cat /data/data/app.psychologygrowth.desktop/files/ci-old-startup-error.txt 2>/dev/null >&2 || true; echo "--- create-stage activity/process diagnostics ---" >&2; adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true; adb shell pidof app.psychologygrowth.desktop >&2 || true; exit "$rc"; fi
+            adb shell dumpsys package app.psychologygrowth.desktop > android-upgrade-evidence/package-before.txt
+            if python3 scripts/ci/android_upgrade_driver.py --stage create --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --bootstrap-token 'ci-bootstrap-token-7a1f' --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_create.json --auth-evidence-file android-upgrade-evidence/auth-create.json --timeout-s 300; then echo "create stage: PASS"; else rc=$?; echo "--- create driver result ---" >&2; cat /tmp/ig_upg_create.json >&2 || true; echo "--- create-stage crash buffer ---" >&2; adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true; echo "--- create-stage app startup logcat ---" >&2; adb logcat -b all -d -t 4000 2>/dev/null | grep -iE 'CI_OLD_STARTUP|psychologygrowth|AndroidRuntime|FATAL|panicked|panic at|failed to initialize|Keystore|keyring|tauri|abort|SIGABRT|error' | tail -240 >&2 || true; echo "--- create-stage Java startup markers ---" >&2; for marker in ci-old-java-oncreate.txt ci-old-java-before-keyring.txt ci-old-java-after-keyring.txt ci-old-java-after-super.txt ci-old-before-builder-run.txt ci-old-setup-entered.txt ci-old-before-trust-root.txt ci-old-before-keystore-store.txt ci-old-before-state-manage.txt; do echo "marker=$marker" >&2; adb shell cat "/data/user/0/app.psychologygrowth.desktop/files/$marker" 2>/dev/null >&2 || true; adb shell cat "/data/data/app.psychologygrowth.desktop/files/$marker" 2>/dev/null >&2 || true; done; echo "--- create-stage CI startup marker ---" >&2; adb shell cat /data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-entered.txt 2>/dev/null >&2 || true; adb shell cat /data/data/app.psychologygrowth.desktop/files/ci-old-startup-entered.txt 2>/dev/null >&2 || true; echo "--- create-stage CI panic file ---" >&2; adb shell cat /data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-panic.txt 2>/dev/null >&2 || true; adb shell cat /data/data/app.psychologygrowth.desktop/files/ci-old-startup-panic.txt 2>/dev/null >&2 || true; echo "--- create-stage CI startup error file ---" >&2; adb shell cat /data/user/0/app.psychologygrowth.desktop/files/ci-old-startup-error.txt 2>/dev/null >&2 || true; adb shell cat /data/data/app.psychologygrowth.desktop/files/ci-old-startup-error.txt 2>/dev/null >&2 || true; echo "--- create-stage activity/process diagnostics ---" >&2; adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true; adb shell pidof app.psychologygrowth.desktop >&2 || true; exit "$rc"; fi
             adb install -r dist/android/interest-growth-android-x86_64-release.apk
             adb shell am force-stop app.psychologygrowth.desktop || true
             adb shell am start -W -n app.psychologygrowth.desktop/.MainActivity
             for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then echo "new upgrade app process is running"; break; fi; sleep 2; done
             if ! adb shell pidof app.psychologygrowth.desktop 2>/dev/null | grep -Eq '[0-9]'; then echo "FAIL: new upgrade app did not remain running after launch" >&2; echo "--- new upgrade app crash buffer ---" >&2; adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true; echo "--- new upgrade app activity/process diagnostics ---" >&2; adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true; adb shell pidof app.psychologygrowth.desktop >&2 || true; exit 1; fi
+            adb shell dumpsys package app.psychologygrowth.desktop > android-upgrade-evidence/package-after.txt
             echo "--- new app versionName/versionCode after install -r ---"; adb shell dumpsys package app.psychologygrowth.desktop 2>/dev/null | grep -E "versionName|versionCode" | head -2 || true
-            if python3 scripts/ci/android_upgrade_driver.py --stage verify --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_verify.json --timeout-s 300; then grep -q '"result": "PASS"' /tmp/ig_upg_verify.json && echo "UPGRADE_IN_PLACE = PASS" || { echo "UPGRADE_IN_PLACE = FAIL (verify result)" >&2; exit 1; }; else rc=$?; echo "--- verify driver result ---" >&2; cat /tmp/ig_upg_verify.json >&2 || true; echo "--- verify-stage crash buffer ---" >&2; adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true; echo "--- verify-stage app startup logcat ---" >&2; adb logcat -d -t 4000 2>/dev/null | grep -iE 'psychologygrowth|AndroidRuntime|FATAL|panicked|panic at|failed to initialize|Keystore|keyring|tauri|abort|SIGABRT|error' | tail -240 >&2 || true; echo "--- verify-stage activity/process diagnostics ---" >&2; adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true; adb shell pidof app.psychologygrowth.desktop >&2 || true; exit "$rc"; fi
+            if python3 scripts/ci/android_upgrade_driver.py --stage verify --origin https://127.0.0.1:18443 --owner-password 'Ci-Owner-Password-2026!' --device-name android-upgrade-ci --state-file /tmp/ig_upg_state.json --result-file /tmp/ig_upg_verify.json --auth-evidence-file android-upgrade-evidence/auth-verify.json --timeout-s 300; then grep -q '"result": "PASS"' /tmp/ig_upg_verify.json && echo "UPGRADE_IN_PLACE = PASS" || { echo "UPGRADE_IN_PLACE = FAIL (verify result)" >&2; exit 1; }; else rc=$?; echo "--- verify driver result ---" >&2; cat /tmp/ig_upg_verify.json >&2 || true; echo "--- verify-stage crash buffer ---" >&2; adb logcat -d -b crash 2>/dev/null | tail -120 >&2 || true; echo "--- verify-stage app startup logcat ---" >&2; adb logcat -d -t 4000 2>/dev/null | grep -iE 'psychologygrowth|AndroidRuntime|FATAL|panicked|panic at|failed to initialize|Keystore|keyring|tauri|abort|SIGABRT|error' | tail -240 >&2 || true; echo "--- verify-stage activity/process diagnostics ---" >&2; adb shell dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mResumedActivity|psychologygrowth' | tail -40 >&2 || true; adb shell pidof app.psychologygrowth.desktop >&2 || true; exit "$rc"; fi
+            python3 scripts/ci/write_android_upgrade_continuity.py --before android-upgrade-evidence/package-before.txt --after android-upgrade-evidence/package-after.txt --state /tmp/ig_upg_state.json --verify-result /tmp/ig_upg_verify.json --output android-upgrade-evidence/continuity.json
+      - name: Collect Android upgrade evidence
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p android-upgrade-evidence
+          for file in /tmp/ig_upg_create.json /tmp/ig_upg_verify.json /tmp/ig_upg_state.json; do
+            if [ -f "$file" ]; then cp "$file" android-upgrade-evidence/; fi
+          done
+          python3 - <<'PY'
+          import json, os
+          path = "android-upgrade-evidence/metadata.json"
+          try:
+              with open(path) as fh: data = json.load(fh)
+          except Exception:
+              data = {"schema": "android-upgrade-evidence-v1"}
+          results = []
+          for name in ("ig_upg_create.json", "ig_upg_verify.json"):
+              try:
+                  with open(os.path.join("android-upgrade-evidence", name)) as fh:
+                      results.append(json.load(fh).get("result"))
+              except Exception:
+                  results.append("NOT_RUN")
+          data["status"] = "COLLECTED"
+          data["result"] = "PASS" if results == ["PASS", "PASS"] and os.path.exists("android-upgrade-evidence/continuity.json") else "FAIL"
+          data["files"] = sorted(os.listdir("android-upgrade-evidence"))
+          with open(path, "w") as fh: json.dump(data, fh, indent=2, sort_keys=True)
+          PY
+      - name: Upload Android upgrade evidence
+        if: always() && needs.release-meta.outputs.is_stable == 'true'
+        uses: actions/upload-artifact@v4 # v4
+        with:
+          name: android-upgrade-evidence
+          path: android-upgrade-evidence
+          if-no-files-found: warn
 
   cross-device:
     name: Stable cross-device (desktop-remote + Android, same server)
