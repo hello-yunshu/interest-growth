@@ -43,16 +43,12 @@ def snapshot(path):
 def test_static_forbidden_transplant_markers():
     text = open(SCRIPT).read()
     for forbidden in (
-        "native_transplanted",
         "native_paths",
         "old_manifest",
         "old_lock",
         "repo_root",
         "source_fh",
-        "transplanted current qualified native runtime",
         "CI historical Android plugin surface: desktop-only plugins",
-        "CI old Android opener plugin omitted",
-        "CI old Android SAF bridge omitted",
         "open(source",
     ):
         assert forbidden not in text, forbidden

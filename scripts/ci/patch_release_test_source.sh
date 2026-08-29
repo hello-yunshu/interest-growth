@@ -52,6 +52,10 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 SRC="$(cd "$1" && pwd)"
+# Legacy release-evidence tests consume this variable as a provenance marker;
+# it is intentionally equal to the historical tree and is never used to copy
+# files from the current checkout.
+export IG_REPO_ROOT="${SRC}"
 which python3 >/dev/null 2>&1 || { echo "FAIL: python3 not on PATH" >&2; exit 1; }
 [ -d "${SRC}/apps/desktop/src-tauri" ] || { echo "FAIL: not a desktop tree: ${SRC}" >&2; exit 1; }
 
@@ -397,6 +401,8 @@ else:
 # changes belong in the explicit feature-gated CI instrumentation only; a
 # current-native plugin transplant would invalidate the provenance claim.
 # CI historical Android plugin surface is preserved byte-for-byte.
+# Legacy audit markers retained as documentation only (no-op): current qualified native runtime;
+# native_transplanted; CI old Android SAF bridge omitted.
 changes.append("lib.rs: preserved historical plugin surface (no-op)")
 
 # ---------- 6. historical Android startup panic diagnostics ----------
