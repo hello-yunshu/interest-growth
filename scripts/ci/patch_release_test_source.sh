@@ -504,16 +504,16 @@ fn ci_old_setup_marker(name: &str) {
         )
     else:
         changes.append("lib.rs: historical setup has no CI trust-root boundary (no-op)")
-    store_anchor = '                AndroidKeystoreStore::new()\n' \
-        '                    .map_err(|error| format!("failed to open Android Keystore: {error}"))?,\n'
-    if store_anchor not in lib_txt:
-        store_anchor = '                    AndroidKeystoreStore::new()\n' \
-            '                        .map_err(|error| format!("failed to open Android Keystore: {error}"))?,\n'
-    if store_anchor not in lib_txt:
-        die("lib.rs Android Keystore anchor not found for setup diagnostics")
+    broker_anchor = '            #[cfg(target_os = "android")]\n            let broker = RemoteBroker::with_expected_runtime(\n'
+    if broker_anchor not in lib_txt:
+        die("lib.rs Android broker anchor not found for setup diagnostics")
     lib_txt = lib_txt.replace(
-        store_anchor,
-        '                ci_old_setup_marker("ci-old-before-keystore-store.txt");\n' + store_anchor,
+        broker_anchor,
+        broker_anchor.replace(
+            '            let broker =',
+            '            ci_old_setup_marker("ci-old-before-keystore-store.txt");\n'
+            '            let broker =',
+        ),
         1,
     )
     manage_anchor = "            app.manage(DesktopState {\n"
