@@ -70,6 +70,7 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "clicked_anchor_input" in source
     assert "clicked_command_palette_input" in source
     assert "button.commandItem" in source
+    assert "el.click(); return {ok:true}" in source
     assert "window.location.replace('/curiosity/index.html')" in source
     assert "static_export_entrypoint" in source
     assert "quick_navigation_unverified" in source

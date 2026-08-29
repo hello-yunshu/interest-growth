@@ -204,16 +204,28 @@ def navigate_page(cdp, path, log, deadline):
         if path != "/curiosity":
             return False
         try:
-            if not pointer_click("document.querySelector('button.globalSearch')"):
+            finder = "document.querySelector('button.globalSearch')"
+            opened = pointer_click(finder)
+            if not opened:
+                opened = _coerce(cdp.evaluate(
+                    "(() => { const el = " + finder + "; "
+                    "if (!el) return {ok:false}; el.click(); return {ok:true}; })()"
+                ), {}).get("ok", False)
+            if not opened:
                 return False
             if not cae._wait_for(cdp, lambda: _has_selector(cdp, ".commandBackdrop"),
                                  "quick navigation palette", min(deadline, time.time() + 10), log):
                 return False
-            finder = (
+            item_finder = (
                 "Array.from(document.querySelectorAll('button.commandItem')).find("
                 "el => (el.innerText || '').includes('好奇心'))"
             )
-            return pointer_click(finder)
+            if pointer_click(item_finder):
+                return True
+            return _coerce(cdp.evaluate(
+                "(() => { const el = " + item_finder + "; "
+                "if (!el) return {ok:false}; el.click(); return {ok:true}; })()"
+            ), {}).get("ok", False)
         except Exception as e:  # noqa: BLE001
             log.append({"step": "quick_navigation", "error": str(e)})
             return False
