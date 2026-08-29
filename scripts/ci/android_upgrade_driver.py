@@ -218,6 +218,18 @@ def navigate_page(cdp, path, log, deadline):
             log.append({"step": "quick_navigation", "error": str(e)})
             return False
 
+    # The old Android WebView can treat a real pointer click on a Next <a>
+    # element as a full asset navigation.  With Tauri's asset protocol that
+    # lands on tauri.localhost/curiosity/ and renders the WebView's generic
+    # "This page couldn't load" error instead of letting Next handle the
+    # client-side route.  The product's command palette uses a button and
+    # Next's router, so use that real product path before touching anchors.
+    quick_navigation = command_palette_click()
+    if quick_navigation:
+        log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
+    else:
+        log.append({"step": f"nav_{path}", "attempt": "quick_navigation_unavailable"})
+
     expr = (
         "(() => { "
         f"const a = document.querySelector({cae._double_quote(anchor_selector)}); "
@@ -230,7 +242,7 @@ def navigate_page(cdp, path, log, deadline):
         "return {kind:'none'}; })()"
     )
     try:
-        nav = _coerce(cdp.evaluate(expr), {})
+        nav = {"kind": "quick_palette"} if quick_navigation else _coerce(cdp.evaluate(expr), {})
         if nav.get("kind") == "anchor" and nav.get("visible"):
             pointer_click(f"document.querySelector({cae._double_quote(anchor_selector)})")
             log.append({"step": f"nav_{path}", "attempt": "clicked_anchor_input"})
