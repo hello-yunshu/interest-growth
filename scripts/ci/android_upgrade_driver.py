@@ -238,7 +238,7 @@ def navigate_page(cdp, path, log, deadline):
                 "(() => { "
                 "if (document.querySelector('textarea') && location.pathname.startsWith('/curiosity')) "
                 "return {ok:false,step:'already_there'}; "
-                "window.location.replace('/curiosity/index.html'); return {ok:true}; })()"
+                "window.location.replace('/curiosity.html'); return {ok:true}; })()"
             ), {})
             return bool(result.get("ok"))
         except Exception as e:  # noqa: BLE001
