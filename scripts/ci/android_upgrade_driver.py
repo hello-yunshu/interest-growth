@@ -277,31 +277,27 @@ def navigate_page(cdp, path, log, deadline):
             return False
 
     # The old Android WebView can treat a real pointer click on a Next <a>
-    # element as a full asset navigation.  With Tauri's asset protocol that
-    # lands on tauri.localhost/curiosity/ and renders the WebView's generic
-    # "This page couldn't load" error instead of letting Next handle the
-    # client-side route.  The product's command palette uses a button and
-    # Next's router, so use that real product path before touching anchors.
-    quick_navigation = command_palette_click()
-    if quick_navigation and not cae._wait_for(
-        cdp, lambda: _on_page(cdp, path),
-        "quick navigation target", min(deadline, time.time() + 10), log
-    ):
-        log.append({"step": f"nav_{path}", "attempt": "quick_navigation_unverified"})
-        quick_navigation = False
-    if quick_navigation:
-        log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
+    # element or command-palette item as a full asset navigation. With
+    # Tauri's asset protocol that lands on tauri.localhost/curiosity/ and
+    # renders the WebView's generic "This page couldn't load" error instead
+    # of letting Next handle the client-side route. The exported HTML
+    # entrypoint is app-owned and deterministic, so prefer it before any
+    # client-side navigation. The page reload keeps the same app data/session
+    # and is still followed by the black-box PromptBar assertions below.
+    quick_navigation = False
+    if static_export_route():
+        quick_navigation = True
+        log.append({"step": f"nav_{path}", "attempt": "static_export_entrypoint"})
     else:
-        # A legacy Android WebView can expose the hydrated shell but still
-        # lose the React click handler during the first post-enrollment paint.
-        # Its real anchor then performs a full asset navigation to
-        # /curiosity/, which Tauri's static asset protocol cannot resolve.
-        # Use the exported HTML entrypoint as a bounded, app-owned fallback;
-        # the page reload keeps the same app data/session and is still
-        # followed by the black-box PromptBar assertions below.
-        if static_export_route():
-            quick_navigation = True
-            log.append({"step": f"nav_{path}", "attempt": "static_export_entrypoint"})
+        quick_navigation = command_palette_click()
+        if quick_navigation and not cae._wait_for(
+            cdp, lambda: _on_page(cdp, path),
+            "quick navigation target", min(deadline, time.time() + 10), log
+        ):
+            log.append({"step": f"nav_{path}", "attempt": "quick_navigation_unverified"})
+            quick_navigation = False
+        if quick_navigation:
+            log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
         else:
             log.append({"step": f"nav_{path}", "attempt": "quick_navigation_unavailable"})
 
