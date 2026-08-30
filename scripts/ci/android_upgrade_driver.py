@@ -404,10 +404,18 @@ def create_question(cdp, text, log, deadline):
         cdp.call("Input.dispatchKeyEvent", {
             "type": "char", "text": char, "unmodifiedText": char,
         })
+    # Some historical Android WebViews update the DOM value for trusted
+    # character events but omit the bubbling input event that React's
+    # delegated onChange handler needs. Re-apply the final value through the
+    # native prototype setter so the product's controlled state commits before
+    # we inspect the real send button.
+    sync_r = _coerce(cdp.evaluate(js_set_textarea("textarea", text)), {})
+    if not sync_r.get("ok"):
+        raise UpgradeError(f"CDP text input React state sync failed: {sync_r}")
     value_r = _coerce(cdp.evaluate(js_textarea_value("textarea")), {})
     if value_r.get("value") != text:
         raise UpgradeError("CDP text input did not populate the PromptBar textarea")
-    log.append({"step": "prompt_fill", "ok": True, "chars": len(text), "how": "trusted_char_input"})
+    log.append({"step": "prompt_fill", "ok": True, "chars": len(text), "how": "trusted_char_input+native_input_sync"})
     if not cae._wait_for(cdp, lambda: _prompt_send_ready(cdp),
                          "PromptBar send button enabled after fill", deadline, log):
         raise UpgradeError("PromptBar send button was not visible/enabled")
