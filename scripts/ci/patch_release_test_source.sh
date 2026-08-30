@@ -75,6 +75,7 @@ export IG_PROGUARD="${SRC}/apps/desktop/src-tauri/gen/android/app/proguard-rules
 python3 <<'PY'
 import os
 import re
+import shutil
 import sys
 
 src = os.environ["IG_SRC"]
@@ -85,6 +86,7 @@ cargo = os.environ["IG_CARGO"]
 gradle = os.environ["IG_GRADLE"]
 proguard = os.environ["IG_PROGUARD"]
 web_config = os.path.join(src, "apps/web/next.config.js")
+web_out = os.path.join(src, "apps/web/out")
 
 def die(m):
     print("FAIL: " + m, file=sys.stderr)
@@ -111,6 +113,22 @@ elif "trailingSlash: false" in web_config_txt:
     changes.append("apps/web/next.config.js: flat Tauri entrypoints already configured (no-op)")
 else:
     die("apps/web/next.config.js has no trailingSlash setting; refusing a blind patch")
+
+# The second invocation happens after `next build` and before `tauri-build`.
+# Verify the generated artifact, and add the missing flat alias when a legacy
+# Next exporter still emits the directory form despite the normalized config.
+# Keep this scoped to the throw-away historical bundle; production output is
+# never rewritten by this script.
+if os.path.isdir(web_out):
+    flat_entry = os.path.join(web_out, "curiosity.html")
+    nested_entry = os.path.join(web_out, "curiosity", "index.html")
+    if not os.path.isfile(flat_entry) and os.path.isfile(nested_entry):
+        shutil.copyfile(nested_entry, flat_entry)
+        changes.append("apps/web/out: added flat curiosity.html compatibility alias")
+    elif not os.path.isfile(flat_entry) and not os.path.isfile(nested_entry):
+        die("apps/web/out has no curiosity.html or curiosity/index.html entrypoint")
+    else:
+        changes.append("apps/web/out: verified curiosity.html compatibility entrypoint")
 
 old_lib_path = os.path.join(src, "apps/desktop/src-tauri/src/lib.rs")
 with open(old_lib_path) as fh:

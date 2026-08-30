@@ -80,6 +80,33 @@ def test_fake_old_tree_changes_only_allowlisted_paths_and_is_idempotent():
         assert snapshot(td) == after_first
 
 
+def test_generated_legacy_web_output_gets_flat_compatibility_alias():
+    with tempfile.TemporaryDirectory(prefix="ig-patch-web-output-") as td:
+        with subprocess.Popen(["git", "archive", archive_ref()], cwd=ROOT,
+                              stdout=subprocess.PIPE) as proc:
+            with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
+                archive.extractall(td)
+            assert proc.wait() == 0
+        first = subprocess.run(["bash", SCRIPT, td], cwd=ROOT,
+                               text=True, capture_output=True)
+        assert first.returncode == 0, first.stderr
+        nested = os.path.join(td, "apps", "web", "out", "curiosity", "index.html")
+        flat = os.path.join(td, "apps", "web", "out", "curiosity.html")
+        os.makedirs(os.path.dirname(nested), exist_ok=True)
+        with open(nested, "w") as fh:
+            fh.write("legacy curiosity export")
+        second = subprocess.run(["bash", SCRIPT, td], cwd=ROOT,
+                                text=True, capture_output=True)
+        assert second.returncode == 0, second.stderr
+        with open(flat) as fh:
+            assert fh.read() == "legacy curiosity export"
+        third = subprocess.run(["bash", SCRIPT, td], cwd=ROOT,
+                               text=True, capture_output=True)
+        assert third.returncode == 0, third.stderr
+        with open(flat) as fh:
+            assert fh.read() == "legacy curiosity export"
+
+
 def run_all():
     failed = 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
