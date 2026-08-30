@@ -178,13 +178,9 @@ def create_backup(
                 "backup bundle references files that were not captured: "
                 + ", ".join(missing)
             )
-        # The server identity only exists after migration 15; a pre-upgrade
-        # snapshot of an older schema has no server_metadata table yet, so the
-        # manifest records it as null (verify_bundle already tolerates that).
-        try:
-            server_instance_id = get_server_identity()["server_instance_id"]
-        except sqlalchemy.exc.OperationalError:
-            server_instance_id = None
+        # The server identity is part of the current schema and is required for
+        # every current backup manifest.
+        server_instance_id = get_server_identity()["server_instance_id"]
         manifest = {
             "format_version": BACKUP_FORMAT_VERSION,
             "product": "interest-growth",
@@ -211,17 +207,22 @@ def verify_bundle(bundle_dir: str) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise ValueError(f"backup bundle missing manifest: {bundle_dir}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    # Gate R2 §43: refuse a bundle from a future (incompatible) backup format or
-    # from a different product — fail closed before any staged verification.
-    bundle_format = manifest.get("format_version", 1)  # pre-1.0 bundles predate the field
-    if not isinstance(bundle_format, int) or bundle_format > BACKUP_FORMAT_VERSION:
+    # Pre-release restore accepts only the current bundle format and product.
+    bundle_format = manifest.get("format_version")
+    if bundle_format != BACKUP_FORMAT_VERSION:
         raise ValueError(
-            f"backup bundle format_version {bundle_format} is newer than this build "
-            f"supports ({BACKUP_FORMAT_VERSION}); restore a compatible backup"
+            f"backup bundle format_version {bundle_format!r} is unsupported before release; "
+            f"expected current format {BACKUP_FORMAT_VERSION}"
         )
     if manifest.get("product") != "interest-growth":
         raise ValueError(
             f"backup bundle is not an interest-growth backup: {manifest.get('product')!r}"
+        )
+    if manifest.get("schema_version") != CURRENT_SCHEMA_VERSION:
+        raise ValueError(
+            "backup bundle schema is unsupported before release; "
+            f"expected current schema {CURRENT_SCHEMA_VERSION}, "
+            f"got {manifest.get('schema_version')!r}"
         )
     db_file = bundle / DB_FILE_NAME
     if not db_file.is_file():
@@ -236,12 +237,11 @@ def verify_bundle(bundle_dir: str) -> dict[str, Any]:
     with sqlite3.connect(db_file) as conn:
         integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
         foreign_keys = conn.execute("PRAGMA foreign_key_check").fetchall()
-        try:
-            identity_row = conn.execute(
-                "SELECT server_instance_id FROM server_metadata LIMIT 1"
-            ).fetchone()
-        except sqlite3.OperationalError:  # pre-Gate-C bundle without the table
-            identity_row = None
+        identity_row = conn.execute(
+            "SELECT server_instance_id FROM server_metadata LIMIT 1"
+        ).fetchone()
+        if not identity_row:
+            raise ValueError("backup database is missing the current server identity")
     if integrity != "ok":
         raise ValueError(f"backup database integrity check failed: {integrity}")
     if foreign_keys:
@@ -271,7 +271,7 @@ def restore_backup(
     """Restore one bundle into the live data paths (or verify without writing).
 
     Rollback-safe (Gate B4): the bundle is first staged and fully verified on
-    temporary paths (migrations + integrity + file-reference smoke checks).
+    temporary paths (current-schema + integrity + file-reference smoke checks).
     Only after every check passes are the live paths switched — the previous
     DB file and vault directories are retained as ``*.pre-restore-<ts>`` until
     the post-switch checks on the live paths succeed, then cleaned up.
@@ -330,10 +330,9 @@ def restore_backup(
             target_root.mkdir(parents=True, exist_ok=True)
             _copy_dir(bundle / name, target_root, "")
         # The restore already retains the pre-restore state (as *.pre-restore-*)
-        # until post-checks pass, so migrating an older bundle must NOT spawn a
-        # pre-upgrade backup here: we are already inside the exclusive
-        # maintenance lock, and re-acquiring the same flock on a new fd deadlocks.
-        init_db(database_url=database_url, pre_upgrade_backup=False)
+        # until post-checks pass. The current-schema check above guarantees that
+        # this restore never invokes a historical migration path.
+        init_db(database_url=database_url)
         result["restored"] = True
         result.update(_smoke_checks())
         if result["integrity"] != "ok" or result["foreign_key_violations"] or result["missing_source_files"] or result["missing_artifact_files"]:
@@ -359,7 +358,7 @@ def _stage_bundle(bundle: Path, staging: Path, database_url: str) -> dict[str, P
         dest.mkdir(parents=True, exist_ok=True)
         _copy_dir(bundle / name, dest, "")
         staged[name] = dest
-    init_db(database_url=f"sqlite:///{staged_db}", pre_upgrade_backup=False)
+    init_db(database_url=f"sqlite:///{staged_db}")
     return staged
 
 

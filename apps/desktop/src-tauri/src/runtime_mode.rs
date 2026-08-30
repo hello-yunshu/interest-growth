@@ -51,7 +51,7 @@ pub fn is_desktop_runtime_id(value: &str) -> bool {
     value == RUNTIME_ID_DESKTOP_LOCAL || value == RUNTIME_ID_DESKTOP_REMOTE
 }
 
-// Existing install without a profile → desktop-local (v0.6 compatibility).
+// A fresh install without a profile starts in the local runtime.
 // An explicit desktop-local profile is honored. Anything else (including an
 // unrecognized value) resolves to desktop-local and NEVER switches to another
 // canonical store.

@@ -77,12 +77,6 @@ jobs:
         run: python scripts/audit_host_v050.py . --strict
       - name: Run scripts/ci unit tests (desktop binary resolver, §7/§8)
         run: python scripts/ci/test_resolve_desktop_app_binary.py -v
-      - name: Run fail-closed Android upgrade provenance tests
-        run: |
-          python3 scripts/ci/test_android_upgrade_driver.py
-          python3 scripts/ci/test_android_upgrade_auth.py
-          python3 scripts/ci/test_patch_release_test_source.py
-
   native-core:
     name: Standalone Native Core
     runs-on: ubuntu-latest

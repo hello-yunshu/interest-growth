@@ -1,5 +1,5 @@
 from .types import RetrievalCandidate, RetrievalChunk
-from .registry import RagEngineRegistry, RagEngineDescriptor, LegacyEngineMigration
+from .registry import RagEngineRegistry, RagEngineDescriptor
 from .exact import (
     GraphRagExactAdapter,
     LightRagExactAdapter,
@@ -8,6 +8,6 @@ from .exact import (
 )
 __all__ = [
     "RetrievalCandidate","RetrievalChunk","RagEngineRegistry","RagEngineDescriptor",
-    "LegacyEngineMigration","LlamaIndexExactAdapter","LightRagExactAdapter",
+    "LlamaIndexExactAdapter","LightRagExactAdapter",
     "GraphRagExactAdapter","PageIndexExactAdapter",
 ]

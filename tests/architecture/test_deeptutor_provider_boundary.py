@@ -23,7 +23,7 @@ def test_product_runtime_is_native_only():
             if path.suffix not in {".py", ".js", ".rs", ".toml", ".yaml", ".yml"}:
                 continue
             if path.name == "db.py":
-                continue  # migration 12 must name the retired legacy rows it deletes
+                continue  # database model names are outside this retired-runtime scan
             assert FORBIDDEN not in path.read_text("utf-8").lower(), path
     assert not (ROOT / "adapters" / FORBIDDEN).exists()
     assert not (ROOT / "infra" / FORBIDDEN).exists()

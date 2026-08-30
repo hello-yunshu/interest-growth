@@ -34,9 +34,6 @@ class InvalidStateTransition(NativeExecutionError):
 class ValidationError(NativeExecutionError):
     pass
 
-class LegacyEngineReviewRequired(NativeExecutionError):
-    pass
-
 class ExactRagAdapterError(NativeExecutionError):
     pass
 

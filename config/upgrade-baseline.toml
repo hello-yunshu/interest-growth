@@ -1,6 +1,0 @@
-# Frozen fallback for the first Stable release. This tag is a published
-# prerelease and is the last distributed installable baseline when no
-# published non-prerelease release exists. It must be reviewed explicitly when
-# the first Stable release is published; it must never drift from tag order.
-[upgrade]
-fallback_tag = "v1.0.0-rc.3"

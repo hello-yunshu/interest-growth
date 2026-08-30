@@ -6,7 +6,7 @@ from .context import NativeRunContext
 from .errors import (
     CapabilityUnavailable,PermissionDenied,ProviderUnavailable,
     AreaIsolationError,InvalidStateTransition,ValidationError,
-    LegacyEngineReviewRequired,StaleProposalError,
+    StaleProposalError,
 )
 from .research import ResearchSubtopic
 from .contracts import PracticeOrigin
@@ -36,7 +36,7 @@ def create_native_router(
         except (CapabilityUnavailable,PermissionDenied,AreaIsolationError) as exc:
             raise HTTPException(403,str(exc)) from exc
         except ProviderUnavailable as exc:raise HTTPException(503,str(exc)) from exc
-        except (InvalidStateTransition,LegacyEngineReviewRequired,StaleProposalError) as exc:
+        except (InvalidStateTransition,StaleProposalError) as exc:
             raise HTTPException(409,str(exc)) from exc
         except ValidationError as exc:raise HTTPException(422,str(exc)) from exc
 
@@ -84,11 +84,6 @@ def create_native_router(
     @router.get("/rag/engines")
     def rag_engines(request:Request):
         _=ctx(request,"knowledge.read");return [asdict(x) for x in bundle.retrieval.registry.list()]
-
-    @router.get("/rag/legacy/{engine_id}")
-    def rag_legacy(engine_id:str,request:Request):
-        _=ctx(request,"knowledge.read");m=bundle.retrieval.registry.legacy_migration(engine_id)
-        return asdict(m) if m else None
 
     @router.post("/retrieve")
     def retrieve(body:Retrieve,request:Request):

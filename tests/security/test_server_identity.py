@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, func, inspect, select, text
+from sqlalchemy import func, inspect, select, text
 
 from pg_api.db import (
-    SchemaMigration,
     ServerMetadataModel,
     get_engine,
     get_session_factory,
@@ -73,30 +72,6 @@ def test_second_independent_server_has_different_identity(client, tmp_path):
     assert row is not None
     assert row.server_instance_id != first["server_instance_id"]
     reset_engine_for_tests()
-
-
-# ------------------------------------------------------------- migration 15
-
-
-def test_schema_15_upgrade_creates_identity_exactly_once(client):
-    """A schema-14 database upgrades to 15 with one identity that never regrows."""
-    with get_session_factory()() as db:
-        if "server_metadata" in inspect(get_engine()).get_table_names():
-            db.execute(text("DROP TABLE server_metadata"))
-        db.execute(delete(SchemaMigration).where(SchemaMigration.version >= 15))
-        db.commit()
-    init_db()
-    with get_session_factory()() as db:
-        assert 15 in set(db.scalars(select(SchemaMigration.version)).all())
-        rows = db.scalars(select(ServerMetadataModel)).all()
-        assert len(rows) == 1
-        first = rows[0].server_instance_id
-        UUID(first)
-    # Re-running init_db must never regenerate the identity.
-    init_db()
-    with get_session_factory()() as db:
-        assert db.scalar(select(func.count()).select_from(ServerMetadataModel)) == 1
-        assert db.scalar(select(ServerMetadataModel.server_instance_id)) == first
 
 
 def test_singleton_index_rejects_second_identity_row(client):

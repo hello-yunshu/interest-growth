@@ -167,12 +167,9 @@ fn classify_http_status(kind: EndpointKind, status: u16) -> Result<(), &'static 
 //   * WAL crash window (pending written, active not): pending.gen > active.gen
 //     -> the reader prefers pending (it is the newest un-promoted intent).
 //   * Stale-pending case (an earlier pending write failed, then active got
-//     promoted, then the clear also failed): the leftover pending is a legacy
-//     raw token parsed as gen 0 (or an older gen) while the promoted active
-//     has a strictly higher gen -> the reader prefers active.
-//
-// The active slot keeps the legacy raw-token form for existing rc1 installs
-// (a raw value decodes as gen 0 and is still the reader's fallback).
+//     promoted, then the clear also failed): the leftover pending has an older
+//     generation while the promoted active has a strictly higher generation
+//     -> the reader prefers active.
 const REFRESH_ENVELOPE_PREFIX: &str = "gen:";
 
 /// Encode a rotation replacement with an explicit generation.
@@ -180,19 +177,17 @@ fn encode_refresh_envelope(gen: u64, token: &str) -> String {
     format!("{REFRESH_ENVELOPE_PREFIX}{gen}\n{token}")
 }
 
-/// Decode a stored durable slot value into `(generation, token)`. A legacy raw
-/// token (no envelope) decodes as generation `0` with the whole value as the
-/// token, so existing installs remain readable without migration.
-fn decode_refresh_envelope(value: &str) -> (u64, &str) {
+/// Decode a stored durable slot value into `(generation, token)`.
+fn decode_refresh_envelope(value: &str) -> Option<(u64, &str)> {
     let value = value.trim();
     if let Some(rest) = value.strip_prefix(REFRESH_ENVELOPE_PREFIX) {
         if let Some((gen_str, token)) = rest.split_once('\n') {
             if gen_str.trim().parse::<u64>().is_ok() && !token.is_empty() {
-                return (gen_str.trim().parse::<u64>().unwrap_or(0), token);
+                return Some((gen_str.trim().parse::<u64>().ok()?, token));
             }
         }
     }
-    (0, value)
+    None
 }
 
 /// Classify a durable slot read: `Ok(Some((gen, token)))` on a readable non-empty
@@ -203,12 +198,10 @@ fn read_refresh_slot(
 ) -> Result<Option<(u64, String)>, String> {
     match result {
         Ok(Some(value)) if !value.trim().is_empty() => {
-            let (gen, token) = decode_refresh_envelope(&value);
-            if token.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some((gen, token.to_string())))
-            }
+            let (gen, token) = decode_refresh_envelope(&value).ok_or_else(|| {
+                remote_error(ERR_CREDENTIAL_PERSISTENCE, "stored refresh credential is malformed")
+            })?;
+            Ok(Some((gen, token.to_string())))
         }
         Ok(_) => Ok(None),
         Err(error) => Err(remote_error(
@@ -388,10 +381,7 @@ pub struct RemoteLogoutResult {
 /// - `pending` receives the rotated replacement FIRST (write order), then the
 ///   replacement is promoted to `active`, then `pending` is cleared;
 /// - reads prefer `pending` (the newest known-valid credential);
-/// - the ACTIVE slot keeps the historical `remote-refresh:<server>:<device>`
-///   username so existing installed keyring entries stay readable (exact
-///   migration compatibility). The pending slot uses the same namespace with
-///   a `:pending` suffix.
+/// - the pending slot uses the same namespace with a `:pending` suffix.
 /// Multi-key keyring operations are not assumed atomic; every step reports
 /// its own failure and the read order is what provides crash recovery.
 pub trait CredentialStore: Send + Sync {
@@ -488,8 +478,7 @@ fn classify_store_error(error: keyring::Error) -> CredentialStoreError {
 }
 
 /// OS keyring backed store (desktop only). One refresh credential per server
-/// per device. The active slot keeps the legacy `remote-refresh:<server>:<device>`
-/// key so existing installs read their stored credential without any migration.
+/// per device, stored in the current `remote-refresh:<server>:<device>` namespace.
 #[cfg(not(target_os = "android"))]
 pub struct KeyringStore;
 
@@ -1070,8 +1059,7 @@ pub fn assert_relative_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Shared HTTP client for all remote credential-bearing requests. Builds the
-/// client and may carry an additional TLS trust root.
+/// Shared HTTP client for all remote credential-bearing requests.
 ///
 /// Gate C §12 / Gate D §P1: redirects are explicitly disabled (fail-closed).
 /// A credential-bearing POST must never be transparently forwarded to a
@@ -1079,111 +1067,19 @@ pub fn assert_relative_path(path: &str) -> Result<(), String> {
 /// could still expose the custom bootstrap header. Any 3xx is surfaced as an
 /// explicit error instead of being followed.
 ///
-/// Phase 4d — CI-only optional trust root injection. The production broker uses
-/// reqwest's rustls backend with the compiled Mozilla root set (this crate does
-/// NOT enable rustls-platform-verifier / native-tls, so the Android OS trust
-/// store is not consulted). For the upgrade-in-place CDP test the broker must
-/// trust an ephemeral CI CA that fronts the self-hosted server over real
-/// HTTPS. A loadable PEM root is used here; `None` keeps the exact production
-/// behavior (fail-closed: nothing weakened when no root is injected). The
-/// CI-only Android path uses the supplied root exclusively because reqwest's
-/// Android platform verifier cannot merge extra roots into its verifier.
 fn http_client() -> Result<reqwest::Client, String> {
-    #[cfg(feature = "android-ci-trust-root")]
-    {
-        return http_client_with_trust_root(None);
-    }
-    #[cfg(not(feature = "android-ci-trust-root"))]
-    {
-        reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .user_agent(format!("interest-growth-desktop/{CLIENT_APP_VERSION}"))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| error.to_string())
-    }
-}
-
-#[cfg(feature = "android-ci-trust-root")]
-fn http_client_with_trust_root(
-    trust_root: Option<reqwest::Certificate>,
-) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
+    reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
         .user_agent(format!("interest-growth-desktop/{CLIENT_APP_VERSION}"))
-        .redirect(reqwest::redirect::Policy::none());
-    if let Some(cert) = trust_root {
-        builder = builder.tls_certs_only(std::iter::once(cert));
-    }
-    builder.build().map_err(|error| error.to_string())
-}
-
-/// Load a PEM-encoded certificate as an additional TLS trust root.
-///
-/// Phase 4d. Fail-closed: an unreadable or invalid PEM is a hard error, never a
-/// silent fallthrough to the default roots (an operator who opts into a custom
-/// CA must not be silently degraded to no verification of that CA).
-pub fn load_pem_trust_root(pem_path: &Path) -> Result<reqwest::Certificate, String> {
-    let bytes = std::fs::read(pem_path)
-        .map_err(|error| format!("cannot read TLS trust root {}: {error}", pem_path.display()))?;
-    reqwest::Certificate::from_pem(&bytes)
-        .map_err(|error| format!("invalid PEM TLS trust root {}: {error}", pem_path.display()))
-}
-
-/// Android: read a system property via bionic `__system_property_get`.
-///
-/// Phase 4d. Used only to opt the CI upgrade-test APK into loading an ephemeral
-/// TLS trust root. `__system_property_get` is part of the always-linked bionic
-/// libc; any app may read system properties, so this introduces no new
-/// privilege. Reading an unset property returns `None`.
-#[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]
-pub fn android_system_property(name: &str) -> Option<String> {
-    use std::ffi::{c_char, CStr, CString};
-    // PROP_VALUE_MAX is 92 in bionic libc.
-    // `c_char` is `u8` on aarch64 android but `i8` on x86_64 android, so the
-    // buffer must be typed in `c_char` to match `__system_property_get`'s
-    // `*mut c_char` signature on every Android target.
-    let mut value: [c_char; 92] = [0; 92];
-    let name = CString::new(name).ok()?;
-    extern "C" {
-        fn __system_property_get(name: *const c_char, value: *mut c_char) -> i32;
-    }
-    // SAFETY: `name` is a valid NUL-terminated CString; `value` is a 92-byte
-    // buffer that __system_property_get fills with a NUL-terminated string, so
-    // reconstructing a CStr from it afterwards stays within bounds.
-    let n = unsafe { __system_property_get(name.as_ptr(), value.as_mut_ptr()) };
-    if n <= 0 {
-        return None;
-    }
-    let text = unsafe { CStr::from_ptr(value.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
-    if text.trim().is_empty() {
-        None
-    } else {
-        Some(text)
-    }
-}
-
-/// CI-only optional TLS trust root for the Android upgrade test APK.
-///
-/// Phase 4d. Reads the system property `ig.ci.tls_ca_path`; when set to a PEM
-/// path, loads and returns it as an additional trust root. Default (unset) →
-/// `Ok(None)` = production Mozilla-roots behavior unchanged. Fail-closed: the
-/// property is set but the path is unreadable or invalid → `Err`.
-#[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]
-pub fn ci_tls_trust_root() -> Result<Option<reqwest::Certificate>, String> {
-    match android_system_property("ig.ci.tls_ca_path") {
-        Some(path) => load_pem_trust_root(Path::new(path.trim())).map(Some),
-        None => Ok(None),
-    }
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 impl RemoteBroker {
     pub fn new(store: Arc<dyn CredentialStore>) -> Result<Self, String> {
-        // Default expected runtime is desktop-remote (legacy desktop behavior).
+        // Default expected runtime is desktop-remote for the desktop shell.
         // lib.rs overrides this with the ACTIVE mode at setup; tests may switch
         // it explicitly (Gate R0.3).
         Self::with_expected_runtime(store, RUNTIME_DESKTOP_REMOTE)
@@ -1201,34 +1097,6 @@ impl RemoteBroker {
         }
         Ok(Self {
             client: http_client().map_err(|error| {
-                remote_error(ERR_INTERNAL, format!("cannot build HTTP client: {error}"))
-            })?,
-            store,
-            state: Arc::new(RemoteBrokerState::new()),
-            expected_runtime_id: Arc::new(tokio::sync::Mutex::new(runtime_id.to_string())),
-        })
-    }
-
-    #[cfg(feature = "android-ci-trust-root")]
-    /// Like [`with_expected_runtime`], but additionally trusts a TLS root.
-    ///
-    /// Phase 4d — CI-only. `None` (the production default) is exactly the
-    /// `with_expected_runtime` behavior; `Some(cert)` adds one root so the
-    /// broker can reach a self-hosted HTTPS server fronted by an ephemeral CI
-    /// CA. Used by the upgrade-in-place test APK via [`ci_tls_trust_root`].
-    pub fn with_expected_runtime_and_trust_root(
-        store: Arc<dyn CredentialStore>,
-        runtime_id: &str,
-        trust_root: Option<reqwest::Certificate>,
-    ) -> Result<Self, String> {
-        if !is_remote_runtime_id(runtime_id) {
-            return Err(remote_error(
-                ERR_INTERNAL,
-                format!("expected runtime must be a remote runtime, got: {runtime_id}"),
-            ));
-        }
-        Ok(Self {
-            client: http_client_with_trust_root(trust_root).map_err(|error| {
                 remote_error(ERR_INTERNAL, format!("cannot build HTTP client: {error}"))
             })?,
             store,
@@ -1550,8 +1418,6 @@ impl RemoteBroker {
     /// Effective refresh credential: the in-memory replacement (keyring write
     /// failed after rotation) takes priority, then the durable PENDING slot
     /// (a rotation that crashed before promotion), then the ACTIVE slot.
-    /// The active slot keeps the legacy keyring key so existing installs are
-    /// readable without migration.
     async fn read_effective_refresh(&self, enrollment: &RemoteEnrollment) -> Result<String, String> {
         if let Some(pending) = self.state.pending_refresh.lock().await.as_ref() {
             if !pending.is_empty() {
@@ -1615,7 +1481,7 @@ impl RemoteBroker {
         // durable slot, so the envelope is monotonically increasing across
         // restarts and a freshly promoted ACTIVE always out-ranks any leftover
         // stale PENDING. Reads here are best-effort: a read failure never fails
-        // the rotation, it just yields gen 0 (legacy) for that slot.
+        // the rotation, it just yields gen 0 for that slot.
         let slot_gen = |read: Result<Option<String>, CredentialStoreError>| {
             read_refresh_slot(read.or_else(|_| Ok(None)))
                 .unwrap_or(None)
@@ -2367,7 +2233,11 @@ impl RemoteBroker {
             last_verified_at: now_unix().to_string(),
         };
         self.store
-            .write_refresh(&enrollment.server_instance_id, &enrollment.device_id, &refresh_token)
+            .write_refresh(
+                &enrollment.server_instance_id,
+                &enrollment.device_id,
+                &encode_refresh_envelope(1, &refresh_token),
+            )
             .map_err(|error| {
                 remote_error(
                     ERR_CREDENTIAL_PERSISTENCE,
@@ -3397,7 +3267,7 @@ mod tests {
             store.read_pending_refresh(server, device)
         }
         .unwrap();
-        raw.map(|v| decode_refresh_envelope(&v).1.to_string())
+        raw.and_then(|v| decode_refresh_envelope(&v).map(|(_, token)| token.to_string()))
     }
 
     impl CredentialStore for MemoryStore {
@@ -3896,7 +3766,11 @@ mod tests {
         };
         save_enrollment(app_data, &enrollment).unwrap();
         store
-            .write_refresh(instance_id, device_id, "refresh-seed")
+            .write_refresh(
+                instance_id,
+                device_id,
+                &encode_refresh_envelope(1, "refresh-seed"),
+            )
             .unwrap();
         enrollment
     }
@@ -3933,33 +3807,6 @@ mod tests {
             normalize_enrollment_origin("https://my-server.local").unwrap(),
             "https://my-server.local"
         );
-    }
-
-    // Phase 4d — CI-only optional TLS trust root. Fail-closed: a missing PEM
-    // (e.g. the CI property `ig.ci.tls_ca_path` points at a file that is not
-    // on disk) must be a hard Err at setup, never a silent fallthrough. (The
-    // happy path — sign with an ephemeral CA, trust it via
-    // add_root_certificate — is exercised end-to-end by the upgrade-in-place
-    // CI CDP job. Content-level DER validity is enforced by rustls at first
-    // handshake, not by reqwest's from_pem, so we assert the deterministic
-    // missing-file guard here.)
-    #[test]
-    fn trust_root_missing_file_is_hard_error() {
-        let err = load_pem_trust_root(&PathBuilder::for_missing());
-        assert!(err.is_err(), "missing trust root must fail-closed");
-        assert!(err.unwrap_err().contains("cannot read TLS trust root"));
-    }
-
-    /// Minimal helper that yields a guaranteed-missing Path (no filesystem
-    /// write needed), avoiding a real temp file for the missing-file case.
-    struct PathBuilder;
-    impl PathBuilder {
-        fn for_missing() -> std::path::PathBuf {
-            std::env::temp_dir().join(format!(
-                "ig_trust_root_missing_{}.pem",
-                std::process::id()
-            ))
-        }
     }
 
     #[test]
@@ -5313,7 +5160,11 @@ mod tests {
         // Seed a deliberately STALE pending value that predates the seed active
         // (e.g. a leftover from a prior crashed rotation carrying the old token).
         store
-            .write_pending_refresh("instance-A", "device-1", "stale-pending-leak")
+            .write_pending_refresh(
+                "instance-A",
+                "device-1",
+                &encode_refresh_envelope(1, "stale-pending-leak"),
+            )
             .unwrap();
 
         // Rotate: pending write fails (stale stays), active promotion succeeds,
@@ -5371,7 +5222,7 @@ mod tests {
         // for the remainder of this process.
         assert!(store.read_pending_refresh("instance-A", "device-1").unwrap().is_none());
         assert_eq!(
-            store.read_refresh("instance-A", "device-1").unwrap().as_deref(),
+            stored_slot_token(store.as_ref(), "instance-A", "device-1", true).as_deref(),
             Some("refresh-seed")
         );
         assert_eq!(

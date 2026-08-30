@@ -16,11 +16,10 @@
 # Content checks run with `unzip -l` so they work on any host. Metadata checks
 # use `aapt dump badging` when aapt/aapt2 is on PATH (e.g. inside the Android
 # Docker toolchain). Debug may skip metadata when the tool is unavailable;
-# release-test and release fail closed.
+# release fails closed.
 #
 # Usage:
 #   scripts/ci/verify_android_apk.sh --profile debug <apk> [<apk> ...]
-#   scripts/ci/verify_android_apk.sh --profile release-test --require-aapt <apk>
 #   scripts/ci/verify_android_apk.sh --profile release --require-aapt <apk>
 #   Add --require-aapt to make the metadata tool requirement explicit for a
 #   release-like caller (release also implies it).
@@ -40,7 +39,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --profile)
       if [ "$#" -lt 2 ]; then
-        echo "FAIL: --profile requires debug, release-test or release" >&2
+        echo "FAIL: --profile requires debug or release" >&2
         exit 2
       fi
       PROFILE="$2"
@@ -66,12 +65,12 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [[ "${PROFILE}" != "debug" && "${PROFILE}" != "release-test" && "${PROFILE}" != "release" ]]; then
-  echo "FAIL: --profile must be one of: debug, release-test, release" >&2
+if [[ "${PROFILE}" != "debug" && "${PROFILE}" != "release" ]]; then
+  echo "FAIL: --profile must be one of: debug, release" >&2
   exit 2
 fi
 if [ "${#APKS[@]}" -eq 0 ]; then
-  echo "usage: $0 --profile <debug|release-test|release> [--require-aapt] <apk> [<apk> ...]" >&2
+  echo "usage: $0 --profile <debug|release> [--require-aapt] <apk> [<apk> ...]" >&2
   exit 2
 fi
 
@@ -130,23 +129,16 @@ check_contents() {
   # Marker policy is selected only by the explicit profile. This prevents a
   # debug APK from becoming a false production failure merely because its
   # filename contains arm64, and prevents a release APK from becoming lenient
-  # merely because its filename contains release-test.
+  # merely because its filename contains a test label.
   local apk_strings
   apk_strings="$(while read -r entry; do unzip -p "${apk}" "${entry}" 2>/dev/null || true; done < <(unzip -Z1 "${apk}") | strings || true)"
   local marker
   local release_markers=(
-    'ig.ci.tls_ca_path'
-    'android-ci-trust-root'
-    'upgrade-test'
-    'ENABLE_WEBVIEW_REMOTE_DEBUGGING'
     'setWebContentsDebuggingEnabled'
   )
   case "${PROFILE}" in
     debug)
       echo "  profile: debug (normal debug tooling markers allowed)"
-      ;;
-    release-test)
-      echo "  profile: release-test (CI-only markers allowed; never a release asset)"
       ;;
     release)
       echo "  profile: release (all CI/test markers forbidden)"
@@ -195,7 +187,7 @@ check_metadata() {
   for field in application-label package versionName versionCode sdkVersion targetSdkVersion native-code; do
     if ! grep -qE "(^|[[:space:]:])${field}([=:]|$)" <<<"${badging}"; then
       echo "  ${field}: (absent)"
-      if [[ "${PROFILE}" == "release" || "${PROFILE}" == "release-test" ]] && [[ "${field}" != "application-label" ]]; then
+      if [[ "${PROFILE}" == "release" ]] && [[ "${field}" != "application-label" ]]; then
         fail "release-like APK metadata field is missing (${field}): ${apk}"
       fi
     else

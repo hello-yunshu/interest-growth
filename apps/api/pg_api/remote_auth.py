@@ -32,9 +32,10 @@ router = APIRouter(prefix="/auth", tags=["remote-auth"])
 
 SERVER_VERSION = "1.0.20"
 API_VERSION = "1"
-# Patch release: no protocol/API break, so existing v1.0.0 clients remain
-# compatible. Raised only when a compatibility-breaking client change lands.
-MIN_CLIENT_VERSION = "1.0.0"
+# This pre-release server accepts only the current product client version.
+# Older clients are intentionally unsupported until a versioned compatibility
+# policy is introduced for a published release.
+MIN_CLIENT_VERSION = SERVER_VERSION
 PRODUCT_NAME = "interest-growth"
 
 # Public by contract: health, capability metadata, and the authentication

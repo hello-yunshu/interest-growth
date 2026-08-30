@@ -10,6 +10,12 @@ from fastapi.testclient import TestClient
 from pg_shared import get_settings
 
 
+@pytest.fixture(autouse=True)
+def isolated_desktop_data_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("APP_DATABASE_URL", raising=False)
+
+
 def test_desktop_data_root_derives_mutable_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DATA_ROOT", str(tmp_path))
     monkeypatch.delenv("APP_DATABASE_URL", raising=False)
@@ -52,7 +58,7 @@ def test_desktop_runtime_files_and_static_export_config_exist(project_root):
     assert 'binaries/psychology-growth-core' in text
     next_config = (project_root / "apps/web/next.config.js").read_text(encoding="utf-8")
     assert "output: 'export'" in next_config
-    assert "trailingSlash: false" in next_config
+    assert "trailingSlash: true" in next_config
 
 
 def test_no_updater_private_key_in_repository(project_root):

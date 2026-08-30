@@ -21,7 +21,7 @@ from .domains import require_entity_in_current_area, seed_domain_personas
 
 
 def seed_tutor_personas() -> None:
-    # Backward-compatible entrypoint used by older tests/startup callers.
+    # Current startup entrypoint for the bundled tutor personas.
     seed_domain_personas()
 
 

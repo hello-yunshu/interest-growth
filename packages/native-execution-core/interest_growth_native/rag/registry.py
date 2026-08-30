@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..contracts import KnowledgeBaseSnapshot
-from ..errors import LegacyEngineReviewRequired
 from .native import (
     NativeLexicalIndex, NativeLightGraphIndex,
     NativeConceptGraphIndex, NativeHeadingIndex,
@@ -17,12 +16,6 @@ class RagEngineDescriptor:
     description: str = ""
     upstream_distribution: str = ""
     reviewed_version: str = ""
-
-@dataclass(frozen=True, slots=True)
-class LegacyEngineMigration:
-    engine_id: str
-    status: str
-    message: str
 
 class ExactRagAdapter(Protocol):
     """Exact third-party algorithm adapter.
@@ -39,7 +32,7 @@ class ExactRagAdapter(Protocol):
     def retrieve(self, built: Any, *, query: str, top_k: int): ...
 
 class RagEngineRegistry:
-    LEGACY = frozenset({"llamaindex","lightrag","graphrag","pageindex"})
+    EXACT_ENGINE_IDS = frozenset({"llamaindex", "lightrag", "graphrag", "pageindex"})
     def __init__(self):
         self._native = {
             "native-lexical": NativeLexicalIndex,
@@ -50,8 +43,8 @@ class RagEngineRegistry:
         self._exact: dict[str, ExactRagAdapter] = {}
 
     def register_exact(self, adapter: ExactRagAdapter):
-        if adapter.engine_id not in self.LEGACY:
-            raise ValueError("exact adapters are reserved for reviewed legacy/third-party engine IDs")
+        if adapter.engine_id not in self.EXACT_ENGINE_IDS:
+            raise ValueError("exact adapter engine ID is not supported by the current product")
         if adapter.engine_id in self._exact:
             raise ValueError(f"exact adapter already registered: {adapter.engine_id}")
         if not getattr(adapter, "upstream_distribution", ""):
@@ -81,12 +74,3 @@ class RagEngineRegistry:
 
     def exact(self, engine_id):
         return self._exact.get(engine_id)
-
-    def legacy_migration(self, engine_id):
-        if engine_id not in self.LEGACY: return None
-        if engine_id in self._exact:
-            return LegacyEngineMigration(engine_id,"exact_adapter_available","Exact adapter registered.")
-        return LegacyEngineMigration(
-            engine_id, "requires_review",
-            "No exact adapter is registered. Silent algorithm substitution is forbidden.",
-        )

@@ -788,22 +788,7 @@ pub fn run() {
             // android-remote / desktop-remote. desktop-local still owns a
             // broker (never reachable while local mode is active) using the
             // default remote runtime id.
-            #[cfg(all(target_os = "android", feature = "android-ci-trust-root"))]
-            let broker = {
-                // CI-only upgrade-test build. The feature is deliberately
-                // required so production arm64 code does not compile the
-                // trust-root loader or its system-property name.
-                let trust_root = remote::ci_tls_trust_root()
-                    .map_err(|error| format!("failed to load CI TLS trust root: {error}"))?;
-                RemoteBroker::with_expected_runtime_and_trust_root(
-                    AndroidKeystoreStore::new()
-                        .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
-                    broker_expected_runtime_id(mode),
-                    trust_root,
-                )
-                .map_err(|error| format!("failed to initialize remote broker: {error}"))?
-            };
-            #[cfg(all(target_os = "android", not(feature = "android-ci-trust-root")))]
+            #[cfg(target_os = "android")]
             let broker = RemoteBroker::with_expected_runtime(
                 AndroidKeystoreStore::new()
                     .map_err(|error| format!("failed to open Android Keystore: {error}"))?,
@@ -973,7 +958,7 @@ mod tests {
     #[test]
     fn android_compile_guard_is_desktop_noop() {
         // On desktop these commands are reachable; the cfg gates are asserted by
-        // the Android emulator/upgrade jobs on the Android target build.
+        // the Android emulator job on the Android target build.
         assert!(true);
     }
 }

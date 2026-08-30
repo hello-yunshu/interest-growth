@@ -120,7 +120,7 @@ if [ "${code}" = "201" ]; then PASS=$((PASS + 1)); else fail "bootstrap (got ${c
 
 # 6. login
 step "owner login"
-code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-b\",\"platform\":\"android\",\"app_version\":\"1.0.12\"}")"
+  code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-b\",\"platform\":\"android\",\"app_version\":\"1.0.20\"}")"
 if [ "${code}" = "201" ]; then
   PASS=$((PASS + 1))
   DEVICE_ID="$(json_get "['device']['id']")"
@@ -273,7 +273,7 @@ PY
     fail "restore round trip"
   fi
 
-  step "migrate (schema version after restore equals current)"
+  step "verify current schema marker after restore"
   MIGRATE_OUT="$(docker compose -p "${COMPOSE_PROJECT}" exec -T api python - <<'PY' 2>&1 || true
 from pg_api.db import CURRENT_SCHEMA_VERSION
 from sqlalchemy import create_engine, text
@@ -304,7 +304,7 @@ PY
   if [ "${code}" = "200" ]; then PASS=$((PASS + 1)); else fail "post-restore health (got ${code})"; fi
 
   step "product smoke (owner login + dashboard + restored data)"
-  code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-recover\",\"platform\":\"android\",\"app_version\":\"1.0.12\"}")"
+  code="$(http POST /auth/owner/login -H "Content-Type: application/json" -d "{\"owner_password\":\"${OWNER_PASSWORD}\",\"device_name\":\"ci-recover\",\"platform\":\"android\",\"app_version\":\"1.0.20\"}")"
   if [ "${code}" = "201" ]; then
     PASS=$((PASS + 1))
     ACCESS_TOKEN="$(json_get "['tokens']['access_token']")"

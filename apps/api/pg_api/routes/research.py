@@ -78,7 +78,7 @@ async def create_research_plan(body: ResearchRequest, request: Request):
             context, question=body.question, max_subtopics=5 if body.depth == "deep" else 3,
         )
         kb_ids, kb_warnings = _resolve_knowledge_base_ids(body.knowledge_base_ids)
-        skills, skill_warnings = _resolve_domain_skills(body.domain_skills_enabled)
+        skills, skill_warnings = _resolve_domain_skills(body.use_domain_skills)
         plan = {
             "question": preview.refined_topic,
             "brief": preview.refined_topic,
@@ -117,7 +117,7 @@ async def run_research(body: ResearchRequest, request: Request):
     # A bad KB id is a request error, not an upstream execution failure, and must never
     # leave a stranded run in the ledger.
     kb_ids, kb_warnings = _resolve_knowledge_base_ids(body.knowledge_base_ids)
-    skills, skill_warnings = _resolve_domain_skills(body.domain_skills_enabled)
+    skills, skill_warnings = _resolve_domain_skills(body.use_domain_skills)
 
     feature_active = feature_enabled("FEATURE_DEEP_RESEARCH")
     engine_status = {"engine": "native.interest-growth", "degraded": False} if feature_active else {"engine": "manual-workspace", "degraded": True, "reason": "FEATURE_DEEP_RESEARCH disabled"}

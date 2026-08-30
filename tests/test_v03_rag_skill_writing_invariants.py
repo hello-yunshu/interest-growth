@@ -5,7 +5,7 @@ import pytest
 from interest_growth_native.bundle import NativeEngineBundle
 from interest_growth_native.capabilities import CAP_NOTEBOOK,CAP_PRACTICE,CAP_COWRITER
 from interest_growth_native.contracts import GroundingRefSnapshot,PracticeOrigin,KnowledgeBaseSnapshot,SourceTextSnapshot
-from interest_growth_native.errors import LegacyEngineReviewRequired,StaleProposalError
+from interest_growth_native.errors import StaleProposalError
 from interest_growth_native.llm import LLMResponse
 from interest_growth_native.skills import load_skill_directory
 from .helpers import StaticResolver,ctx,kb,store
@@ -31,9 +31,9 @@ def test_rag_cache_uses_effective_source_fingerprint_when_kb_fingerprint_blank()
     assert b.retrieval.retrieve(ctx(),kb_ids=["k"],query="beta")
     assert not b.retrieval.retrieve(ctx(),kb_ids=["k"],query="alpha")
 
-def test_legacy_rag_id_requires_exact_adapter_or_explicit_review():
+def test_unregistered_rag_id_is_rejected_without_old_version_fallback():
     b=NativeEngineBundle(knowledge_resolver=StaticResolver([kb(engine="lightrag")]),store=store(),llm=Simple())
-    with pytest.raises(LegacyEngineReviewRequired):
+    with pytest.raises(KeyError, match="unknown RAG engine"):
         b.retrieval.retrieve(ctx(),kb_ids=["k"],query="x")
 
 def test_skill_package_fingerprint_changes_when_supporting_file_changes(tmp_path):
