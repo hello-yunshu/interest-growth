@@ -88,7 +88,7 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "anchor_selector = f'a[href=\"{path}\"]" in source
     assert "command-palette item" in source
     assert "prefer it before any" in source
-    assert "if static_export_route():" in source
+    assert "static_navigation = static_export_route()" in source
     assert "if command_palette_click():" in source
     assert "_on_page(cdp, path)" in source
     assert "_shell_ready(cdp)" in source
@@ -97,7 +97,9 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "clicked_command_palette_input" in source
     assert "button.commandItem" in source
     assert "el.click(); return {ok:true}" in source
-    assert "window.location.replace('/curiosity/index.html')" in source
+    assert 'cdp.call("Page.navigate"' in source
+    assert "http://tauri.localhost/curiosity/index.html" in source
+    assert "could not dispatch deterministic static navigation" in source
     assert "static_export_entrypoint" in source
     assert "quick_navigation_unverified" in source
     assert 'document.querySelector(\'textarea\') && location.pathname.startsWith' in source
