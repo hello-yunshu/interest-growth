@@ -38,6 +38,9 @@ exports/*
 LOCAL_ONLY_DO_NOT_COMMIT/
 *_DO_NOT_COMMIT/
 
+# Local frontend visual QA artifacts
+.design-audit-2026-08-31/
+
 # Desktop build outputs
 apps/web/out/
 apps/desktop/node_modules/
