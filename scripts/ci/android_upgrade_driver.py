@@ -320,12 +320,13 @@ def navigate_page(cdp, path, log, deadline):
             ), {})
             if not result.get("ok"):
                 return False
-            # The historical export has an explicit index.html file. Calling
-            # Page.navigate avoids the old WebView's broken directory
+            # The historical release-test export is normalized to a flat
+            # curiosity.html entrypoint by patch_release_test_source.sh.
+            # Calling Page.navigate avoids the old WebView's broken directory
             # navigation (/curiosity/) and avoids losing the CDP result when
             # JavaScript location.replace tears down the target socket.
             cdp.call("Page.navigate", {
-                "url": "http://tauri.localhost/curiosity/index.html",
+                "url": "http://tauri.localhost/curiosity.html",
             })
             return True
         except Exception as e:  # noqa: BLE001
@@ -348,7 +349,7 @@ def navigate_page(cdp, path, log, deadline):
     elif path == "/curiosity":
         raise UpgradeError(
             "could not dispatch deterministic static navigation to "
-            "http://tauri.localhost/curiosity/index.html"
+            "http://tauri.localhost/curiosity.html"
         )
     else:
         quick_navigation = command_palette_click()
@@ -387,9 +388,8 @@ def navigate_page(cdp, path, log, deadline):
                 "window.dispatchEvent(new Event('popstate')); } catch(e){} return 1; })()")
     except Exception as e:  # noqa: BLE001
         log.append({"step": f"nav_{path}", "error": str(e)})
-    # The exported historical Next app uses trailingSlash=true, so the
-    # explicit /curiosity/index.html entrypoint is the file that exists in the
-    # old APK's asset bundle. Use a
+    # The historical release-test Web export is normalized to a flat
+    # /curiosity.html entrypoint for the old APK's asset bundle. Use a
     # trusted CDP pointer event on every retry so old WebViews do not treat a
     # synthetic HTMLElement.click() as an immediate full-page asset load.
     for attempt in range(1, 5):

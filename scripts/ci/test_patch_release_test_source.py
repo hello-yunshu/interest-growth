@@ -17,6 +17,7 @@ ALLOWLIST = {
     "apps/desktop/src-tauri/gen/android/app/src/main/java/app/psychologygrowth/desktop/MainActivity.kt",
     "apps/desktop/src-tauri/src/lib.rs",
     "apps/desktop/src-tauri/src/remote.rs",
+    "apps/web/next.config.js",
 }
 
 
