@@ -97,7 +97,7 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "clicked_command_palette_input" in source
     assert "button.commandItem" in source
     assert "el.click(); return {ok:true}" in source
-    assert "window.location.replace('/curiosity.html')" in source
+    assert "window.location.replace('/curiosity/index.html')" in source
     assert "static_export_entrypoint" in source
     assert "quick_navigation_unverified" in source
     assert 'document.querySelector(\'textarea\') && location.pathname.startsWith' in source
@@ -111,7 +111,7 @@ def test_shell_ready_accepts_static_export_trailing_slash_route():
 
 def test_curiosity_static_export_entrypoint_counts_as_target_page():
     source = inspect.getsource(d._on_page)
-    assert 'pathname == "/curiosity.html"' in source
+    assert 'pathname.startswith("/curiosity")' in source
 
 
 def test_resilient_cdp_reconnects_after_transport_close():
