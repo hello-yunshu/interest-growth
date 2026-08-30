@@ -95,6 +95,8 @@ jobs:
           print(f"Candidate success run: {max(matches, key=lambda item: item.get('run_number', 0)).get('id')}")
           PY
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${TAG}" "${CANDIDATE_SHA}" -m "Interest Growth ${TAG}"
           git push origin "${TAG}"
           echo "PROMOTION: ${CANDIDATE_SHA} -> immutable ${TAG}"
