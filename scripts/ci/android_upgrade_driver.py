@@ -109,6 +109,19 @@ def js_textarea_value(selector):
     )
 
 
+def js_exec_textarea_insert(selector, value):
+    """Use the WebView's real editing command when CDP key events are lossy."""
+    selector = cae._double_quote(selector)
+    value = cae._double_quote(value)
+    return (
+        f"(() => {{ const el = document.querySelector({selector});"
+        f" if (!el || el.tagName !== 'TEXTAREA') return {{ok:false,step:'find'}};"
+        f" el.focus(); let executed = false;"
+        f" try {{ executed = document.execCommand('insertText', false, {value}); }}"
+        f" catch (e) {{}} return {{ok:true,executed,value:el.value}}; }})()"
+    )
+
+
 def click_prompt_send(cdp):
     """Click the real PromptBar send button with a trusted CDP pointer event.
 
@@ -148,6 +161,19 @@ def _prompt_send_ready(cdp):
         "return {ok:r.width > 0 && r.height > 0}; })()"
     ), {})
     return bool(result.get("ok"))
+
+
+def _prompt_send_diagnostics(cdp):
+    """Return bounded DOM diagnostics when the controlled state stays empty."""
+    result = _coerce(cdp.evaluate(
+        "(() => { const ta = document.querySelector('textarea'); "
+        "const tracker = ta && ta._valueTracker; "
+        "const buttons = Array.from(document.querySelectorAll('button[aria-label=\"发送\"]')); "
+        "return {path:location.pathname, textarea:ta ? {valueLength:ta.value.length, "
+        "trackerValueLength:tracker && typeof tracker.getValue === 'function' ? tracker.getValue().length : null} : null, "
+        "buttons:buttons.map(el => { const r=el.getBoundingClientRect(); return {disabled:el.disabled, "
+        "width:r.width,height:r.height}; })}; })()"), {} )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -403,13 +429,15 @@ def create_question(cdp, text, log, deadline):
     if not clear_r.get("ok"):
         raise UpgradeError(f"clear PromptBar textarea failed: {clear_r}")
     cdp.evaluate("(() => { const el = document.querySelector('textarea'); el?.focus(); return !!el; })()")
-    # Some historical Android WebViews expose Input.insertText but do not
-    # forward its synthetic input event to React's delegated onChange. Send
-    # trusted character events through the focused, visible textarea instead.
-    for char in text:
-        cdp.call("Input.dispatchKeyEvent", {
-            "type": "char", "text": char, "unmodifiedText": char,
-        })
+    # Prefer the WebView editing command, which produces the same input path
+    # as a user paste. Fall back to trusted character events on WebViews where
+    # execCommand is unavailable or refuses to edit a focused textarea.
+    inserted = _coerce(cdp.evaluate(js_exec_textarea_insert("textarea", text)), {})
+    if inserted.get("value") != text:
+        for char in text:
+            cdp.call("Input.dispatchKeyEvent", {
+                "type": "char", "text": char, "unmodifiedText": char,
+            })
     # Some historical Android WebViews update the DOM value for trusted
     # character events but omit the bubbling input event that React's
     # delegated onChange handler needs. Re-apply the final value through the
@@ -422,11 +450,18 @@ def create_question(cdp, text, log, deadline):
     if value_r.get("value") != text:
         raise UpgradeError("CDP text input did not populate the PromptBar textarea")
     log.append({"step": "prompt_fill", "ok": True, "chars": len(text), "how": "trusted_char_input+native_input_sync"})
+    send_deadline = min(deadline, time.time() + 60)
     if not cae._wait_for(cdp, lambda: _prompt_send_ready(cdp),
-                         "PromptBar send button enabled after fill", deadline, log):
-        raise UpgradeError("PromptBar send button was not visible/enabled")
+                         "PromptBar send button enabled after fill", send_deadline, log):
+        raise UpgradeError(
+            "PromptBar send button was not visible/enabled; "
+            f"diagnostics={_prompt_send_diagnostics(cdp)}"
+        )
     if not click_prompt_send(cdp):
-        raise UpgradeError("PromptBar send button was not visible/enabled")
+        raise UpgradeError(
+            "PromptBar send button was not visible/enabled; "
+            f"diagnostics={_prompt_send_diagnostics(cdp)}"
+        )
     log.append({"step": "prompt_submit", "ok": True, "how": "trusted_pointer"})
     ok = cae._wait_for(cdp, lambda: _body_contains(cdp, text),
                        "question rendered in the table", deadline, log)

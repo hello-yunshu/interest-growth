@@ -61,6 +61,8 @@ def test_create_question_submits_prompt_after_filling():
     source = inspect.getsource(d.create_question)
     assert "PromptBar send button enabled after fill" in source
     assert 'cdp.call("Input.dispatchKeyEvent"' in source
+    assert "js_exec_textarea_insert" in source
+    assert "send_deadline" in source
     assert "click_prompt_send(cdp)" in source
 
 
