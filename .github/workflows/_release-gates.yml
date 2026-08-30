@@ -35,6 +35,10 @@ on:
         description: "Exact main SHA for Stable Candidate mode"
         required: false
         type: string
+      release_tag:
+        description: "Exact release tag for manual release execution"
+        required: false
+        type: string
     secrets:
       PG_ANDROID_KEYSTORE_B64:
         required: false
@@ -61,6 +65,7 @@ jobs:
         uses: actions/checkout@v7.0.1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Resolve tag, prerelease and stable flags
         id: meta
         run: |
@@ -80,7 +85,8 @@ jobs:
             IS_CANDIDATE=true
             ;;
           release)
-            TAG="${GITHUB_REF_NAME}"
+            TAG="${{ inputs.release_tag }}"
+            if [ -z "${TAG}" ]; then TAG="${GITHUB_REF_NAME}"; fi
             if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               PRE=false
             elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+|beta\.[0-9]+|alpha\.[0-9]+|dev\.[0-9]+|pre\.[0-9]+)$ ]]; then
@@ -115,6 +121,7 @@ jobs:
         uses: actions/checkout@v7.0.1 # v7.0.1
         with:
           fetch-depth: 2
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Python
         uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
@@ -131,6 +138,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Python
         uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
@@ -152,6 +161,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Python
         uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
@@ -173,6 +184,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Node
         uses: actions/setup-node@v6.5.0 # v6.5.0
         with:
@@ -189,6 +202,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable # v1
         with:
@@ -213,6 +228,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Verify Docker integration (clean data volume, current commit)
         run: bash scripts/ci/verify_docker_integration.sh
 
@@ -226,6 +243,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3 # v3
       - name: "Fail-closed: all release signing secrets must be present"
@@ -363,6 +382,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Download emulator x86_64 debug APK
         uses: actions/download-artifact@v4 # v4
         with:
@@ -466,6 +487,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Python
         uses: actions/setup-python@v7.0.0 # v7.0.0
         with:
@@ -527,6 +550,8 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Python
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/setup-python@v7.0.0 # v7.0.0
@@ -579,6 +604,8 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Server multi-device canonical-state integration (§10, layer 1)
         if: needs.release-meta.outputs.is_stable == 'true'
         # Server-level canonical-state proof only (evidence level SERVER_
@@ -851,6 +878,8 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Python
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/setup-python@v7.0.0 # v7.0.0
@@ -919,6 +948,8 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Python
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/setup-python@v7.0.0 # v7.0.0
@@ -1006,6 +1037,8 @@ jobs:
       - name: Check out source
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Verify server source integrity
         if: needs.release-meta.outputs.is_stable == 'true'
         run: |
@@ -1017,7 +1050,7 @@ jobs:
           mkdir -p dist/release/server
           python3 scripts/release/build_server_bundle.py \
             --version "${VERSION}" \
-            --source-sha "${GITHUB_SHA}" \
+            --source-sha "$(git rev-parse HEAD)" \
             --out "dist/release/server/interest-growth-server-${VERSION}.tar.gz"
           echo "bundle:"
           ls -la dist/release/server/
@@ -1043,6 +1076,8 @@ jobs:
       - name: Check out verification script
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Download server bundle
         if: needs.release-meta.outputs.is_stable == 'true'
         uses: actions/download-artifact@v4 # v4
@@ -1081,6 +1116,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Download candidate artifacts
         uses: actions/download-artifact@v4 # v4
         with:
@@ -1244,5 +1281,7 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: All required gates green
         run: 'echo "release-gate: PASS (all required jobs succeeded)"'
