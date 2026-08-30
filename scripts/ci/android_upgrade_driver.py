@@ -393,10 +393,15 @@ def create_question(cdp, text, log, deadline):
             "curiosity PromptBar did not render after navigation. "
             f"body: {_read_body(cdp)[:400]}"
         )
-    set_r = _coerce(cdp.evaluate(js_set_textarea("textarea", text)), {})
-    if not set_r.get("ok"):
-        raise UpgradeError(f"set PromptBar textarea failed: {set_r}")
-    log.append({"step": "prompt_fill", "ok": True, "chars": set_r.get("value")})
+    clear_r = _coerce(cdp.evaluate(js_set_textarea("textarea", "")), {})
+    if not clear_r.get("ok"):
+        raise UpgradeError(f"clear PromptBar textarea failed: {clear_r}")
+    cdp.evaluate("(() => { const el = document.querySelector('textarea'); el?.focus(); return !!el; })()")
+    cdp.call("Input.insertText", {"text": text})
+    value_r = _coerce(cdp.evaluate(js_textarea_value("textarea")), {})
+    if value_r.get("value") != text:
+        raise UpgradeError("CDP text input did not populate the PromptBar textarea")
+    log.append({"step": "prompt_fill", "ok": True, "chars": len(text), "how": "trusted_text_input"})
     if not cae._wait_for(cdp, lambda: _prompt_send_ready(cdp),
                          "PromptBar send button enabled after fill", deadline, log):
         raise UpgradeError("PromptBar send button was not visible/enabled")
