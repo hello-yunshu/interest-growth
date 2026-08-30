@@ -316,9 +316,18 @@ def navigate_page(cdp, path, log, deadline):
                 "(() => { "
                 "if (document.querySelector('textarea') && location.pathname.startsWith('/curiosity')) "
                 "return {ok:false,step:'already_there'}; "
-                "window.location.replace('/curiosity/index.html'); return {ok:true}; })()"
+                "return {ok:true}; })()"
             ), {})
-            return bool(result.get("ok"))
+            if not result.get("ok"):
+                return False
+            # The historical export has an explicit index.html file. Calling
+            # Page.navigate avoids the old WebView's broken directory
+            # navigation (/curiosity/) and avoids losing the CDP result when
+            # JavaScript location.replace tears down the target socket.
+            cdp.call("Page.navigate", {
+                "url": "http://tauri.localhost/curiosity/index.html",
+            })
+            return True
         except Exception as e:  # noqa: BLE001
             log.append({"step": "static_export_navigation", "error": str(e)})
             return False
@@ -332,9 +341,15 @@ def navigate_page(cdp, path, log, deadline):
     # client-side navigation. The page reload keeps the same app data/session
     # and is still followed by the black-box PromptBar assertions below.
     quick_navigation = False
-    if static_export_route():
+    static_navigation = static_export_route()
+    if static_navigation:
         quick_navigation = True
         log.append({"step": f"nav_{path}", "attempt": "static_export_entrypoint"})
+    elif path == "/curiosity":
+        raise UpgradeError(
+            "could not dispatch deterministic static navigation to "
+            "http://tauri.localhost/curiosity/index.html"
+        )
     else:
         quick_navigation = command_palette_click()
         if quick_navigation and not cae._wait_for(
@@ -384,14 +399,22 @@ def navigate_page(cdp, path, log, deadline):
             return
         if attempt == 4:
             break
-        log.append({"step": f"nav_{path}", "retry": "real_anchor_click", "attempt": attempt + 1})
+        retry_kind = "static_export_entrypoint" if static_navigation else "real_anchor_click"
+        log.append({"step": f"nav_{path}", "retry": retry_kind, "attempt": attempt + 1})
         try:
-            if command_palette_click():
-                log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
+            if static_navigation:
+                static_navigation = static_export_route()
+                if not static_navigation:
+                    raise UpgradeError(
+                        "deterministic static navigation retry was unavailable"
+                    )
             else:
-                nav = _coerce(cdp.evaluate(expr), {})
-                if nav.get("kind") == "anchor" and nav.get("visible"):
-                    pointer_click(f"document.querySelector({cae._double_quote(anchor_selector)})")
+                if command_palette_click():
+                    log.append({"step": f"nav_{path}", "attempt": "clicked_command_palette_input"})
+                else:
+                    nav = _coerce(cdp.evaluate(expr), {})
+                    if nav.get("kind") == "anchor" and nav.get("visible"):
+                        pointer_click(f"document.querySelector({cae._double_quote(anchor_selector)})")
         except Exception as e:  # noqa: BLE001
             log.append({"step": f"nav_{path}", "retry_error": str(e), "attempt": attempt + 1})
         state = _coerce(cdp.evaluate("({p: location.pathname, href: location.href})"), {})
