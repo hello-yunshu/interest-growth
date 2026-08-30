@@ -68,6 +68,7 @@ def test_create_question_submits_prompt_after_filling():
 
 def test_prompt_send_uses_trusted_cdp_pointer_events():
     source = inspect.getsource(d.click_prompt_send)
+    assert ".buiPrompt button.buiSend" in source
     assert 'button[aria-label=\\"发送\\"]' in source
     assert "Input.dispatchMouseEvent" in source
     assert "mousePressed" in source and "mouseReleased" in source
