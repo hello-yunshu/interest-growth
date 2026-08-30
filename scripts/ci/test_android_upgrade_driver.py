@@ -58,7 +58,7 @@ def test_create_question_submits_prompt_after_filling():
     # send button path must receive a trusted pointer event.
     source = inspect.getsource(d.create_question)
     assert "PromptBar send button enabled after fill" in source
-    assert 'cdp.call("Input.insertText"' in source
+    assert 'cdp.call("Input.dispatchKeyEvent"' in source
     assert "click_prompt_send(cdp)" in source
 
 

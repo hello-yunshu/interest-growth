@@ -397,11 +397,17 @@ def create_question(cdp, text, log, deadline):
     if not clear_r.get("ok"):
         raise UpgradeError(f"clear PromptBar textarea failed: {clear_r}")
     cdp.evaluate("(() => { const el = document.querySelector('textarea'); el?.focus(); return !!el; })()")
-    cdp.call("Input.insertText", {"text": text})
+    # Some historical Android WebViews expose Input.insertText but do not
+    # forward its synthetic input event to React's delegated onChange. Send
+    # trusted character events through the focused, visible textarea instead.
+    for char in text:
+        cdp.call("Input.dispatchKeyEvent", {
+            "type": "char", "text": char, "unmodifiedText": char,
+        })
     value_r = _coerce(cdp.evaluate(js_textarea_value("textarea")), {})
     if value_r.get("value") != text:
         raise UpgradeError("CDP text input did not populate the PromptBar textarea")
-    log.append({"step": "prompt_fill", "ok": True, "chars": len(text), "how": "trusted_text_input"})
+    log.append({"step": "prompt_fill", "ok": True, "chars": len(text), "how": "trusted_char_input"})
     if not cae._wait_for(cdp, lambda: _prompt_send_ready(cdp),
                          "PromptBar send button enabled after fill", deadline, log):
         raise UpgradeError("PromptBar send button was not visible/enabled")
