@@ -316,7 +316,7 @@ def navigate_page(cdp, path, log, deadline):
                 "(() => { "
                 "if (document.querySelector('textarea') && location.pathname.startsWith('/curiosity')) "
                 "return {ok:false,step:'already_there'}; "
-                "window.location.replace('/curiosity.html'); return {ok:true}; })()"
+                "window.location.replace('/curiosity/index.html'); return {ok:true}; })()"
             ), {})
             return bool(result.get("ok"))
         except Exception as e:  # noqa: BLE001
@@ -372,7 +372,9 @@ def navigate_page(cdp, path, log, deadline):
                 "window.dispatchEvent(new Event('popstate')); } catch(e){} return 1; })()")
     except Exception as e:  # noqa: BLE001
         log.append({"step": f"nav_{path}", "error": str(e)})
-    # The exported Next app normally handles the real Nav anchor above. Use a
+    # The exported historical Next app uses trailingSlash=true, so the
+    # explicit /curiosity/index.html entrypoint is the file that exists in the
+    # old APK's asset bundle. Use a
     # trusted CDP pointer event on every retry so old WebViews do not treat a
     # synthetic HTMLElement.click() as an immediate full-page asset load.
     for attempt in range(1, 5):
@@ -408,7 +410,7 @@ def _on_page(cdp, path):
         # pathname-only check can race a client-side navigation and leave the
         # caller on the prior settings page until the full timeout expires.
         pathname = str(r.get("p", ""))
-        curiosity_entry = pathname.startswith("/curiosity") or pathname == "/curiosity.html"
+        curiosity_entry = pathname.startswith("/curiosity")
         return bool(r.get("el")) and (curiosity_entry or path == "/")
     return str(r.get("p", "")).startswith(path)
 
