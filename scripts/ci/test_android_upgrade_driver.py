@@ -26,6 +26,8 @@ def test_set_textarea_uses_native_setter_and_fires_events():
     js = d.js_set_textarea("textarea", "ig-upgrade-ci-123")
     assert "document.querySelector(\"textarea\")" in js
     assert "HTMLTextAreaElement.prototype, 'value').set" in js
+    assert "_valueTracker" in js
+    assert "previous === el.value ? '' : previous" in js
     assert "Event('input', {bubbles:true})" in js
     assert "Event('change', {bubbles:true})" in js
     assert "el.value.length" in js  # returns length, not the sensitive string
