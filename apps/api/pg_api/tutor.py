@@ -20,7 +20,7 @@ from .domains import DEFAULT_DOMAIN_PACK, domain_skill_names, filter_rows_to_cur
 def bundled_tutor_skill_names(domain_pack_id: str | None = None) -> set[str]:
     """Names allowed by one Domain Pack without requiring database state.
 
-    ``None`` intentionally means the legacy/default Psychology pack so contract-level
+    ``None`` intentionally means the current default Psychology pack so contract-level
     validation remains a pure operation before application lifespan has initialized
     Interest Area tables. Runtime call sites must pass the active Area pack explicitly.
     """

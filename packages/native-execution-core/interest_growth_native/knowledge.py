@@ -8,7 +8,7 @@ from typing import Any
 from .capabilities import CAP_KNOWLEDGE
 from .context import NativeRunContext
 from .contracts import KnowledgeBaseSnapshot, KnowledgeResolver, SourceLocator
-from .errors import AreaIsolationError, ExactRagProvenanceError, LegacyEngineReviewRequired
+from .errors import AreaIsolationError, ExactRagProvenanceError
 from .rag import RetrievalChunk, RagEngineRegistry
 
 def _source_fp(source) -> str:
@@ -120,9 +120,6 @@ class NativeRetrievalEngine:
             chunks=[]
             for s in kb.sources: chunks.extend(_split_source(kb.kb_id,s))
             built=("native", self.registry.native_factory(kb.engine_id)(chunks))
-        elif kb.engine_id in self.registry.LEGACY:
-            migration=self.registry.legacy_migration(kb.engine_id)
-            raise LegacyEngineReviewRequired(migration.message)
         else:
             raise KeyError(f"unknown RAG engine: {kb.engine_id}")
         # Drop older cache generations for the same KB/engine.

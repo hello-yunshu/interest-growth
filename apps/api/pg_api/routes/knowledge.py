@@ -322,7 +322,7 @@ async def sync_source(kb_id: str, source_id: str, request: Request):
     if provider in EXACT_RAG_ENGINES:
         _require_selectable_engine(provider)
         return await rebuild(kb_id, request)
-    raise HTTPException(409, "legacy knowledge engine is inactive; select a native engine and rebuild")
+    raise HTTPException(409, "unsupported knowledge engine; select a configured engine and rebuild")
 
 
 @router.post("/knowledge/bases/{kb_id}/retrieve")
@@ -415,7 +415,7 @@ async def retrieve_from_knowledge_base(kb_id: str, body: KnowledgeRetrieveReques
         output["provenance_candidates"] = [model_dict(x) for x in rows]
         emit("knowledge.retrieved", {"knowledge_base_id": kb_id, "run_id": run.id, "candidate_count": len(rows), "provider": provider})
         return {"run": model_dict(run), "result": output}
-    raise HTTPException(409, "legacy knowledge engine is inactive; select a native engine and rebuild")
+    raise HTTPException(409, "unsupported knowledge engine; select a configured engine and rebuild")
 
 
 @router.get("/knowledge/bases/{kb_id}/indexes")
@@ -458,7 +458,7 @@ async def refresh_index(index_id: str):
                 "provider": index.provider,
                 "mode": "native-local",
             }
-    raise HTTPException(409, "legacy knowledge index is inactive; rebuild with a native engine")
+    raise HTTPException(409, "unsupported knowledge index; rebuild with a configured engine")
 
 
 @router.get("/knowledge/indexes/{index_id}/preview")
@@ -491,7 +491,7 @@ async def index_preview(index_id: str):
                 "provider": provider,
                 "parser": parsed.parser,
             }
-    raise HTTPException(409, "legacy knowledge index is inactive; rebuild with a native engine")
+    raise HTTPException(409, "unsupported knowledge index; rebuild with a configured engine")
 
 
 @router.post("/knowledge/bases/{kb_id}/rebuild")
@@ -572,7 +572,7 @@ async def rebuild(kb_id: str, request: Request):
         }
         emit("knowledge_base.rebuilt", {"knowledge_base_id": kb_id, "source_count": len(source_ids), "provider": provider})
         return result
-    raise HTTPException(409, "legacy knowledge engine is inactive; select a native engine and rebuild")
+    raise HTTPException(409, "unsupported knowledge engine; select a configured engine and rebuild")
 
 
 @router.get("/knowledge/bases/{kb_id}/ingestion-runs")
@@ -610,7 +610,7 @@ async def refresh_ingestion_run(run_id: str):
                 "progress": run.progress_json,
                 "provider": run.provider,
             }
-    raise HTTPException(409, "legacy ingestion run is inactive")
+    raise HTTPException(409, "unsupported ingestion engine")
 
 
 @router.get("/knowledge/retrieval-candidates")

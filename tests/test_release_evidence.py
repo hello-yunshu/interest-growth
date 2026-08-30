@@ -147,69 +147,12 @@ def test_release_workflow_verifies_and_regenerates_downloaded_checksums():
     assert "candidate_run_id=" in workflow
     assert "finalize_release_report.py" in workflow
     assert "generate_release_checksums.py" in workflow
-    assert "adb shell am start -W -n app.psychologygrowth.desktop/.MainActivity" in reusable
-    assert "adb shell pidof app.psychologygrowth.desktop" in reusable
-    assert "adb_root_ok=false" in reusable
-    assert "adb_root_ok=false; for _ in $(seq 1 3); do if adb root;" in reusable
-    assert "done; if [ \"$adb_root_ok\" != true ]; then" in reusable
-    assert "for _ in $(seq 1 60); do if adb shell pidof app.psychologygrowth.desktop" in reusable
-    assert "for attempt in 1 2 3; do if npm run tauri -- android build --apk --target x86_64" in reusable
-    assert ":app:assembleUniversalRelease -x rustBuildUniversalRelease" in reusable
-    assert "ci-old-java-oncreate.txt" in reusable
-    assert "create-stage crash buffer" in reusable
-    assert "verify-stage crash buffer" in reusable
-    assert "create-stage app startup logcat" in reusable
-    assert "verify-stage app startup logcat" in reusable
     assert "Final Release Run ID" in (ROOT / "scripts/ci/finalize_release_report.py").read_text(
         encoding="utf-8"
     )
-    patcher = (ROOT / "scripts/ci/patch_release_test_source.sh").read_text(encoding="utf-8")
-    webview_patcher = (ROOT / "scripts/ci/enable_release_test_webview.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "super_anchor =" in patcher
-    assert "super_anchor =" in webview_patcher
-    assert "before super.onCreate" in webview_patcher
-    assert "ci-old-startup-error.txt" in patcher
-    assert "CI historical Android plugin surface" in patcher
-    assert "IG_REPO_ROOT" in patcher
-    assert "current qualified native runtime" in patcher
-    assert "native_transplanted" in patcher
-    assert "CI old Android SAF bridge omitted" in patcher
-    assert "current x86_64 RELEASE-test standalone startup preflight" in reusable
-    assert "FAIL: current x86_64 RELEASE-test APK did not remain running" in reusable
-    assert "proguard-rules.pro" in patcher
-    proguard = (ROOT / "apps/desktop/src-tauri/gen/android/app/proguard-rules.pro").read_text(
-        encoding="utf-8"
-    )
-    assert "InterestGrowthPlugin" in proguard
-    assert "StageContentUriArgs" in proguard
-    assert "SaveDocumentFromFileArgs" in proguard
-    assert "PickDocumentArgs" in proguard
-    gradle = (ROOT / "apps/desktop/src-tauri/gen/android/app/build.gradle.kts").read_text(
-        encoding="utf-8"
-    )
-    assert "PG_RELEASE_TEST" in gradle
-    assert "isMinifyEnabled = !releaseTestBuild" in gradle
-    formal_arm64 = reusable.split(
-        "- name: Build signed release APK (arm64-v8a, release signing required)", 1
-    )[1].split("- name: Stage arm64 release APK", 1)[0]
-    current_release_test = reusable.split(
-        "- name: Build CI-only signed release APK (x86_64, same cert, non-debuggable)", 1
-    )[1].split("- name: Enforce removed CI-only WebView hook", 1)[0]
-    previous_release_test = reusable.split(
-        "- name: Build previous signed x86_64 RELEASE-test APK (same cert, non-debuggable), §11",
-        1,
-    )[1].split("- name: Download current signed release APKs", 1)[0]
-    assert "-e PG_RELEASE_TEST=1" not in formal_arm64
-    assert "-e PG_RELEASE_TEST=1" in current_release_test
-    assert "-e PG_RELEASE_TEST=1" in previous_release_test
-    assert "--features android-ci-trust-root" in reusable
-    diagnostics = (ROOT / "scripts/ci/print_android_startup_diagnostics.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "separate shell command" in diagnostics
-    assert "ci-old-startup-panic.txt" in diagnostics
+    assert not (ROOT / "config/upgrade-baseline.toml").exists()
+    assert not (ROOT / "scripts/ci/android_upgrade_driver.py").exists()
+    assert not (ROOT / "scripts/ci/verify_upgrade_apk_pair.sh").exists()
 
 
 def test_tracked_workflows_use_readable_action_refs():

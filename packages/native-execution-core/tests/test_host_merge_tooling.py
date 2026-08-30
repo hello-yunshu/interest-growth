@@ -1,4 +1,4 @@
-import json,sqlite3,subprocess,sys
+import json,subprocess,sys
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -52,15 +52,3 @@ def test_host_audit_ignores_guard_examples_and_historical_docs(tmp_path):
     p=subprocess.run([sys.executable,str(ROOT/"scripts/audit_host_v050.py"),str(h),"--strict"],cwd=ROOT,text=True,capture_output=True)
     assert p.returncode==0,p.stdout+p.stderr
     assert json.loads(p.stdout)["findings"] == []
-
-def test_migration_runner_preserves_legacy_sentinel(tmp_path):
-    db=tmp_path/"host.db";conn=sqlite3.connect(db)
-    conn.execute("CREATE TABLE legacy(id INTEGER PRIMARY KEY,value TEXT)")
-    conn.execute("INSERT INTO legacy(value) VALUES ('keep')");conn.commit();conn.close()
-    p=subprocess.run([sys.executable,str(ROOT/"scripts/migrate_host_db_v11.py"),str(db),"--no-backup"],cwd=ROOT,text=True,capture_output=True)
-    assert p.returncode==0,p.stdout+p.stderr
-    conn=sqlite3.connect(db)
-    assert conn.execute("SELECT value FROM legacy").fetchone()[0]=="keep"
-    names={x[0] for x in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    conn.close()
-    assert {"native_tutor_checkpoint","native_run_event","native_aux_memory"} <= names

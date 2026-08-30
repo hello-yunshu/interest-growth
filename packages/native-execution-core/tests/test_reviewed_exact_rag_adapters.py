@@ -7,7 +7,7 @@ import pytest
 
 from interest_growth_native.bundle import NativeEngineBundle
 from interest_growth_native.contracts import KnowledgeBaseSnapshot, SourceLocator, SourceTextSnapshot
-from interest_growth_native.errors import ExactRagProvenanceError, LegacyEngineReviewRequired
+from interest_growth_native.errors import ExactRagProvenanceError
 from interest_growth_native.rag import (
     GraphRagExactAdapter,
     LightRagExactAdapter,
@@ -62,11 +62,9 @@ def retrieve(adapter, engine_id: str):
     return bundle.retrieval.retrieve(ctx(), kb_ids=["kb-1"], query="durable", top_k=2)
 
 
-def test_every_unregistered_legacy_id_requires_review_and_never_uses_native_factory():
+def test_unregistered_external_engine_is_rejected_without_compatibility_route():
     registry = RagEngineRegistry()
-    for engine_id in sorted(registry.LEGACY):
-        migration = registry.legacy_migration(engine_id)
-        assert migration.status == "requires_review"
+    for engine_id in sorted(registry.EXACT_ENGINE_IDS):
         assert registry.exact(engine_id) is None
         with pytest.raises(KeyError):
             registry.native_factory(engine_id)
@@ -75,7 +73,7 @@ def test_every_unregistered_legacy_id_requires_review_and_never_uses_native_fact
             store=store(),
             rag_registry=registry,
         )
-        with pytest.raises(LegacyEngineReviewRequired):
+        with pytest.raises(KeyError, match="unknown RAG engine"):
             bundle.retrieval.retrieve(ctx(), kb_ids=["kb-1"], query="durable")
 
 

@@ -486,16 +486,6 @@ def require_entity_in_current_area(db, entity_type: str, entity_id: str, *, allo
     raise ValueError(f"{entity_type} does not belong to current interest area")
 
 
-def backfill_legacy_area_bindings() -> None:
-    with get_session_factory()() as db:
-        db.info["skip_area_scope"] = True
-        area = get_default_area(db)
-        for entity_type, model in SCOPED_MODELS.items():
-            for entity_id in db.scalars(select(model.id)).all():
-                bind_entity(db, entity_type, str(entity_id), area_id=area.id)
-        db.commit()
-
-
 def area_summary(area: InterestAreaModel) -> dict[str, Any]:
     with get_session_factory()() as db:
         pack = db.get(DomainPackModel, area.domain_pack_id)

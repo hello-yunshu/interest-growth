@@ -82,22 +82,12 @@ def test_debug_profile_allows_expected_debug_marker_without_filename_inference(t
 
 def test_release_profile_rejects_debug_marker_even_when_filename_looks_test_like(tmp_path: Path) -> None:
     _, env = _tool_path(tmp_path, with_aapt=True)
-    apk = _apk(tmp_path / "interest-growth-release-test.apk", "setWebContentsDebuggingEnabled")
+    apk = _apk(tmp_path / "interest-growth-test-build.apk", "setWebContentsDebuggingEnabled")
 
     result = _run("release", apk, env)
 
     assert result.returncode == 1
     assert "setWebContentsDebuggingEnabled" in result.stderr
-
-
-def test_release_test_profile_allows_declared_ci_marker(tmp_path: Path) -> None:
-    _, env = _tool_path(tmp_path, with_aapt=True)
-    apk = _apk(tmp_path / "interest-growth-arm64-release.apk", "android-ci-trust-root")
-
-    result = _run("release-test", apk, env)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "release-test" in result.stdout
 
 
 def test_unknown_profile_and_missing_apk_fail_closed(tmp_path: Path) -> None:

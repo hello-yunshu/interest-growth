@@ -217,28 +217,26 @@ def test_restore_retains_previous_state_until_post_checks_then_cleans(seeded_cli
     reset_engine_for_tests()
 
 
-def test_restore_migrates_older_bundle_schema_during_staging(seeded_client, tmp_path):
-    """Gate B4: an older-schema bundle is upgraded during staged verification."""
-    import sqlite3
-
+def test_restore_rejects_older_bundle_schema_before_staging(seeded_client, tmp_path):
+    """Pre-release restore accepts only a bundle from the current schema."""
     from pg_api.backup_restore import create_backup, restore_backup
 
     settings = get_settings()
     bundle = create_backup(destination_dir=str(tmp_path / "backups"))
-    db_file = bundle / "psychology_growth.db"
-    conn = sqlite3.connect(db_file)
-    conn.execute("DELETE FROM schema_migrations WHERE version = 15")
-    conn.commit()
-    conn.close()
+    db_before = Path(settings.database_url[len("sqlite:///"):]).read_bytes()
+    source_before = sorted(
+        p.relative_to(Path(settings.source_storage_root))
+        for p in Path(settings.source_storage_root).rglob("*")
+        if p.is_file()
+    )
     manifest_path = bundle / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["database"]["sha256"] = _sha256(db_file)
+    manifest["schema_version"] = 14
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
-    result = restore_backup(bundle_dir=str(bundle))
-    assert result["schema_version"] == 15
-    with get_session_factory()() as db:
-        assert db.scalar(select(func.max(SchemaMigration.version))) == 15
+    with pytest.raises(ValueError, match="schema is unsupported before release"):
+        restore_backup(bundle_dir=str(bundle))
+    _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
     reset_engine_for_tests()
 
 
@@ -279,7 +277,7 @@ def test_restore_fails_closed_on_newer_schema_bundle(seeded_client, tmp_path):
     manifest["database"]["sha256"] = _sha256(db_file)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="newer than this build"):
+    with pytest.raises(RuntimeError, match="existing database format is unsupported"):
         restore_backup(bundle_dir=str(bundle))
     _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
     reset_engine_for_tests()
@@ -338,7 +336,7 @@ def test_restore_fails_closed_on_future_backup_format(seeded_client, tmp_path):
     manifest["format_version"] = 999
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="format_version 999 is newer"):
+    with pytest.raises(ValueError, match="format_version 999 is unsupported"):
         restore_backup(bundle_dir=str(bundle))
     _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
     reset_engine_for_tests()

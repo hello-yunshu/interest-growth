@@ -17,7 +17,7 @@ def _h(area):
 
 def test_fresh_install_has_domain_packs_area_and_real_migration(client):
     from pg_api.db import (
-        InterestAreaModel, DomainPackModel, PersonaScopeModel, SchemaMigration,
+        InterestAreaModel, DomainPackModel, PersonaScopeModel,
         get_engine, get_session_factory,
     )
 
@@ -29,7 +29,8 @@ def test_fresh_install_has_domain_packs_area_and_real_migration(client):
         assert areas[0].slug == 'psychology'
         assert areas[0].domain_pack_id == 'psychology'
         assert areas[0].is_default is True
-        assert set(db.scalars(select(SchemaMigration.version)).all()) == set(range(1, 16))
+        from pg_api.db import SchemaMigration
+        assert set(db.scalars(select(SchemaMigration.version)).all()) == {15}
         # 2 general + 4 psychology builtin personas are scoped by pack.
         assert len(db.scalars(select(PersonaScopeModel)).all()) == 6
 
@@ -191,32 +192,6 @@ def test_web_area_context_and_curiosity_state_contract(project_root):
     assert 'grounding_refs:refs' in content
 
 
-def test_plugin_state_legacy_alias_migration_preserves_old_row(client):
-    from pg_api.db import PluginStateModel, get_session_factory
-    from pg_api.plugins import migrate_legacy_plugin_states
-
-    with get_session_factory()() as db:
-        db.info['skip_area_scope'] = True
-        current = db.get(PluginStateModel, 'capability.curiosity')
-        assert current is not None
-        db.delete(current)
-        old = db.get(PluginStateModel, 'psychology.curiosity')
-        if old is None:
-            db.add(PluginStateModel(
-                plugin_id='psychology.curiosity', enabled=False, installed_version='0.4.1', lifecycle_state='disabled'
-            ))
-        else:
-            old.enabled = False; old.lifecycle_state = 'disabled'; old.installed_version = '0.4.1'
-        db.commit()
-    migrate_legacy_plugin_states()
-    with get_session_factory()() as db:
-        old = db.get(PluginStateModel, 'psychology.curiosity')
-        current = db.get(PluginStateModel, 'capability.curiosity')
-        assert old is not None
-        assert current is not None
-        assert current.enabled is False
-        assert current.lifecycle_state == 'disabled'
-
 def test_cross_area_direct_invalidation_and_practice_tutor_link_are_blocked(client):
     psych = client.get('/api/areas/current').json()['area']
     drawing = _create_area(client)
@@ -248,7 +223,7 @@ def test_tutor_context_update_and_card_render_cannot_cross_areas(client):
 
 def test_area_capability_override_rejects_core_provider_and_unknown_plugins(client):
     area = _create_area(client, name='摄影', slug='photography')
-    ok = client.put(f"/api/areas/{area['id']}/capabilities/psychology.curiosity", json={'enabled': False})
+    ok = client.put(f"/api/areas/{area['id']}/capabilities/capability.curiosity", json={'enabled': False})
     assert ok.status_code == 200
     assert ok.json()['plugin_id'] == 'capability.curiosity'
 

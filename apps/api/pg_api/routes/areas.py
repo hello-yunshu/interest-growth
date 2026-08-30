@@ -13,7 +13,7 @@ from ..domains import (
 )
 from ..schemas import AreaCapabilityUpdate, InterestAreaCreate, InterestAreaUpdate
 from ..serializers import model_dict
-from ..plugins import canonical_plugin_id, get_plugin_runtime
+from ..plugins import get_plugin_runtime
 
 router = APIRouter(tags=["interest-areas"])
 
@@ -93,7 +93,6 @@ def list_area_capabilities(area_id: str):
 
 @router.put("/areas/{area_id}/capabilities/{plugin_id:path}")
 def update_area_capability(area_id: str, plugin_id: str, body: AreaCapabilityUpdate):
-    plugin_id = canonical_plugin_id(plugin_id)
     runtime = get_plugin_runtime()
     if plugin_id not in runtime.manifests:
         raise HTTPException(404, {"code": "unknown_plugin", "plugin": plugin_id})

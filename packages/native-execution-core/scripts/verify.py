@@ -40,8 +40,6 @@ def main():
     if set(spec["allowed_native_tables"])!={"native_tutor_checkpoint","native_run_event","native_aux_memory"}:return fail("allowed native tables drift")
     with (ROOT/"pyproject.toml").open("rb") as f:project=tomllib.load(f)
     if project["project"]["version"]!="0.6.0rc2":return fail("version mismatch")
-    migrate=(ROOT/"scripts/migrate_host_db_v11.py").read_text("utf-8")
-    if ".executescript(" in migrate:return fail("production migration runner uses executescript")
     proc=subprocess.run([sys.executable,"-m","pytest","-q","-p","no:cacheprovider"],cwd=ROOT,text=True)
     if proc.returncode:return proc.returncode
     print("native execution core RC2 verification: PASS")

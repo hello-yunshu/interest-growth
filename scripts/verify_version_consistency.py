@@ -74,14 +74,6 @@ def _parse_semver(value: str) -> tuple[int, int, int] | None:
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
-def _semver_lte(left: str, right: str) -> bool:
-    a = _parse_semver(left)
-    b = _parse_semver(right)
-    if a is None or b is None:
-        return False  # invalid versions must never pass a compatibility check
-    return a <= b
-
-
 def main() -> int:
     problems: list[str] = []
 
@@ -97,20 +89,15 @@ def main() -> int:
     # --- server / API ---------------------------------------------------- #
     remote_text = REMOTE_AUTH.read_text(encoding="utf-8")
     require_equal("remote_auth.SERVER_VERSION", _match(r'SERVER_VERSION\s*=\s*"([^"]+)"', remote_text))
-    # MIN_CLIENT_VERSION is the minimum client the server accepts, NOT a mirror
-    # of the current product version. A patch release (e.g. 1.0.1) keeps it at
-    # the last shipped version so existing clients stay compatible; it must only
-    # move forward with a compatibility-breaking change. Validate it is a
-    # version <= canonical (semantic: min client must not exceed the server).
+    # Pre-release deployments accept only the current client version. Keeping
+    # this exact prevents accidental reintroduction of an old-client window.
     min_client = _match(r'MIN_CLIENT_VERSION\s*=\s*"([^"]+)"', remote_text)
+    if min_client is None and re.search(r"MIN_CLIENT_VERSION\s*=\s*SERVER_VERSION", remote_text):
+        min_client = _match(r'SERVER_VERSION\s*=\s*"([^"]+)"', remote_text)
     if min_client is None:
         problems.append("remote_auth.MIN_CLIENT_VERSION: version not found")
-    elif _parse_semver(min_client) is None:
-        problems.append(f"remote_auth.MIN_CLIENT_VERSION: invalid semver {min_client!r}")
-    elif _parse_semver(canonical) is None:
-        problems.append(f"canonical product version: invalid semver {canonical!r}")
-    elif not _semver_lte(min_client, canonical):
-        problems.append(f"remote_auth.MIN_CLIENT_VERSION: {min_client!r} > canonical {canonical!r} (must never exceed the server version)")
+    elif min_client != canonical:
+        problems.append(f"remote_auth.MIN_CLIENT_VERSION: {min_client!r} != canonical {canonical!r}")
     api_version = _match(r'API_VERSION\s*=\s*"([^"]+)"', remote_text)
     if api_version != API_VERSION:
         problems.append(f"remote_auth.API_VERSION: {api_version!r} != {API_VERSION!r}")

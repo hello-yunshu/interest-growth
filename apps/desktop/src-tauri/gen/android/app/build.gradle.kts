@@ -37,7 +37,6 @@ val releaseKeyAlias = (keystoreProps.getProperty("keyAlias") ?: System.getenv("P
     ?.takeIf { it.isNotBlank() }
 val releaseKeyPassword = (keystoreProps.getProperty("keyPassword") ?: System.getenv("PG_ANDROID_KEY_PASSWORD"))
     ?.takeIf { it.isNotBlank() }
-val releaseTestBuild = System.getenv("PG_RELEASE_TEST") == "1"
 
 android {
     compileSdk = 36
@@ -73,12 +72,10 @@ android {
             }
         }
         getByName("release") {
-            // The CI-only release-test profile is signed and non-debuggable,
-            // but intentionally unminified. This isolates the black-box
-            // upgrade contract from R8 shrink/optimization behavior; the
-            // formal arm64 release remains minified and keeps its explicit
-            // plugin/InvokeArg rules below.
-            isMinifyEnabled = !releaseTestBuild
+            // The signed arm64 release remains minified and keeps its explicit
+            // plugin/InvokeArg rules below. The emulator uses the separate
+            // debug profile and is never published.
+            isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

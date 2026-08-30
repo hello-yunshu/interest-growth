@@ -27,7 +27,6 @@ for required in (
     "PROJECT_STATUS.md",
     "RELEASE_NOTES_v0.6.0-native-execution-product.md",
     "apps/api/pg_api/native_execution.py",
-    "migrations/0012_native_only_product.sql",
     "apps/api/pg_api/routes/tutor.py",
     "apps/api/pg_api/routes/research.py",
     "apps/api/pg_api/routes/knowledge.py",
@@ -49,8 +48,7 @@ for removed in (
 
 
 # Current runtime and product-facing files must not expose or call the retired
-# runtime. db.py is excluded because migration 12 must identify historical rows
-# in existing user databases so it can remove them safely.
+# runtime.
 scan_roots = (
     "apps/api/pg_api",
     "apps/web/app",
@@ -134,4 +132,4 @@ print("- Product execution is native-only")
 print("- Host remains the canonical data owner")
 print("- Product plugins are transport-independent")
 print("- Renderer cannot call external model services directly")
-print("- Migration 12 retires historical runtime configuration")
+print("- Pre-release data policy is fresh current schema only; historical migrations are removed")

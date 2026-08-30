@@ -53,8 +53,6 @@ def main():
     # contracts must agree with the canonical product version.
     import verify_version_consistency
     if verify_version_consistency.main():return 1
-    migrate=(ROOT/"scripts/migrate_host_db_v11.py").read_text("utf-8")
-    if ".executescript(" in migrate:return fail("production migration runner uses executescript")
     proc=subprocess.run([sys.executable,"-m","pytest","-q","-p","no:cacheprovider"],cwd=ROOT,text=True)
     if proc.returncode:return proc.returncode
     print("merged Interest Growth Host verification: PASS")

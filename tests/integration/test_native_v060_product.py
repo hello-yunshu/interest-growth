@@ -13,7 +13,7 @@ def test_native_migration_health_and_provider_catalog(client):
         "native_tutor_checkpoint", "native_run_event", "native_aux_memory",
     } <= tables
     with get_session_factory()() as db:
-        assert set(db.scalars(select(SchemaMigration.version)).all()) == set(range(1, 16))
+        assert set(db.scalars(select(SchemaMigration.version)).all()) == {15}
 
     health = client.get("/api/native-execution/health")
     assert health.status_code == 200, health.text

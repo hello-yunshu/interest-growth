@@ -119,12 +119,6 @@ class ResearchRequest(BaseModel):
     persist_sources: bool = True
     knowledge_base_ids: list[str] = Field(default_factory=list)
     use_domain_skills: bool = True
-    # v0.4.1 compatibility alias. Removed from current UI; honored for one migration window.
-    use_psychology_skills: bool | None = None
-
-    @property
-    def domain_skills_enabled(self) -> bool:
-        return self.use_domain_skills if self.use_psychology_skills is None else bool(self.use_psychology_skills)
 
 
 class GroundingRefInput(BaseModel):

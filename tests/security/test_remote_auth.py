@@ -70,7 +70,7 @@ def test_capabilities_contract_is_stable_and_public(remote_client):
     body = response.json()
     assert body["product"] == "interest-growth"
     assert body["api_version"] == "1"
-    assert body["min_client_version"] == "1.0.0"
+    assert body["min_client_version"] == "1.0.20"
     assert body["server_instance_id"]
     assert body["server_display_name"] == "Interest Growth Server"
     assert body["online_first"] is True
@@ -194,46 +194,6 @@ def test_concurrent_bootstrap_creates_exactly_one_owner(remote_client):
     with get_session_factory()() as db:
         count = db.execute(text("SELECT COUNT(*) FROM auth_owners")).scalar()
     assert count == 1
-
-
-def test_schema_14_upgrade_adds_single_owner_invariant(client):
-    """A v0.7 database at schema 13 upgrades to 14 with the singleton enforced."""
-    from sqlalchemy import inspect
-
-    from pg_api.db import (
-        OwnerModel,
-        SchemaMigration,
-        get_engine,
-        get_session_factory,
-        init_db,
-    )
-
-    with get_session_factory()() as db:
-        db.execute(delete(SchemaMigration).where(SchemaMigration.version >= 14))
-        db.commit()
-        before = db.scalar(
-            select(func.count()).select_from(OwnerModel)
-        )
-    init_db()
-    with get_session_factory()() as db:
-        assert 14 in set(db.scalars(select(SchemaMigration.version)).all())
-        assert db.scalar(select(func.count()).select_from(OwnerModel)) == before
-        owners = db.execute(text("SELECT id, singleton FROM auth_owners")).all()
-    indexes = {
-        index["name"]: index["unique"]
-        for index in inspect(get_engine()).get_indexes("auth_owners")
-    }
-    assert indexes.get("ux_auth_owners_singleton")
-    with get_session_factory()() as db:
-        db.add(OwnerModel(password_hash="legitimate-owner-hash"))
-        db.commit()
-        db.add(OwnerModel(password_hash="second-owner-hash"))
-        try:
-            db.commit()
-            assert False, "unique index must reject a second owner"
-        except IntegrityError:
-            db.rollback()
-
 
 def test_login_rate_limited(remote_client, monkeypatch):
     monkeypatch.setenv("PG_AUTH_RATE_LIMIT_ATTEMPTS", "2")
@@ -497,41 +457,6 @@ def test_dashboards_list_plugins_require_session_even_with_desktop_token_absent(
     tokens = _login(remote_client).json()["tokens"]
     assert remote_client.get("/api/plugins").status_code == 401
     assert remote_client.get("/api/plugins", headers=_auth_header(tokens["access_token"])).status_code == 200
-
-
-def test_schema_13_upgrade_is_additive_and_preserves_product_data(client):
-    """A v0.6 database at schema 12 upgrades to 13 without touching product rows."""
-    from sqlalchemy import func, inspect, select
-
-    from pg_api.db import (
-        ArtifactModel,
-        OwnerModel,
-        SchemaMigration,
-        get_engine,
-        get_session_factory,
-    )
-
-    with get_session_factory()() as db:
-        # Simulate a pre-v0.7 database by dropping the auth tables and
-        # rewinding the ledger to 12; product data stays present.
-        for table in ("auth_owners", "auth_devices", "auth_access_tokens", "auth_refresh_tokens", "security_events"):
-            if table in inspect(get_engine()).get_table_names():
-                db.execute(text(f"DROP TABLE {table}"))
-        db.execute(delete(SchemaMigration).where(SchemaMigration.version == 13))
-        db.commit()
-        before_artifacts = db.scalar(select(func.count()).select_from(ArtifactModel))
-
-    from pg_api.db import init_db
-
-    init_db()
-    tables = set(inspect(get_engine()).get_table_names())
-    assert {
-        "auth_owners", "auth_devices", "auth_access_tokens", "auth_refresh_tokens", "security_events",
-    } <= tables
-    with get_session_factory()() as db:
-        assert 13 in set(db.scalars(select(SchemaMigration.version)).all())
-        assert db.scalar(select(func.count()).select_from(ArtifactModel)) == before_artifacts
-        assert db.scalar(select(func.count()).select_from(OwnerModel)) == 0
 
 
 # ------------------------------------------------- Gate C/D §4.2 fail-closed config
