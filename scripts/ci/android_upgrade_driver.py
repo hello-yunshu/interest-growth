@@ -66,9 +66,15 @@ def js_set_textarea(selector, value):
     return (
         f"(() => {{ const el = document.querySelector({selector});"
         f" if (!el || el.tagName !== 'TEXTAREA') return {{ok:false,step:'find',selector:{selector}}};"
+        f" const previous = el.value;"
         f" const setter = Object.getOwnPropertyDescriptor("
         f"window.HTMLTextAreaElement.prototype, 'value').set;"
         f" setter.call(el, {value});"
+        # React's value tracker can already contain the final value after
+        # trusted CDP character events, even though its controlled state did
+        # not receive onChange. Reset the tracker before dispatching input so
+        # the historical WebView cannot treat this sync as a no-op.
+        f" if (el._valueTracker) el._valueTracker.setValue(previous === el.value ? '' : previous);"
         f" el.dispatchEvent(new Event('input', {{bubbles:true}}));"
         f" el.dispatchEvent(new Event('change', {{bubbles:true}}));"
         f" return {{ok:true,value:el.value.length}}; }})()"
