@@ -39,6 +39,11 @@
 #   9. Cargo.toml/remote.rs -> declare and implement only the CI TLS trust-root
 #                              feature; the historical native runtime remains
 #                              otherwise unchanged.
+#  10. apps/web/next.config.js -> use a flat `.html` export for the discarded
+#                                historical release-test Web bundle. Tauri's
+#                                Android asset protocol cannot reliably resolve
+#                                the old directory-style `route/index.html`
+#                                entrypoint.
 #
 # Usage:
 #   scripts/ci/patch_release_test_source.sh <src_root>
@@ -79,12 +84,33 @@ rem = os.environ["IG_REMOTE"]
 cargo = os.environ["IG_CARGO"]
 gradle = os.environ["IG_GRADLE"]
 proguard = os.environ["IG_PROGUARD"]
+web_config = os.path.join(src, "apps/web/next.config.js")
 
 def die(m):
     print("FAIL: " + m, file=sys.stderr)
     sys.exit(1)
 
 changes = []
+
+# ---------- 0b. historical Web asset entrypoint compatibility ----------
+# The formal baseline tag predates the Tauri Android asset-loader contract used
+# by the black-box driver and exports `/curiosity/index.html` with
+# `trailingSlash: true`. Keep the old React/Web source and native runtime, but
+# build the throw-away release-test Web bundle with the flat `/curiosity.html`
+# asset that the Android WebView can open deterministically.
+if not os.path.exists(web_config):
+    die("apps/web/next.config.js not found")
+with open(web_config) as fh:
+    web_config_txt = fh.read()
+if "trailingSlash: true" in web_config_txt:
+    web_config_txt = web_config_txt.replace("trailingSlash: true", "trailingSlash: false", 1)
+    with open(web_config, "w") as fh:
+        fh.write(web_config_txt)
+    changes.append("apps/web/next.config.js: historical release-test uses flat Tauri entrypoints")
+elif "trailingSlash: false" in web_config_txt:
+    changes.append("apps/web/next.config.js: flat Tauri entrypoints already configured (no-op)")
+else:
+    die("apps/web/next.config.js has no trailingSlash setting; refusing a blind patch")
 
 old_lib_path = os.path.join(src, "apps/desktop/src-tauri/src/lib.rs")
 with open(old_lib_path) as fh:

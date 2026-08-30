@@ -98,7 +98,7 @@ def test_curiosity_navigation_uses_real_anchor_and_waits_for_prompt_surface():
     assert "button.commandItem" in source
     assert "el.click(); return {ok:true}" in source
     assert 'cdp.call("Page.navigate"' in source
-    assert "http://tauri.localhost/curiosity/index.html" in source
+    assert "http://tauri.localhost/curiosity.html" in source
     assert "could not dispatch deterministic static navigation" in source
     assert "static_export_entrypoint" in source
     assert "quick_navigation_unverified" in source
