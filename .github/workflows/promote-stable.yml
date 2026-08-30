@@ -66,14 +66,17 @@ jobs:
           # `--paginate` can return multiple JSON documents. `--slurp` wraps
           # every page in one JSON array so the parser never feeds a
           # concatenated stream to json.loads().
-          RUNS="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/workflows/stable-candidate.yml/runs?event=workflow_dispatch&per_page=100")"
-          CANDIDATE_SHA="${CANDIDATE_SHA}" python3 - <<'PY' "${RUNS}"
+          RUNS_FILE="$(mktemp)"
+          trap 'rm -f "${RUNS_FILE}"' EXIT
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/workflows/stable-candidate.yml/runs?event=workflow_dispatch&per_page=100" > "${RUNS_FILE}"
+          CANDIDATE_SHA="${CANDIDATE_SHA}" python3 - "${RUNS_FILE}" <<'PY'
           import json
           import os
           import sys
 
           target = os.environ["CANDIDATE_SHA"]
-          pages = json.loads(sys.argv[1])
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              pages = json.load(handle)
           if isinstance(pages, dict):
               pages = [pages]
           payload = [
