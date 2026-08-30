@@ -27,6 +27,11 @@ const NAV = [
 
 const GROUPS = [['focus', '关注'], ['learn', '学习'], ['create', '创建'], ['reflect', '回顾']];
 
+function normalizePath(path) {
+  const value = String(path || '/');
+  return value.length > 1 ? value.replace(/\/+$/, '') : '/';
+}
+
 function CommandPalette({ open, onClose, runtimeCopy }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -111,6 +116,7 @@ function WindowsControls({ visible }) {
 
 export default function DesktopShell({ children }) {
   const pathname = usePathname();
+  const currentPath = normalizePath(pathname);
   const [palette, setPalette] = useState(false);
   const [runtime, setRuntime] = useState(null);
   const [areas, setAreas] = useState([]);
@@ -147,7 +153,7 @@ export default function DesktopShell({ children }) {
   const date = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).replaceAll('/', '-');
   return <div className="desktopApp">
     <header className="desktopTopbar" data-tauri-drag-region>
-      <button className="mobileMenuButton" onClick={() => setMobileNav(value => !value)} aria-label="打开导航"><Icon name="rows"/></button>
+      <button className="mobileMenuButton" onClick={() => setMobileNav(value => !value)} aria-label={mobileNav ? '关闭导航' : '打开导航'} aria-expanded={mobileNav} aria-controls="primary-navigation"><Icon name={mobileNav ? 'close' : 'rows'}/></button>
       <AreaSwitcher areas={areas} current={currentArea} onSwitch={switchArea} onCreated={areaCreated}/>
       <button className="globalSearch" onClick={() => setPalette(true)}><Icon name="search"/><span>搜索问题、笔记、资料</span><kbd>⌘K</kbd></button>
       <div className="topbarEnd"><time>{date}</time><button className="themeButton" onClick={() => setTheme(value => value === 'light' ? 'dark' : 'light')} aria-label="切换明暗主题"><Icon name={theme === 'light' ? 'sun' : 'moon'}/></button><WindowsControls visible={runtime?.desktop && runtime?.platform === 'windows'}/></div>
@@ -155,10 +161,10 @@ export default function DesktopShell({ children }) {
     <div className="desktopBody">
       <aside className={`desktopSidebar ${mobileNav ? 'is-open' : ''}`}>
         <Link href="/" className="desktopBrand" onClick={() => setMobileNav(false)}><span className="brandMark">IG</span><span><strong>Interest Growth</strong><small><i className={`statusDot ${runtimeCopy.dataLocation === 'self-hosted-server' ? 'remote' : 'ok'}`}/> {runtimeCopy.dataStatusLabel}</small></span></Link>
-        <nav className="sideNav">{GROUPS.map(([group, label]) => <div className="sideNavGroup" key={group}><div className="sideNavLabel">{label}</div>{NAV.filter(item => item.group === group).map(item => <Link key={item.href} href={item.href} onClick={() => setMobileNav(false)} className={`sideNavItem ${pathname === item.href ? 'active' : ''}`}><Icon name={item.icon}/><span>{item.label}</span></Link>)}</div>)}</nav>
-        <div className="sidebarBottom"><button className="commandShortcut" onClick={() => setPalette(true)}><Icon name="link"/><span>快速跳转</span><kbd>⌘K</kbd></button><Link href="/system" className={`sideNavItem ${pathname === '/system' ? 'active' : ''}`}><Icon name="settings"/><span>设置</span></Link></div>
+        <nav id="primary-navigation" className="sideNav" aria-label="主导航">{GROUPS.map(([group, label]) => <div className="sideNavGroup" key={group}><div className="sideNavLabel">{label}</div>{NAV.filter(item => item.group === group).map(item => { const active = currentPath === normalizePath(item.href); return <Link key={item.href} href={item.href} onClick={() => setMobileNav(false)} className={`sideNavItem ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined}><Icon name={item.icon}/><span>{item.label}</span></Link>; })}</div>)}</nav>
+        <div className="sidebarBottom"><button className="commandShortcut" onClick={() => setPalette(true)}><Icon name="search"/><span>快速跳转</span><kbd>⌘K</kbd></button>{(() => { const active = currentPath === '/system'; return <Link href="/system" className={`sideNavItem ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined}><Icon name="settings"/><span>设置</span></Link>; })()}</div>
       </aside>
-      {mobileNav && <button className="mobileNavBackdrop" aria-label="关闭导航" onClick={() => setMobileNav(false)}/>}
+      {mobileNav && <button className="mobileNavBackdrop" aria-label="关闭导航菜单" onClick={() => setMobileNav(false)}/>}
       <main className="workspace"><div className="workspaceInner">{areaReady ? children : <div className="workspaceBoot"><span className="brandMark">IG</span><strong>正在打开你的兴趣空间</strong><small>{runtimeCopy.bootCopy}</small></div>}</div></main>
     </div>
     <CommandPalette open={palette} onClose={() => setPalette(false)} runtimeCopy={runtimeCopy}/>

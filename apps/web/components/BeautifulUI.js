@@ -139,15 +139,17 @@ export function ChatPanel({ messages = [], empty = '开始一段有上下文的�
   </section>;
 }
 
-export function PromptBar({ value, onChange, onSubmit, placeholder = '输入你的问题…', disabled = false, model = '', context = [], commands = false, onMention = null, onCommand = null, hint = '', children }) {
+export function PromptBar({ value, onChange, onSubmit, placeholder = '输入你的问题…', ariaLabel = '', disabled = false, model = '', context = [], commands = false, onMention = null, onCommand = null, hint = '', leadingIcon = '', shortcutHint = false, className = '', sendLabel = '发送', children }) {
   function keyDown(event) {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); onSubmit?.(); }
   }
   const canSend = !disabled && !!String(value || '').trim();
-  return <div className={`buiPrompt ${disabled ? 'is-disabled' : ''}`}>
+  return <div className={`buiPrompt ${className} ${disabled ? 'is-disabled' : ''}`.trim()}>
     {!!context.length && <div className="buiPromptContext">{context.map((item, i) => <span key={`${item}-${i}`}>@ {item}</span>)}</div>}
-    <textarea rows={2} value={value} onChange={event => onChange?.(event.target.value)} onKeyDown={keyDown} placeholder={placeholder} disabled={disabled}/>
-    <div className="buiPromptBottom"><div className="buiPromptTools">{onMention && <button type="button" className="buiMiniAction" onClick={onMention} disabled={disabled} aria-label="添加来源上下文">@</button>}{onCommand && <button type="button" className="buiMiniAction" onClick={onCommand} disabled={disabled} aria-label="打开快捷指令">/</button>}{model && <span className="buiModelPill" title="当前模式">{model}<Icon name="chevron" size={10}/></span>}{commands && !onMention && !onCommand && !model && <span className="buiPromptHint">{hint || '会结合当前上下文'}</span>}{!commands && !onMention && !onCommand && !model && hint && <span className="buiPromptHint">{hint}</span>}{children}</div><button type="button" className="buiSend" onClick={onSubmit} disabled={!canSend} aria-label="发送"><Icon name="arrowUp" size={16}/></button></div>
+    <div className={`buiPromptEditor ${leadingIcon ? 'has-leading-icon' : ''}`}>
+      {leadingIcon && <Icon name={leadingIcon} size={21}/>}<textarea rows={2} value={value} onChange={event => onChange?.(event.target.value)} onKeyDown={keyDown} placeholder={placeholder} aria-label={ariaLabel || placeholder} disabled={disabled}/>
+    </div>
+    <div className="buiPromptBottom"><div className="buiPromptTools">{shortcutHint && <div className="buiPromptShortcut"><kbd>↵</kbd><span>Enter 提交</span><span>Shift + Enter 换行</span></div>}{onMention && <button type="button" className="buiMiniAction" onClick={onMention} disabled={disabled} aria-label="添加来源上下文">@</button>}{onCommand && <button type="button" className="buiMiniAction" onClick={onCommand} disabled={disabled} aria-label="打开快捷指令">/</button>}{model && <span className="buiModelPill" title="当前模式">{model}<Icon name="chevron" size={10}/></span>}{commands && !onMention && !onCommand && !model && !shortcutHint && <span className="buiPromptHint">{hint || '会结合当前上下文'}</span>}{!commands && !onMention && !onCommand && !model && !shortcutHint && hint && <span className="buiPromptHint">{hint}</span>}{children}</div><button type="button" className="buiSend" onClick={onSubmit} disabled={!canSend} aria-label={sendLabel}><Icon name="arrowUp" size={18}/></button></div>
   </div>;
 }
 
