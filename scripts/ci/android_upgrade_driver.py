@@ -131,7 +131,8 @@ def click_prompt_send(cdp):
     allowing the textarea's native key handling to navigate the asset route.
     """
     result = _coerce(cdp.evaluate(
-        "(() => { const el = document.querySelector('button[aria-label=\"发送\"]');"
+        "(() => { const el = document.querySelector('.buiPrompt button.buiSend, "
+        " .buiPrompt button[aria-label=\"发送\"], button[aria-label=\"发送\"]');"
         " if (!el || el.disabled) return {ok:false};"
         " const r = el.getBoundingClientRect();"
         " return {ok:r.width > 0 && r.height > 0, x:r.left + r.width / 2,"
@@ -155,7 +156,8 @@ def click_prompt_send(cdp):
 def _prompt_send_ready(cdp):
     """Return whether the real PromptBar send control has committed state."""
     result = _coerce(cdp.evaluate(
-        "(() => { const el = document.querySelector('button[aria-label=\"发送\"]');"
+        "(() => { const el = document.querySelector('.buiPrompt button.buiSend, "
+        " .buiPrompt button[aria-label=\"发送\"], button[aria-label=\"发送\"]');"
         "if (!el || el.disabled) return {ok:false};"
         "const r = el.getBoundingClientRect();"
         "return {ok:r.width > 0 && r.height > 0}; })()"
@@ -168,11 +170,13 @@ def _prompt_send_diagnostics(cdp):
     result = _coerce(cdp.evaluate(
         "(() => { const ta = document.querySelector('textarea'); "
         "const tracker = ta && ta._valueTracker; "
-        "const buttons = Array.from(document.querySelectorAll('button[aria-label=\"发送\"]')); "
+        "const buttons = Array.from(document.querySelectorAll('.buiPrompt button, button[aria-label=\"发送\"]')); "
         "return {path:location.pathname, textarea:ta ? {valueLength:ta.value.length, "
         "trackerValueLength:tracker && typeof tracker.getValue === 'function' ? tracker.getValue().length : null} : null, "
         "buttons:buttons.map(el => { const r=el.getBoundingClientRect(); return {disabled:el.disabled, "
-        "width:r.width,height:r.height}; })}; })()"), {} )
+        "width:r.width,height:r.height,aria:el.getAttribute('aria-label'),className:el.className}; }), "
+        "allButtons:Array.from(document.querySelectorAll('button')).slice(0,20).map(el => ({text:(el.innerText||'').slice(0,40), "
+        "aria:el.getAttribute('aria-label'),className:el.className,disabled:el.disabled}))}; })()"), {} )
     return result
 
 
