@@ -67,6 +67,13 @@ def is_plugin_available_in_current_area(plugin_id: str) -> bool:
 
 
 def require_plugin(plugin_id: str) -> None:
+    state = _get_state(plugin_id)
+    if state is None or state.lifecycle_state == "uninstalled":
+        raise HTTPException(status_code=503, detail={
+            "code": "plugin_not_installed",
+            "plugin": plugin_id,
+            "recoverable": True,
+        })
     if not is_plugin_enabled(plugin_id):
         raise HTTPException(status_code=503, detail={"code": "plugin_disabled", "plugin": plugin_id})
     if plugin_id.startswith("capability."):
@@ -77,9 +84,11 @@ def require_plugin(plugin_id: str) -> None:
             raise HTTPException(status_code=400, detail={"code": "unknown_interest_area", "detail": str(exc)}) from exc
         if not area_capability_enabled(plugin_id, area.id):
             raise HTTPException(status_code=503, detail={
-                "code": "capability_disabled_for_area",
+                "code": "area_capability_disabled",
+                "legacy_code": "capability_disabled_for_area",
                 "plugin": plugin_id,
                 "area_id": area.id,
+                "recoverable": True,
             })
 
 
@@ -121,3 +130,23 @@ def require_plugin_access(
         require_plugin_resource(plugin_id, "write", resource)
     for capability in risks:
         require_plugin_risk(plugin_id, capability)
+
+
+def require_capability_operation(
+    plugin_id: str,
+    *,
+    feature: str | None = None,
+    read: tuple[str, ...] | list[str] = (),
+    write: tuple[str, ...] | list[str] = (),
+    risks: tuple[str, ...] | list[str] = (),
+) -> None:
+    """Single fail-closed boundary for an executable capability operation.
+
+    Feature switches are checked before plugin permissions so a disabled feature
+    cannot be mistaken for provider degradation. This remains a trusted first-party
+    boundary; it is not a sandbox for arbitrary downloaded code.
+    """
+    if feature:
+        from .features import require_feature
+        require_feature(feature)
+    require_plugin_access(plugin_id, read=read, write=write, risks=risks)

@@ -6,6 +6,15 @@ Interest Growth 是一个 **local-first、multi-interest** 的 Windows/macOS 桌
 
 所有产品能力都由 Interest Growth 的 **Native Core** 实现。DeepSeek 只作为可选模型传输层，为已获授权的原生能力提供模型推理；它不持有产品身份、流程或数据。数据库、Source/Artifact、Evidence/Claim、Practice、Note、Growth Memory、Writing、Living Book 与人工审核状态均由本地 Host 持有。
 
+## 当前 1X 产品契约（全量审计基线）
+
+- 当前实现只支持 `CURRENT_SCHEMA_VERSION` 的全新 Host 数据库；旧数据库不会自动迁移，也不承诺兼容。schema 不兼容时必须 fail-closed。备份与恢复只接受同一当前 schema，恢复前保留可回退的现有数据。
+- General 与 Psychology 都由后端返回各自的 Mastery Profile；前端不得硬编码另一领域的状态、标签或证据规则。
+- 每次可执行能力都同时经过 Feature、Plugin 安装/启用、Area capability、PermissionBroker、Domain scope 与 provider 边界。只有 provider 不可用或 provider 执行失败可以进入显式降级；gate 失败不会伪装成 provider 降级。
+- Tutor 恢复同一个已持久化 turn；Research 必须执行用户确认的同一份计划快照；Visualize、Concept Graph 与 Memory Graph 使用结构化可读视图；写作、Living Book、内容与来源仍保留人工审核边界。
+
+本节描述当前产品契约。下方带有旧版本号的章节是历史实现记录，不能单独作为当前发布或兼容性证明；当前 commit、Actions 与发布边界以 `docs/audits/INTEREST_GROWTH_1X_FULL_IMPLEMENTATION_AUDIT.md` 及对应 exact-SHA 证据为准。
+
 ## v0.6 原生执行产品
 
 v0.6 把原生执行核心接入真实 Host，而不是把两个源码包并排放置：
@@ -153,7 +162,7 @@ Normative planning documents:
 - Native Core 只持有 checkpoint、事件和辅助执行状态，Host 数据库始终是唯一产品事实源；
 - 模型输出不能自动成为 Evidence、Mastery、已接受写作或 Growth Memory。
 
-## v0.4.1 → v0.5 数据迁移
+## 历史 schema ledger（非当前兼容承诺）
 
 Schema ledger：
 
@@ -164,7 +173,7 @@ Schema ledger：
 - 11：创建原生 Tutor checkpoint、公开事件序列与辅助执行 memory 表；这些是 execution-only state，不取代 Host 产品模型；
 - 12：移除已退休的外部运行时配置，并将旧 Knowledge Base 标记为需要原生重建。
 
-v0.6 不允许把“写了 migration ledger”当成 migration 已完成：8–12 都有实际执行实现。
+这些条目记录旧版本的开发历史，不构成当前旧数据库迁移承诺。当前初始化只接受新建的 current schema；已有不兼容数据库会直接拒绝启动，必须由用户先完成受支持的同 schema 备份/恢复流程。
 
 ## Legacy technical identifiers
 

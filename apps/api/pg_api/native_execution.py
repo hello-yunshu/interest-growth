@@ -45,7 +45,7 @@ from .db import (
 )
 from .domains import current_mastery_states, get_domain_context
 from .knowledge import source_file_path
-from .plugins import get_plugin_runtime, require_plugin_access
+from .plugins import get_plugin_runtime, require_capability_operation, require_plugin_access
 
 
 HOST_TO_NATIVE_CAPABILITIES: dict[str, tuple[str, ...]] = {
@@ -70,6 +70,7 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "knowledge.external": {
         "plugin": "capability.knowledge",
+        "feature": "FEATURE_KNOWLEDGE_RAG",
         "read": ("knowledge_base", "knowledge_mapping", "source"),
         "write": ("knowledge_mapping", "knowledge_ingestion_run", "capability_run", "retrieval_candidate"),
         "risks": ("llm", "network"),
@@ -78,6 +79,7 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "research.run": {
         "plugin": "capability.research-evidence",
+        "feature": "FEATURE_DEEP_RESEARCH",
         "read": ("knowledge_base", "source", "capability_run"),
         "write": ("capability_run",),
         "risks": ("llm", "network"),
@@ -86,11 +88,13 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "tutor.read": {
         "plugin": "capability.tutor-runtime",
+        "feature": "FEATURE_TUTOR_RUNTIME",
         "read": ("tutor_session", "tutor_turn"),
         "scope_read": ("tutor",),
     },
     "tutor.write": {
         "plugin": "capability.tutor-runtime",
+        "feature": "FEATURE_TUTOR_RUNTIME",
         "read": (
             "tutor_session", "tutor_turn", "knowledge_base", "knowledge_mapping",
             "source", "auxiliary_agent_memory",
@@ -103,6 +107,7 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "learning.run": {
         "plugin": "capability.mastery",
+        "feature": "FEATURE_FLEXIBLE_MASTERY",
         "read": ("mastery", "concept", "topic"),
         "write": ("capability_run",),
         "risks": ("llm",),
@@ -110,11 +115,13 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "notebook.run": {
         "plugin": "capability.learning-notebook",
+        "feature": "FEATURE_LEARNING_NOTEBOOK",
         "read": ("learning_note",),
         "write": ("learning_note",),
     },
     "practice.run": {
         "plugin": "capability.practice",
+        "feature": "FEATURE_PRACTICE",
         "read": ("practice_item", "concept", "topic"),
         "write": ("practice_item",),
         "risks": ("llm",),
@@ -122,6 +129,7 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "cowriter.run": {
         "plugin": "capability.co-writer",
+        "feature": "FEATURE_CO_WRITER",
         "read": ("writing_document", "writing_revision"),
         "write": ("writing_revision",),
         "risks": ("llm",),
@@ -129,6 +137,7 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "book.run": {
         "plugin": "capability.living-book",
+        "feature": "FEATURE_LIVING_BOOK",
         "read": ("living_book", "living_book_chapter"),
         "write": ("living_book", "living_book_chapter"),
         "risks": ("llm",),
@@ -136,6 +145,7 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "visualize.run": {
         "plugin": "capability.concept-graph",
+        "feature": "FEATURE_VISUALIZE",
         "read": ("concept",),
         "write": ("artifact", "capability_run"),
     },
@@ -148,6 +158,7 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
     },
     "memory.read": {
         "plugin": "capability.memory-graph",
+        "feature": "FEATURE_MEMORY_GRAPH",
         "read": ("auxiliary_agent_memory",),
         "scope_read": ("agent_memory",),
     },
@@ -284,8 +295,9 @@ def resolve_native_context(request: Request, operation: str) -> NativeRunContext
         policy = OPERATION_POLICIES[operation]
     except KeyError as exc:
         raise ValueError(f"unknown native operation: {operation}") from exc
-    require_plugin_access(
+    require_capability_operation(
         policy["plugin"],
+        feature=policy.get("feature"),
         read=policy.get("read", ()),
         write=policy.get("write", ()),
         risks=policy.get("risks", ()),

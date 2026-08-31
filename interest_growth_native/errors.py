@@ -13,6 +13,10 @@ class ToolNotGranted(PermissionDenied):
 class ProviderUnavailable(NativeExecutionError):
     pass
 
+class ProviderExecutionError(ProviderUnavailable):
+    """A configured provider failed while executing a request."""
+    pass
+
 class ProviderAuthError(ProviderUnavailable):
     pass
 

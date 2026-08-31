@@ -63,6 +63,7 @@ def edit_document(document_id: str, body: DocumentUpdate):
 
 @router.post('/writing/documents/{document_id}/revisions')
 async def add_revision(document_id: str, body: RevisionCreate, request: Request):
+    _require(read=('writing_document','writing_revision'), write=('writing_revision',), risks=('llm',))
     try:
         context = resolve_native_context(request, 'cowriter.run')
         return model_dict(await propose_revision(document_id, native_context=context, **body.model_dump()))

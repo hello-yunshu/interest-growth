@@ -49,6 +49,17 @@ def build_visual_manifest(raw: dict[str, Any], *, concept_id: str, concept_name:
         'execution_turn_id': str(raw.get('turn_id') or ''),
         'knowledge_bases': list(knowledge_bases),
         'assets': assets,
+        'title': str(raw.get('title') or concept_name),
+        'kind': str(raw.get('kind') or 'concept_map'),
+        'nodes': [
+            {"id": str(node.get("id") or ""), "label": str(node.get("label") or ""), "type": str(node.get("type") or "node")}
+            for node in (raw.get("nodes") or []) if isinstance(node, dict) and node.get("id")
+        ],
+        'edges': [
+            {"from": str(edge.get("from") or ""), "to": str(edge.get("to") or ""), "type": str(edge.get("type") or "related")}
+            for edge in (raw.get("edges") or []) if isinstance(edge, dict) and edge.get("from") and edge.get("to")
+        ],
+        'annotations': [str(x) for x in (raw.get("annotations") or []) if str(x).strip()],
         'preview_kind': assets[0]['kind'] if assets else 'structured_result',
         'review_required': True,
         'security_note': 'Asset references are preserved for review; absolute paths are never dereferenced by the product.',

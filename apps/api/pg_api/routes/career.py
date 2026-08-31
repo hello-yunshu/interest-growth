@@ -73,9 +73,26 @@ def career_summary():
         bucket["experiments"] += 1
         bucket["interest_change"] += row.interest_after - row.interest_before
     context = get_domain_context()
+    ranked = sorted(directions.items(), key=lambda item: (item[1]["interest_change"], item[1]["experiments"]), reverse=True)
+    top_change = ranked[0][1]["interest_change"] if ranked else None
+    ties = [name for name, value in ranked if value["interest_change"] == top_change] if ranked else []
+    direction = ties[0] if len(ties) == 1 else None
+    confidence = "low" if len(completed) < 3 or len(ties) != 1 else ("medium" if len(completed) < 6 else "high")
+    basis = (
+        f"仅基于 {len(completed)} 个已完成实验的兴趣前后变化；未完成实验不会进入信号。"
+        if completed else "还没有已完成实验，因此暂不形成方向信号。"
+    )
     return {
         "area": {"id": context.area_id, "name": context.area_name},
         "principle": "方向判断来自当前兴趣领域中反复、可逆的真实实验，而不是一次想象中的匹配。",
         "completed_experiments": len(completed),
         "directions": directions,
+        "most_promising_direction": direction,
+        "signal": {
+            "direction": direction,
+            "confidence": confidence,
+            "basis": basis,
+            "sample_size": len(completed),
+            "ties": ties,
+        },
     }

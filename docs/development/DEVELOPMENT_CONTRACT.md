@@ -64,10 +64,15 @@ editor, coding assistant or agent.
 
 ## Migration and security
 
-- Migrations are real executed migrations, not ledger-only markers. Existing
-  data must remain recoverable, Area-scoped and compatible with the retained
-  technical identifiers `app.psychologygrowth.desktop`,
-  `psychology_growth.db` and `psychology-growth-core`.
+- The current pre-release contract supports only a fresh current schema. There
+  is no automatic migration or compatibility promise for older databases. An
+  incompatible schema must fail closed before product routes start. Supported
+  backup/restore accepts only the same current schema and retains the prior
+  live state until post-restore verification succeeds.
+- Historical migration scripts and ledgers remain auditable records, not a
+  promise that an old database can be upgraded in place. Retained desktop
+  technical identifiers (`app.psychologygrowth.desktop`,
+  `psychology_growth.db`, `psychology-growth-core`) are packaging anchors only.
 - PermissionBroker declarations are enforced at route boundaries. They are not
   a hostile third-party plugin sandbox.
 - Remote authentication, device revocation, secure backup/restore, request

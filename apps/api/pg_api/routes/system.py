@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from sqlalchemy import select
 
 from pg_shared import get_settings
 
 from ..db import FeatureFlagModel, get_server_identity, get_session_factory
 from ..engines import integration_status
-from ..features import feature_enabled
-from ..plugins import get_plugin_runtime, require_plugin_resource
+from ..features import DEFAULT_FLAGS, feature_enabled
+from ..domains import area_capability_enabled, get_domain_context
+from ..plugins import get_plugin_runtime
 from ..memory_graph import native_auxiliary_graph, local_growth_graph
 from ..schemas import FeatureFlagUpdate
 from ..native_execution import resolve_native_context
@@ -42,6 +43,28 @@ def system_capabilities():
         "online_first": True,
         "offline_sync": False,
         "public_health": True,
+    }
+
+
+@router.get("/system/capability-state")
+def system_capability_state():
+    """Return the same fail-closed inputs used by executable capability gates."""
+    context = get_domain_context()
+    runtime = get_plugin_runtime()
+    plugin_rows = runtime.list_status()
+    return {
+        "area": {"id": context.area_id, "slug": context.area_slug, "name": context.area_name},
+        "features": {name: feature_enabled(name) for name in DEFAULT_FLAGS},
+        "plugins": {
+            row["manifest"]["id"]: {
+                "installed": row["installed"],
+                "enabled": row["enabled"],
+                "lifecycle_state": row["lifecycle_state"],
+                "area_enabled": area_capability_enabled(row["manifest"]["id"], context.area_id)
+                if row["manifest"]["id"].startswith("capability.") else True,
+            }
+            for row in plugin_rows
+        },
     }
 
 
@@ -161,13 +184,8 @@ def update_feature(name: str, body: FeatureFlagUpdate):
 
 @router.get("/memory/graph")
 async def memory_graph(request: Request):
-    if not feature_enabled("FEATURE_MEMORY_GRAPH"):
-        raise HTTPException(503, "memory graph disabled")
-    if not get_plugin_runtime().is_enabled("capability.memory-graph"):
-        raise HTTPException(503, "memory graph plugin disabled")
-    require_plugin_resource("capability.memory-graph", "read", "growth_memory")
-    local = local_growth_graph()
     context = resolve_native_context(request, "memory.read")
+    local = local_growth_graph()
     auxiliary = native_auxiliary_graph(context)
     return {
         "ownership": "Growth Memory is authoritative. Native execution memory is auxiliary agent-work memory only.",

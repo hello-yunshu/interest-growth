@@ -10,6 +10,8 @@ from ..domains import (
     get_domain_context,
     resolve_area,
     set_area_capability,
+    mastery_profile_summary,
+    current_mastery_profile,
 )
 from ..schemas import AreaCapabilityUpdate, InterestAreaCreate, InterestAreaUpdate
 from ..serializers import model_dict
@@ -53,6 +55,7 @@ def current_area():
             "domain_name": context.domain_name,
             "mastery_profile_id": context.mastery_profile_id,
         },
+        "mastery_profile": mastery_profile_summary(current_mastery_profile()),
         "domain": {
             "description": context.description,
             "skills": context.skills,
