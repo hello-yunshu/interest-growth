@@ -11,6 +11,7 @@ import {
 } from './runtime/client-runtime.js';
 import { currentAreaKey } from './runtime/storage-namespace.js';
 import { wsUrlWithLoopbackToken } from './runtime/transports/socket.js';
+import { toUserMessage } from './presentation.js';
 
 // The Area selector is a runtime-scoped UI preference (Gate C §14), so it is
 // isolated per runtime/server. desktop-local (and web dev) share the local
@@ -70,8 +71,7 @@ export async function api(path, options = {}) {
   const data = await parse(response);
   if (!response.ok) {
     const detail = typeof data === 'object' ? data.detail : data;
-    const message = typeof detail === 'string' ? detail : JSON.stringify(detail || data);
-    throw new Error(message || `HTTP ${response.status}`);
+    throw createHttpError(response.status, data, detail, client);
   }
   return data;
 }
@@ -91,9 +91,23 @@ export function friendlyApiError(error, client) {
     next.code = 'LOCAL_SERVICE_UNAVAILABLE';
     return next;
   }
-  if (/not found/i.test(raw)) return new Error('没有找到这条内容，它可能已被移动或归档。');
-  if (/disabled/i.test(raw)) return new Error('这项能力目前没有启用，可以在设置中重新打开。');
-  return error instanceof Error ? error : new Error(raw || '刚才没有完成，请再试一次。');
+  const next = error instanceof Error ? error : new Error(raw);
+  if (!next.code && /not found/i.test(raw)) next.code = 'NOT_FOUND';
+  if (!next.code && /disabled/i.test(raw)) next.code = 'DISABLED';
+  next.debugMessage = raw;
+  next.message = toUserMessage(next, { remote });
+  return next;
+}
+
+function createHttpError(status, data, detail, client = null) {
+  const code = typeof data === 'object' && data?.code ? data.code : `HTTP_${status}`;
+  const raw = typeof detail === 'string' ? detail : JSON.stringify(detail || data || '');
+  const error = new Error('');
+  error.code = code;
+  error.status = status;
+  error.debugMessage = raw;
+  error.message = toUserMessage(error, { remote: client?.descriptor?.dataLocation === 'self-hosted-server' });
+  return error;
 }
 
 export async function apiForm(path, formData, options = {}) {
@@ -113,7 +127,7 @@ export async function apiForm(path, formData, options = {}) {
   const data = await parse(response);
   if (!response.ok) {
     const detail = typeof data === 'object' ? data.detail : data;
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail || data));
+    throw createHttpError(response.status, data, detail, client);
   }
   return data;
 }
@@ -135,7 +149,7 @@ export async function downloadArtifact(artifactId) {
   if (!response.ok) {
     const data = await parse(response);
     const detail = typeof data === 'object' ? data.detail : data;
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail || data));
+    throw createHttpError(response.status, data, detail, client);
   }
   const blob = await response.blob();
   const disposition = response.headers.get('content-disposition') || '';
@@ -242,8 +256,8 @@ export async function installDesktopUpdate() {
 
 export async function openExternalUrl(value) {
   let url;
-  try { url = new URL(value); } catch { throw new Error('Invalid external URL.'); }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP/HTTPS external URLs are allowed.');
+  try { url = new URL(value); } catch { const error = new Error(''); error.code = 'INVALID_EXTERNAL_URL'; error.message = toUserMessage(error); throw error; }
+  if (!['http:', 'https:'].includes(url.protocol)) { const error = new Error(''); error.code = 'UNSUPPORTED_EXTERNAL_URL'; error.message = toUserMessage(error); throw error; }
   const client = await getClientRuntime();
   return client.adapter.openExternal(url.toString());
 }

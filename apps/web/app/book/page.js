@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api';
 import { ApprovalCard, ContextCards, FilterTabs, StatusChip, TaskRows } from '../../components/BeautifulUI';
 import { WorkspaceBoard, useWorkspaceData } from '../../components/WorkspaceWidgets';
+import { statusLabel, toUserMessage } from '../../lib/presentation.js';
 
 const projectionLabel = {
   proposal_pending_review: '书籍提案待确认',
@@ -34,8 +35,8 @@ export default function BookPage() {
     if (nextId) setBundle(await api(`/living-books/${nextId}`));
   }
 
-  useEffect(() => { load().catch(error => setMsg(error.message)); }, []);
-  useEffect(() => { detail(id).catch(error => setMsg(error.message)); setReview(null); }, [id]);
+  useEffect(() => { load().catch(error => setMsg(toUserMessage(error))); }, []);
+  useEffect(() => { detail(id).catch(error => setMsg(toUserMessage(error))); setReview(null); }, [id]);
 
   async function create(event) {
     event.preventDefault();
@@ -44,7 +45,7 @@ export default function BookPage() {
       await load();
       setId(created.id);
       setMsg('学习书已建立。你可以先在本地编译，再决定是否生成章节提案。');
-    } catch (error) { setMsg(error.message); }
+    } catch (error) { setMsg(toUserMessage(error)); }
   }
 
   async function action(name, body = {}) {
@@ -54,7 +55,7 @@ export default function BookPage() {
       setMsg('处理完成，新的版本已经保存在本地。');
       setReview(null);
       return result;
-    } catch (error) { setMsg(error.message); return null; }
+    } catch (error) { setMsg(toUserMessage(error)); return null; }
   }
 
   const tasks = useMemo(() => bundle?.chapters?.map(chapter => ({
@@ -62,7 +63,7 @@ export default function BookPage() {
     title: `${chapter.order_index}. ${chapter.title}`,
     detail: chapter.stale_reason || chapter.content_markdown?.slice(0, 100) || '',
     status: chapter.status === 'stale' ? 'failed' : chapter.status === 'ready' ? 'completed' : 'running',
-    meta: chapter.status === 'ready' ? '已就绪' : chapter.status === 'stale' ? '需要更新' : '整理中',
+    metaLabel: chapter.status === 'ready' ? '已就绪' : chapter.status === 'stale' ? '需要更新' : statusLabel(chapter.status),
   })) || [], [bundle]);
 
   const context = useMemo(() => bundle?.chapters?.flatMap(chapter => (chapter.source_refs || []).slice(0, 4).map((ref, index) => ({
@@ -78,8 +79,8 @@ export default function BookPage() {
     {msg && <p className="notice">{msg}</p>}
     <WorkspaceBoard pageId="book" data={workspace.data} loading={workspace.loading} compact title="书籍工作台" />
     <div className="grid two">
-      <section className="card"><h2>新建一本书</h2><form className="stack" onSubmit={create}><select value={form.topic_id} onChange={event => setForm({ ...form, topic_id: event.target.value })}>{topics.map(topic => <option key={topic.id} value={topic.id}>{topic.title}</option>)}</select><input value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} aria-label="书名"/><textarea value={form.intent} onChange={event => setForm({ ...form, intent: event.target.value })} aria-label="写作意图"/><button>建立学习书</button></form></section>
-      <section className="card"><div className="cardHeader"><h2>我的书架</h2><StatusChip>{books.length} 本</StatusChip></div><select value={id} onChange={event => setId(event.target.value)}><option value="">选择一本书</option>{books.map(book => <option key={book.id} value={book.id}>{book.title}</option>)}</select>{bundle && <div className="sectionTop"><div className="providerHeroRow"><span>章节提案</span><StatusChip tone={bundle.book.projection_status?.includes('pending') ? 'warning' : 'neutral'}>{projectionLabel[bundle.book.projection_status] || bundle.book.projection_status}</StatusChip></div><div className="row sectionTop"><button onClick={() => action('compile')}>重新整理本地章节</button><button className="secondary" onClick={() => action('project')}>生成章节提案</button></div>{bundle.book.projection_status === 'proposal_pending_review' && <button className="sectionTop" onClick={() => setReview('proposal')}>审阅书籍提案</button>}{bundle.book.projection_status === 'spine_pending_review' && <button className="sectionTop" onClick={() => setReview('spine')}>审阅章节结构</button>}</div>}</section>
+      <section className="card"><h2>新建一本书</h2><form className="stack" onSubmit={create}><select aria-label="绑定学习主题" value={form.topic_id} onChange={event => setForm({ ...form, topic_id: event.target.value })}>{topics.map(topic => <option key={topic.id} value={topic.id}>{topic.title}</option>)}</select><input value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} aria-label="书名"/><textarea value={form.intent} onChange={event => setForm({ ...form, intent: event.target.value })} aria-label="写作意图"/><button>建立学习书</button></form></section>
+      <section className="card"><div className="cardHeader"><h2>我的书架</h2><StatusChip>{books.length} 本</StatusChip></div><select aria-label="选择学习书" value={id} onChange={event => setId(event.target.value)}><option value="">选择一本书</option>{books.map(book => <option key={book.id} value={book.id}>{book.title}</option>)}</select>{bundle && <div className="sectionTop"><div className="providerHeroRow"><span>章节提案</span><StatusChip tone={bundle.book.projection_status?.includes('pending') ? 'warning' : 'neutral'}>{projectionLabel[bundle.book.projection_status] || statusLabel(bundle.book.projection_status)}</StatusChip></div><div className="row sectionTop"><button onClick={() => action('compile')}>重新整理本地章节</button><button className="secondary" onClick={() => action('project')}>生成章节提案</button></div>{bundle.book.projection_status === 'proposal_pending_review' && <button className="sectionTop" onClick={() => setReview('proposal')}>审阅书籍提案</button>}{bundle.book.projection_status === 'spine_pending_review' && <button className="sectionTop" onClick={() => setReview('spine')}>审阅章节结构</button>}</div>}</section>
     </div>
     {bundle && <section className="card"><FilterTabs value={tab} onChange={setTab} items={[{ value: 'chapters', label: '章节', count: bundle.chapters.length }, { value: 'sources', label: '来源指纹', count: context.length }]}/>{tab === 'chapters' ? <TaskRows tasks={tasks}/> : <ContextCards items={context} countLabel={`${context.length} 条本地引用`}/>}</section>}
     {review === 'proposal' && <ApprovalCard eyebrow="书籍提案待确认" title="要采用这份书籍提案吗？" description="确认后只会进入章节结构生成。你的本地学习书仍然是唯一事实来源。" tone="warning" onCancel={() => setReview(null)} actions={<button onClick={() => action('confirm-proposal')}>确认并生成章节结构</button>}><p className="muted">请先检查主题边界、章节意图和来源范围。生成内容依然只是待审提案。</p></ApprovalCard>}

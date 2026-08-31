@@ -37,6 +37,7 @@ import {
   RUNTIME_ANDROID_REMOTE,
 } from '../lib/runtime/runtime-connect-controller.js';
 import { StatusChip, RecordsTable } from './BeautifulUI';
+import { platformLabel, toUserMessage } from '../lib/presentation.js';
 
 const CONNECTION_META = {
   Initializing: { label: '正在初始化', tone: 'neutral' },
@@ -210,7 +211,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       setDevices(result?.devices || []);
     } catch (error) {
       setDevices([]);
-      flash(`无法读取设备列表：${error.message}`, 'error');
+      flash(`无法读取设备列表：${toUserMessage(error, { remote: true })}`, 'error');
     } finally {
       setDevicesLoaded(true);
     }
@@ -284,7 +285,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       setDismissedRestart(false);
       flash(`已保存运行时切换。切换将在应用重启后生效。`);
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -295,7 +296,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     try {
       await restartDesktopApp();
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
       setBusy(false);
     }
   }
@@ -313,7 +314,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       setBootstrapToken('');
       flash(`已连接到服务器：${result?.server?.serverDisplayName || result?.normalizedOrigin || serverUrl}`);
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -332,7 +333,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       flash('管理员密码已创建。现在可以用它登录这台服务器。');
       setProbe({ ...probe, server: { ...probe.server, ownerConfigured: true } });
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -367,7 +368,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       flash('已登录服务器，凭据已安全保存到系统钥匙串。');
       onRuntimeChanged?.();
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -383,7 +384,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       flash('连接状态已刷新，会话有效。');
     } catch (error) {
       machineRef.current?.handle(remoteErrorEvent(error));
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -402,7 +403,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
         flash('服务器身份验证通过：与接入时是同一实例。');
       }
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -429,7 +430,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       }
       onRuntimeChanged?.();
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -456,7 +457,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       flash(`设备“${target.name}”已撤销，其本地凭据将失效。`);
       await loadDevices();
     } catch (error) {
-      flash(error.message, 'error');
+      flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
       setBusy(false);
     }
@@ -466,7 +467,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
 
   const deviceColumns = useMemo(() => [
     { key: 'name', label: '设备', render: row => <strong>{row.name}{row.current ? '（当前）' : ''}</strong> },
-    { key: 'platform', label: '平台', render: row => row.platform || '—' },
+    { key: 'platform', label: '平台', render: row => platformLabel(row.platform) },
     { key: 'seen', label: '最近在线', render: row => formatSeen(row.last_seen_at) },
     { key: 'state', label: '状态', render: row => <StatusChip tone={row.revoked_at ? 'neutral' : 'success'}>{row.revoked_at ? '已撤销' : '活跃'}</StatusChip> },
     { key: 'action', label: '操作', render: row => row.revoked_at ? <span className="muted smallText">—</span> : <button className="tableLink danger" onClick={() => doRevoke(row)} disabled={busy}>{row.current ? '退出并撤销' : '撤销'}</button> },
@@ -506,12 +507,12 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       <div className="runtimeModeGrid">
         <button type="button" className={`runtimeModeCard ${!isRemote ? 'is-active' : ''}`} onClick={() => chooseMode('desktop-local')} disabled={busy}>
           <span className="runtimeModeMark">本机</span>
-          <span className="runtimeModeCopy"><strong>This device · 本机</strong><small>数据保存在这台设备，由本机 Core 提供服务。</small></span>
+          <span className="runtimeModeCopy"><strong>本机</strong><small>数据保存在这台设备，由本机 Core 提供服务。</small></span>
           {!isRemote && <StatusChip tone="success">当前</StatusChip>}
         </button>
         <button type="button" className={`runtimeModeCard ${isRemote ? 'is-active' : ''}`} onClick={() => chooseMode('desktop-remote')} disabled={busy}>
           <span className="runtimeModeMark">服务器</span>
-          <span className="runtimeModeCopy"><strong>Self-hosted server · 自托管服务器</strong><small>数据保存在你的服务器，通过安全凭据连接，不在本机复制。</small></span>
+          <span className="runtimeModeCopy"><strong>自托管服务器</strong><small>数据保存在你的服务器，通过安全凭据连接，不在本机复制。</small></span>
           {isRemote && <StatusChip tone="accent">当前</StatusChip>}
         </button>
       </div>
