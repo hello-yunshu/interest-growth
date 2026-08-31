@@ -36,7 +36,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3 # v3
+        uses: docker/setup-buildx-action@v4.3.0 # v4.3.0
       - name: Build Android toolchain image
         uses: docker/build-push-action@v6 # v6
         with:

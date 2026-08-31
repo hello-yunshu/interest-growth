@@ -12,7 +12,7 @@ The optional reviewed exact adapters call, but do not vendor:
 - `llama-index-core` 0.14.x;
 - `lightrag-hku` 1.5.x;
 - Microsoft `graphrag` 3.1.x;
-- Vectify AI `pageindex` 0.1.3.
+- Vectify AI `pageindex` 0.2.8.
 
 Their reviewed upstream repositories declare MIT licenses. They remain
 default-off because their model, embedding, storage, network, data-egress,

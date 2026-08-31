@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v7.0.1 # v7.0.1
       - uses: actions/setup-python@v7.0.0 # v7.0.0
         with: { python-version: '3.13' }
-      - uses: actions/setup-node@v6.5.0 # v6.5.0
+      - uses: actions/setup-node@v7.0.0 # v7.0.0
         with: { node-version: '22' }
       - uses: dtolnay/rust-toolchain@stable # v1 (latest stable release)
         with: { targets: '${{ matrix.target }}' }
@@ -46,7 +46,7 @@ jobs:
       - name: Build desktop bundle
         run: npm --prefix apps/desktop run build -- --target ${{ matrix.target }}
       - name: Upload unsigned build artifacts
-        uses: actions/upload-artifact@v4 # v4
+        uses: actions/upload-artifact@v7.0.1 # v7.0.1
         with:
           name: interest-growth-${{ matrix.target }}-unsigned
           path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
