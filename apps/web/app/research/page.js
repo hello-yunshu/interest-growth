@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, openExternalUrl } from '../../lib/api';
 import { ApprovalCard, FilterTabs, PixelLoader, PromptBar, RecommendationCard, StatusChip, StreamingText, ToolChips } from '../../components/BeautifulUI';
 import { WorkspaceBoard, useWorkspaceData } from '../../components/WorkspaceWidgets';
-import { energyLabel, publishabilityLabel, severityLabel, sourceTypeLabel, statusLabel, toUserMessage, verificationLabel } from '../../lib/presentation.js';
+import { energyLabel, engineReasonLabel, publishabilityLabel, reverificationReasonLabel, reviewIssueLabel, severityLabel, sourceTypeLabel, statusLabel, toUserMessage, verificationLabel } from '../../lib/presentation.js';
 
 export default function ResearchPage() {
   const workspace = useWorkspaceData();
@@ -50,7 +50,7 @@ export default function ResearchPage() {
   const selectedTopic = useMemo(()=>topics.find(t=>t.id===topicId),[topics,topicId]);
 
   async function run(e) {
-    e?.preventDefault?.(); setBusy(true); setMessage('');
+    e?.preventDefault?.(); if (busy) return; setBusy(true); setMessage('');
     try { setResult(await api('/research/run', { method:'POST', body:JSON.stringify({topic_id: topicId || null, question, depth, knowledge_base_ids:selectedKbIds, use_domain_skills:useSkills}) })); await loadWorkspace(); }
     catch (err) { setMessage(toUserMessage(err)); }
     finally { setBusy(false); }
@@ -66,14 +66,15 @@ export default function ResearchPage() {
   }
   async function verifySource(id) { if (busy) return; setBusy(true); try { await api(`/sources/${id}/verify`,{method:'POST'}); setMessage('已记录人工核验来源。'); await loadWorkspace(); } catch (err) { setMessage(toUserMessage(err)); } finally { setBusy(false); } }
   async function invalidateSource() {
-    if (!invalidateDraft?.reason?.trim()) return;
+    if (busy || !invalidateDraft?.reason?.trim()) return;
+    setBusy(true);
     try {
       const data = await api(`/sources/${invalidateDraft.id}/invalidate`, {method:'POST', body:JSON.stringify({reason:invalidateDraft.reason})});
       setMessage(`已撤销来源核验；${data.affected_claim_ids?.length||0} 条主张已进入再核验。`);
       setInvalidateDraft(null);
       await loadWorkspace();
       const queue = await api('/claims/reverification?stale_days=180'); setReverification(queue.claims||[]);
-    } catch(err) { setMessage(toUserMessage(err)); }
+    } catch(err) { setMessage(toUserMessage(err)); } finally { setBusy(false); }
   }
   async function addEvidence(e) {
     e.preventDefault();
@@ -106,7 +107,7 @@ export default function ResearchPage() {
       <div className="fieldGroup">
         <label>当前主题</label>
         <select aria-label="当前主题" value={topicId} onChange={e=>setTopicId(e.target.value)}><option value="">不绑定主题</option>{topics.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select>
-        {!topics.length && <p className="help">先在 Curiosity 把一个问题转为 Topic，再建立长期 Claim/Evidence。</p>}
+        {!topics.length && <p className="help">先在「好奇心」中把一个问题转为长期主题，再建立主张与证据。</p>}
       </div>
       <div className="subcard sectionTop">
         <strong>研究上下文</strong>
@@ -121,8 +122,8 @@ export default function ResearchPage() {
       {message && <p className="notice">{message}</p>}
     </div>
 
-    {busy && <PixelLoader label="Research 正在建立候选理解" detail={depth}/>}
-    {result && <div className="grid two"><StreamingText title="研究结果" text={result.result?.report||''} sources={result.result?.sources||result.result?.citations||[]} streaming={false} actions={result.engine_status?.degraded?<StatusChip tone="warning">结果不完整 · {result.engine_status.reason}</StatusChip>:<StatusChip tone="success">候选结果已生成</StatusChip>}/><RecommendationCard eyebrow="证据边界" title="研究结果不能直接成为证据" description="先定位原始来源，再摘录或总结为证据，最后把主张与支持或相反证据显式关联。" confidence={0.96} alternatives={(result.result?.limitations||[]).slice(0,4).map(x=>({title:x}))}/></div>}
+    {busy && <PixelLoader label="正在建立候选理解" detail={energyLabel(depth)}/>}
+    {result && <div className="grid two"><StreamingText title="研究结果" text={result.result?.report||''} sources={result.result?.sources||result.result?.citations||[]} streaming={false} actions={result.engine_status?.degraded?<StatusChip tone="warning">结果不完整 · {engineReasonLabel(result.engine_status.reason)}</StatusChip>:<StatusChip tone="success">候选结果已生成</StatusChip>}/><RecommendationCard eyebrow="证据边界" title="研究结果不能直接成为证据" description="先定位原始来源，再摘录或总结为证据，最后把主张与支持或相反证据显式关联。" confidence={0.96} alternatives={(result.result?.limitations||[]).slice(0,4).map(x=>({title:x}))}/></div>}
 
     <section className="card"><div className="cardHeader"><div><div className="eyebrow">证据账本</div><h2>人工维护的研究事实链</h2></div></div><FilterTabs value={ledgerTab} onChange={setLedgerTab} items={[{value:'all',label:'全部'},{value:'sources',label:'来源',count:sources.length},{value:'evidence',label:'证据',count:evidence.length},{value:'claims',label:'主张',count:claims.length},{value:'reverify',label:'待复核',count:reverification.length}]}/></section>
     <div className="grid two">
@@ -131,14 +132,14 @@ export default function ResearchPage() {
       <div className="card" hidden={ledgerTab!=='all'&&ledgerTab!=='evidence'}><h2>2 · 证据</h2><p className="muted">证据必须绑定来源；未核验来源不能直接升级为人工核验。</p><form className="stack" onSubmit={addEvidence}><select aria-label="选择证据来源" value={evidenceForm.source_id} onChange={e=>setEvidenceForm({...evidenceForm,source_id:e.target.value})} required><option value="">选择来源</option>{sources.map(s=><option key={s.id} value={s.id}>{s.verified?'✓ ':''}{s.title}</option>)}</select><textarea value={evidenceForm.excerpt_or_summary} onChange={e=>setEvidenceForm({...evidenceForm,excerpt_or_summary:e.target.value})} placeholder="摘录或你核对后的证据摘要" required/><textarea value={evidenceForm.limitations} onChange={e=>setEvidenceForm({...evidenceForm,limitations:e.target.value})} placeholder="限制 / 适用边界"/><select aria-label="证据核验状态" value={evidenceForm.verification_state} onChange={e=>setEvidenceForm({...evidenceForm,verification_state:e.target.value})}><option value="unverified">未核验</option><option value="source_identified">已定位原始来源</option><option value="human_verified">我已人工核验</option></select><label className="check"><input type="checkbox" checked={evidenceForm.supports_claim} onChange={e=>setEvidenceForm({...evidenceForm,supports_claim:e.target.checked})}/> 默认作为支持证据</label><button disabled={busy}>保存证据</button></form><div className="list sectionTop">{evidence.map(ev=><div className="item" key={ev.id}><span className="pill">{verificationLabel(ev.verification_state)}</span><p>{ev.excerpt_or_summary}</p>{ev.limitations && <div className="muted">边界：{ev.limitations}</div>}</div>)}</div></div>
     </div>
 
-    {reverification.length > 0 && (ledgerTab==='all'||ledgerTab==='reverify') && <div className="card"><h2>再核验队列</h2><p className="muted">这里不是说主张已经“错误”，而是当前证据链或核验时间要求你重新查看。来源撤销核验会自动传播到这里。</p><div className="list">{reverification.filter(x=>!topicId || x.claim.topic_id===topicId).map(x=><div className="item" key={x.claim.id}><strong>{x.current_version?.statement||'缺少当前版本'}</strong><div className="row sectionTop">{x.reasons.map(r=><span className="pill" key={r}>{statusLabel(r)}</span>)}</div></div>)}</div></div>}
+    {reverification.length > 0 && (ledgerTab==='all'||ledgerTab==='reverify') && <div className="card"><h2>再核验队列</h2><p className="muted">这里不是说主张已经“错误”，而是当前证据链或核验时间要求你重新查看。来源撤销核验会自动传播到这里。</p><div className="list">{reverification.filter(x=>!topicId || x.claim.topic_id===topicId).map(x=><div className="item" key={x.claim.id}><strong>{x.current_version?.statement||'缺少当前版本'}</strong><div className="row sectionTop">{x.reasons.map(r=><span className="pill" key={r}>{reverificationReasonLabel(r)}</span>)}</div></div>)}</div></div>}
 
     <div className="card" hidden={ledgerTab!=='all'&&ledgerTab!=='claims'}><h2>3 · 主张账本</h2><p className="muted">选择支持与相反证据，再写你目前愿意承担的表述。主张修订不会覆盖旧版本。</p>
       {topicId ? <form className="stack" onSubmit={addClaim}><textarea value={claimForm.statement} onChange={e=>setClaimForm({...claimForm,statement:e.target.value})} placeholder="当前主张" required/><textarea value={claimForm.limitations} onChange={e=>setClaimForm({...claimForm,limitations:e.target.value})} placeholder="必须同时说出的限制"/><div className="grid two"><EvidencePicker title="支持证据" evidence={evidence} selected={supportIds} toggle={id=>toggle(id,supportIds,setSupportIds)}/><EvidencePicker title="相反 / 边界证据" evidence={evidence} selected={counterIds} toggle={id=>toggle(id,counterIds,setCounterIds)}/></div><div className="row"><select aria-label="可发布性" style={{maxWidth:260}} value={claimForm.publishability} onChange={e=>setClaimForm({...claimForm,publishability:e.target.value})}><option value="internal_only">仅内部学习</option><option value="limited">证据有限</option><option value="supported_with_caution">可谨慎表达</option><option value="stable">相对稳定</option><option value="controversial">有争议</option><option value="not_publishable">不可公开</option></select><button disabled={busy}>建立主张 v1</button></div></form> : <div className="notice">主张必须属于一个主题。</div>}
-      <div className="list sectionTop">{claims.map(item=><div className="item" key={item.claim.id}><div className="row"><span className="pill">{verificationLabel(item.claim.verification_state)}</span><span className="pill">{publishabilityLabel(item.claim.publishability)}</span><span className="muted">v{item.current_version?.version}</span></div><h3>{item.current_version?.statement}</h3>{item.current_version?.limitations && <p className="muted">边界：{item.current_version.limitations}</p>}<div className="row"><button className="secondary small" onClick={()=>startRevision(item)}>修订主张</button><button className="ghost small" onClick={() => skepticPass(item.claim.id)} disabled={busy}>质疑检查</button><button className="ghost small" onClick={() => verifyClaim(item.claim.id)} disabled={busy}>核验当前版本</button></div>{skepticReviews[item.claim.id] && <div className="notice sectionTop"><strong>质疑检查 · {statusLabel(skepticReviews[item.claim.id].status)}</strong>{!skepticReviews[item.claim.id].issues?.length && <p>未发现结构性警告；仍需人工核对原文与当前版本。</p>}<ul>{(skepticReviews[item.claim.id].issues||[]).map((issue,i)=><li key={i}><strong>{severityLabel(issue.severity)}</strong> · {issue.message}</li>)}</ul></div>}</div>)}</div>
+      <div className="list sectionTop">{claims.map(item=><div className="item" key={item.claim.id}><div className="row"><span className="pill">{verificationLabel(item.claim.verification_state)}</span><span className="pill">{publishabilityLabel(item.claim.publishability)}</span><span className="muted">v{item.current_version?.version}</span></div><h3>{item.current_version?.statement}</h3>{item.current_version?.limitations && <p className="muted">边界：{item.current_version.limitations}</p>}<div className="row"><button className="secondary small" onClick={()=>startRevision(item)}>修订主张</button><button className="ghost small" onClick={() => skepticPass(item.claim.id)} disabled={busy}>{busy?'检查中…':'质疑检查'}</button><button className="ghost small" onClick={() => verifyClaim(item.claim.id)} disabled={busy}>核验当前版本</button></div>{skepticReviews[item.claim.id] && <div className="notice sectionTop"><strong>质疑检查 · {statusLabel(skepticReviews[item.claim.id].status)}</strong>{!skepticReviews[item.claim.id].issues?.length && <p>未发现结构性警告；仍需人工核对原文与当前版本。</p>}<ul>{(skepticReviews[item.claim.id].issues||[]).map((issue,i)=><li key={i}><strong>{severityLabel(issue.severity)}</strong> · {reviewIssueLabel(issue)}</li>)}</ul></div>}</div>)}</div>
     </div>
 
-    {invalidateDraft && <ApprovalCard eyebrow="来源核验" title={`撤销核验：${invalidateDraft.title}`} description="这会把受影响 Claim 推入再核验队列，不代表 Claim 自动变成错误。请留下可审计的原因。" tone="warning" onCancel={()=>setInvalidateDraft(null)} actions={<button onClick={invalidateSource} disabled={!invalidateDraft.reason.trim()}>确认撤销核验</button>}><textarea value={invalidateDraft.reason} onChange={e=>setInvalidateDraft({...invalidateDraft,reason:e.target.value})}/></ApprovalCard>}
+    {invalidateDraft && <ApprovalCard eyebrow="来源核验" title={`撤销核验：${invalidateDraft.title}`} description="这会把受影响主张推入再核验队列，不代表主张自动变成错误。请留下可审计的原因。" tone="warning" onCancel={()=>setInvalidateDraft(null)} actions={<button onClick={invalidateSource} disabled={busy||!invalidateDraft.reason.trim()}>{busy?'正在撤销…':'确认撤销核验'}</button>}><textarea value={invalidateDraft.reason} onChange={e=>setInvalidateDraft({...invalidateDraft,reason:e.target.value})}/></ApprovalCard>}
 
     {revision.claim_id && <div className="card"><h2>修订主张</h2><p className="muted">正在建立新版本；旧版本和修订原因会永久保留。</p><form className="stack" onSubmit={reviseClaim}><textarea value={revision.statement} onChange={e=>setRevision({...revision,statement:e.target.value})} required/><textarea value={revision.limitations} onChange={e=>setRevision({...revision,limitations:e.target.value})} placeholder="限制"/><input value={revision.reason_for_revision} onChange={e=>setRevision({...revision,reason_for_revision:e.target.value})} placeholder="为什么修订？" required/><div className="grid two"><EvidencePicker title="支持证据" evidence={evidence} selected={supportIds} toggle={id=>toggle(id,supportIds,setSupportIds)}/><EvidencePicker title="相反 / 边界证据" evidence={evidence} selected={counterIds} toggle={id=>toggle(id,counterIds,setCounterIds)}/></div><div className="row"><button disabled={busy}>保存新版本</button><button type="button" className="ghost" onClick={()=>setRevision({...revision,claim_id:''})}>取消</button></div></form></div>}
   </div>;

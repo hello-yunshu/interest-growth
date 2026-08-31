@@ -46,8 +46,8 @@ function eventLabel(event) {
   if (category === 'sources') return '来源';
   if (category === 'progress') return '进展';
   if (category === 'wait_for_input') return '等待你的输入';
-  if (category === 'stage_start') return event?.metadata?.stage ? `开始：${event.metadata.stage}` : '开始阶段';
-  if (category === 'stage_end') return event?.metadata?.stage ? `完成：${event.metadata.stage}` : '阶段完成';
+  if (category === 'stage_start') return '开始处理';
+  if (category === 'stage_end') return '处理完成';
   if (category === 'error') return '出错了';
   if (category === 'done') return '已完成';
   return activityLabel(category);
@@ -71,6 +71,7 @@ const PUBLIC_TRACE_CATEGORIES = new Set(['stage_start', 'stage_end', 'progress',
 
 function publicEventDetail(event) {
   const category = String(event?.category || event?.type || '').toLowerCase();
+  if (category === 'error') return '执行未完成，请检查设置或稍后重试。';
   if (category === 'tool_call') return '已经请求调用工具';
   if (category === 'tool_result') return event?.metadata?.status ? `工具已完成（${statusLabel(event.metadata.status)}）` : '工具已经完成';
   if (category === 'sources') {

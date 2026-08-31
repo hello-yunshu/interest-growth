@@ -97,23 +97,50 @@ function excerpt(value = '') {
   return text.length > 54 ? `${text.slice(0, 54)}…` : text || '学习笔记';
 }
 
-function AreaSwitcher({ areas, current, onSwitch, onCreated }) {
+function AreaSwitcher({ areas, current, onSwitch, onCreated, busy = false }) {
   const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [menuMounted, setMenuMounted] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
   const [form, setForm] = useState({ name: '', slug: '', domain_pack_id: 'general' });
   const [error, setError] = useState('');
+  const menuRef = useRef(null);
+  const triggerRef = useRef(null);
+  const closeTimer = useRef(null);
+  function openMenu() {
+    clearTimeout(closeTimer.current);
+    setCreating(true); setMenuMounted(true); setMenuVisible(false);
+    requestAnimationFrame(() => setMenuVisible(true));
+  }
+  function closeMenu({ restoreFocus = true } = {}) {
+    clearTimeout(closeTimer.current);
+    setCreating(false); setMenuVisible(false);
+    if (!menuMounted) return;
+    closeTimer.current = window.setTimeout(() => setMenuMounted(false), 180);
+    if (restoreFocus) triggerRef.current?.focus?.();
+  }
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+  useEffect(() => {
+    if (!menuMounted) return undefined;
+    const handlePointerDown = event => { if (!menuRef.current?.contains(event.target) && !triggerRef.current?.contains(event.target)) closeMenu({ restoreFocus: false }); };
+    const handleKeyDown = event => { if (event.key === 'Escape') { event.preventDefault(); closeMenu(); } };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => { document.removeEventListener('mousedown', handlePointerDown); document.removeEventListener('keydown', handleKeyDown); };
+  }, [menuMounted]);
   async function create(event) {
-    event.preventDefault(); setError('');
+    event.preventDefault(); if (saving) return; setSaving(true); setError('');
     try {
       const row = await api('/areas', { method: 'POST', body: JSON.stringify(form) });
-      setCreating(false); setForm({ name: '', slug: '', domain_pack_id: 'general' }); await onCreated(row);
-    } catch (err) { setError(toUserMessage(err)); }
+      closeMenu(); setForm({ name: '', slug: '', domain_pack_id: 'general' }); await onCreated(row);
+    } catch (err) { setError(toUserMessage(err)); } finally { setSaving(false); }
   }
   return <div className="topAreaSwitcher">
     <span>当前兴趣</span>
-    <button className="areaSelectButton" onClick={() => setCreating(value => !value)} aria-expanded={creating}><strong>{current?.name || '选择兴趣'}</strong><Icon name="chevronDown" size={14}/></button>
-    {creating && <div className="areaMenu" data-state="open">
-      <div className="areaMenuList">{(areas || []).map(area => <button key={area.id} className={area.id === current?.id ? 'active' : ''} onClick={() => { onSwitch(area.id); setCreating(false); }}><span>{area.name.slice(0, 1).toUpperCase()}</span><div><strong>{area.name}</strong><small>{area.domain_name || domainLabel(area.domain_pack_id)}</small></div>{area.id === current?.id && <Icon name="check"/>}</button>)}</div>
-      <form className="areaCreateForm" onSubmit={create}><strong>新建兴趣</strong><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value, slug: event.target.value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/[\u4e00-\u9fa5]/g, '') || `interest-${Date.now()}` })} placeholder="例如：城市摄影" required/><select value={form.domain_pack_id} onChange={event => setForm({ ...form, domain_pack_id: event.target.value })}><option value="general">通用兴趣</option><option value="psychology">心理学</option></select>{error && <p className="formError">{error}</p>}<button type="submit" className="compactPrimary"><Icon name="plus"/>创建兴趣</button></form>
+    <button ref={triggerRef} className="areaSelectButton" onClick={() => (menuMounted && creating ? closeMenu() : openMenu())} aria-expanded={menuMounted && creating}><strong>{current?.name || '选择兴趣'}</strong><Icon name="chevronDown" size={14}/></button>
+    {menuMounted && <div ref={menuRef} className={`areaMenu ${menuVisible ? 'is-visible' : 'is-closing'}`} data-state={menuVisible ? 'open' : 'closing'}>
+      <div className="areaMenuList">{(areas || []).map(area => <button key={area.id} className={area.id === current?.id ? 'active' : ''} disabled={busy || saving} onClick={() => { onSwitch(area.id); closeMenu({ restoreFocus: false }); }}><span>{area.name.slice(0, 1).toUpperCase()}</span><div><strong>{area.name}</strong><small>{area.domain_name || domainLabel(area.domain_pack_id)}</small></div>{area.id === current?.id && <Icon name="check"/>}</button>)}</div>
+      <form className="areaCreateForm" onSubmit={create}><strong>新建兴趣</strong><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value, slug: event.target.value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/[\u4e00-\u9fa5]/g, '') || `interest-${Date.now()}` })} placeholder="例如：城市摄影" required disabled={busy || saving}/><select value={form.domain_pack_id} onChange={event => setForm({ ...form, domain_pack_id: event.target.value })} disabled={busy || saving}><option value="general">通用兴趣</option><option value="psychology">心理学</option></select>{error && <p className="formError">{error}</p>}<button type="submit" className="compactPrimary" disabled={busy || saving}><Icon name="plus"/>{saving ? '正在创建…' : '创建兴趣'}</button></form>
     </div>}
   </div>;
 }
@@ -135,8 +162,12 @@ export default function DesktopShell({ children }) {
   const [areas, setAreas] = useState([]);
   const [currentArea, setCurrentArea] = useState(null);
   const [areaReady, setAreaReady] = useState(false);
+  const [areaSwitchBusy, setAreaSwitchBusy] = useState(false);
   const [theme, setTheme] = useState('light');
   const [mobileNav, setMobileNav] = useState(false);
+  const [mobileNavMounted, setMobileNavMounted] = useState(false);
+  const [mobileNavVisible, setMobileNavVisible] = useState(false);
+  const mobileNavCloseTimer = useRef(null);
   const runtimeCopy = useRuntimeCopy();
   useEffect(() => {
     let unlisten = null; let active = true;
@@ -160,24 +191,36 @@ export default function DesktopShell({ children }) {
     return () => { active = false; if (unlisten) unlisten(); };
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = theme; window.localStorage.setItem('interest-growth.theme', theme); }, [theme]);
-  useEffect(() => { const handler = event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setPalette(value => !value); } if (event.key === 'Escape') { setPalette(false); setMobileNav(false); } }; window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler); }, []);
-  async function switchArea(id) { setInterestAreaSelector(id); const [list, selected] = await Promise.all([api('/areas'), api('/areas/current')]); setAreas(list.areas || []); setCurrentArea(selected.area || null); window.location.reload(); }
+  useEffect(() => () => clearTimeout(mobileNavCloseTimer.current), []);
+  function openMobileNav() {
+    clearTimeout(mobileNavCloseTimer.current);
+    setMobileNav(true); setMobileNavMounted(true); setMobileNavVisible(false);
+    requestAnimationFrame(() => setMobileNavVisible(true));
+  }
+  function closeMobileNav() {
+    clearTimeout(mobileNavCloseTimer.current);
+    setMobileNav(false); setMobileNavVisible(false);
+    if (mobileNavMounted) mobileNavCloseTimer.current = window.setTimeout(() => setMobileNavMounted(false), 180);
+  }
+  function toggleMobileNav() { if (mobileNavMounted && mobileNav) closeMobileNav(); else openMobileNav(); }
+  useEffect(() => { const handler = event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setPalette(value => !value); } if (event.key === 'Escape') { setPalette(false); closeMobileNav(); } }; window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler); }, [mobileNavMounted, mobileNav]);
+  async function switchArea(id) { if (areaSwitchBusy) return; setAreaSwitchBusy(true); try { setInterestAreaSelector(id); const [list, selected] = await Promise.all([api('/areas'), api('/areas/current')]); setAreas(list.areas || []); setCurrentArea(selected.area || null); window.location.reload(); } catch (error) { console.error('兴趣切换失败', error); setAreaSwitchBusy(false); } }
   async function areaCreated(row) { setAreas(value => [...value.filter(item => item.id !== row.id), row]); await switchArea(row.id); }
   const date = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).replaceAll('/', '-');
   return <div className="desktopApp">
     <header className="desktopTopbar" data-tauri-drag-region>
-      <button className="mobileMenuButton" onClick={() => setMobileNav(value => !value)} aria-label={mobileNav ? '关闭导航' : '打开导航'} aria-expanded={mobileNav} aria-controls="primary-navigation"><Icon name={mobileNav ? 'close' : 'rows'}/></button>
-      <AreaSwitcher areas={areas} current={currentArea} onSwitch={switchArea} onCreated={areaCreated}/>
+      <button className="mobileMenuButton" onClick={toggleMobileNav} aria-label={mobileNav ? '关闭导航' : '打开导航'} aria-expanded={mobileNav} aria-controls="primary-navigation"><Icon name={mobileNav ? 'close' : 'rows'}/></button>
+      <AreaSwitcher areas={areas} current={currentArea} onSwitch={switchArea} onCreated={areaCreated} busy={areaSwitchBusy}/>
       <button className="globalSearch" onClick={() => setPalette(true)}><Icon name="search"/><span>搜索问题、笔记、资料</span><kbd>⌘K</kbd></button>
       <div className="topbarEnd"><time>{date}</time><button className="themeButton" onClick={() => setTheme(value => value === 'light' ? 'dark' : 'light')} aria-label="切换明暗主题"><Icon name={theme === 'light' ? 'sun' : 'moon'}/></button><WindowsControls visible={runtime?.desktop && runtime?.platform === 'windows'}/></div>
     </header>
     <div className="desktopBody">
-      <aside className={`desktopSidebar ${mobileNav ? 'is-open' : ''}`}>
-        <Link href="/" className="desktopBrand" onClick={() => setMobileNav(false)}><span className="brandMark">IG</span><span><strong>Interest Growth</strong><small><i className={`statusDot ${runtimeCopy.dataLocation === 'self-hosted-server' ? 'remote' : 'ok'}`}/> {runtimeCopy.dataStatusLabel}</small></span></Link>
-        <nav id="primary-navigation" className="sideNav" aria-label="主导航">{GROUPS.map(([group, label]) => <div className="sideNavGroup" key={group}><div className="sideNavLabel">{label}</div>{NAV.filter(item => item.group === group).map(item => { const active = currentPath === normalizePath(item.href); return <Link key={item.href} href={item.href} onClick={() => setMobileNav(false)} className={`sideNavItem ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined}><Icon name={item.icon}/><span>{item.label}</span></Link>; })}</div>)}</nav>
+      <aside className={`desktopSidebar ${mobileNavVisible ? 'is-open' : ''}`}>
+        <Link href="/" className="desktopBrand" onClick={closeMobileNav}><span className="brandMark">IG</span><span><strong>Interest Growth</strong><small><i className={`statusDot ${runtimeCopy.dataLocation === 'self-hosted-server' ? 'remote' : 'ok'}`}/> {runtimeCopy.dataStatusLabel}</small></span></Link>
+        <nav id="primary-navigation" className="sideNav" aria-label="主导航">{GROUPS.map(([group, label]) => <div className="sideNavGroup" key={group}><div className="sideNavLabel">{label}</div>{NAV.filter(item => item.group === group).map(item => { const active = currentPath === normalizePath(item.href); return <Link key={item.href} href={item.href} onClick={closeMobileNav} className={`sideNavItem ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined}><Icon name={item.icon}/><span>{item.label}</span></Link>; })}</div>)}</nav>
         <div className="sidebarBottom"><button className="commandShortcut" onClick={() => setPalette(true)}><Icon name="search"/><span>快速跳转</span><kbd>⌘K</kbd></button>{(() => { const active = currentPath === '/system'; return <Link href="/system" className={`sideNavItem ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined}><Icon name="settings"/><span>设置</span></Link>; })()}</div>
       </aside>
-      {mobileNav && <button className="mobileNavBackdrop" aria-label="关闭导航菜单" onClick={() => setMobileNav(false)}/>}
+      {mobileNavMounted && <button className={`mobileNavBackdrop ${mobileNavVisible ? 'is-visible' : 'is-closing'}`} aria-label="关闭导航菜单" onClick={closeMobileNav}/>}
       <main className="workspace"><div className="workspaceInner">{areaReady ? children : <div className="workspaceBoot"><span className="brandMark">IG</span><strong>正在打开你的兴趣空间</strong><small>{runtimeCopy.bootCopy}</small></div>}</div></main>
     </div>
     <CommandPalette open={palette} onClose={() => setPalette(false)} runtimeCopy={runtimeCopy}/>

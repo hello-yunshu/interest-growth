@@ -711,13 +711,17 @@ input[type="file"]{min-height:42px;padding:7px 9px;border-radius:var(--control-r
 .commandBackdrop.is-visible{opacity:1;transition-timing-function:var(--ease-enter);}
 .commandPalette{opacity:0;transform:translateY(-6px) scale(.99);animation:none;transition:opacity var(--motion-normal) var(--ease-exit),transform var(--motion-normal) var(--ease-exit);}
 .commandBackdrop.is-visible .commandPalette{opacity:1;transform:none;transition-timing-function:var(--ease-enter);}
-.areaMenu{animation:areaMenuIn var(--motion-normal) var(--ease-enter);transform-origin:top left;}
+.areaMenu{opacity:0;transform:translateY(-4px) scale(.99);transform-origin:top left;transition:opacity var(--motion-normal) var(--ease-exit),transform var(--motion-normal) var(--ease-exit);pointer-events:none;}
+.areaMenu.is-visible{opacity:1;transform:none;pointer-events:auto;transition-timing-function:var(--ease-enter);}
+.areaMenu.is-closing{opacity:0;transform:translateY(-4px) scale(.99);pointer-events:none;}
 @keyframes areaMenuIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 @keyframes widgetPickerIn{from{opacity:0}to{opacity:1}}
 .buiTraceBody{display:grid;grid-template-rows:0fr;opacity:0;padding-top:0;padding-bottom:0;border-top-color:transparent;transition:grid-template-rows var(--motion-normal) var(--ease-standard),opacity var(--motion-fast) var(--ease-standard),padding var(--motion-normal) var(--ease-standard),border-color var(--motion-normal) var(--ease-standard);}
 .buiTraceBody>*{min-height:0;overflow:hidden;}
 .buiTraceBody.is-open{grid-template-rows:1fr;opacity:1;padding-top:5px;padding-bottom:9px;border-top-color:var(--line);}
-.mobileNavBackdrop{opacity:1;transition:opacity 160ms var(--ease-exit);}
+.mobileNavBackdrop{opacity:0;transition:opacity 180ms var(--ease-exit);}
+.mobileNavBackdrop.is-visible{opacity:1;transition-timing-function:var(--ease-enter);}
+.mobileNavBackdrop.is-closing{opacity:0;pointer-events:none;}
 .desktopSidebar{transition:transform 200ms var(--ease-standard);}
 .widgetCard{transition:border-color var(--motion-normal) var(--ease-standard),box-shadow var(--motion-normal) var(--ease-standard),transform var(--motion-normal) var(--ease-standard);}
 
@@ -726,7 +730,10 @@ input[type="file"]{min-height:42px;padding:7px 9px;border-radius:var(--control-r
   .commandBackdrop,.commandBackdrop.is-visible{opacity:1;}
   .commandPalette,.commandBackdrop.is-visible .commandPalette{opacity:1;transform:none;}
   .buiTraceBody,.buiTraceBody.is-open{grid-template-rows:1fr;opacity:1;padding-top:5px;padding-bottom:9px;}
-  .mobileNavBackdrop{opacity:1;}
+  .mobileNavBackdrop,.mobileNavBackdrop.is-visible{opacity:1;}
+  .mobileNavBackdrop.is-closing{opacity:0;}
+  .areaMenu,.areaMenu.is-visible{opacity:1;transform:none;}
+  .areaMenu.is-closing{opacity:0;}
   .widgetPickerBackdrop,.widgetPickerBackdrop.is-closing{opacity:1;}
   .widgetPicker,.widgetPickerBackdrop.is-closing .widgetPicker{transform:none;}
 }

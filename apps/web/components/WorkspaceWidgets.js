@@ -1,7 +1,7 @@
 "use client";
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import Icon from './Icon';
 import { buildHeatmap, buildOutputDistribution, buildWeeklyTrend, formatRelativeDate, loadWorkspaceData, normalizeClaimRecord, outputTypeMeta } from '../lib/workspaceData';
@@ -76,6 +76,11 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
   const [pickerClosing, setPickerClosing] = useState(false);
   const pickerCloseTimer = useRef(null);
   const [dragged, setDragged] = useState(null);
+  const gridRef = useRef(null);
+  const itemRefs = useRef(new Map());
+  const previousRects = useRef(null);
+  const flipTimers = useRef([]);
+  const reducedMotion = useReducedMotion();
   const openPicker = useCallback(next => { clearTimeout(pickerCloseTimer.current); setPickerClosing(false); setPicker(next); }, []);
   const closePicker = useCallback(() => {
     if (!picker) return;
@@ -85,7 +90,40 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
   }, [picker]);
   useEffect(() => () => clearTimeout(pickerCloseTimer.current), []);
   useEffect(() => setLayout(readLayout(pageId, defaults)), [pageId]);
-  function commit(next) { setLayout(next); saveLayout(pageId, next); }
+  function commit(next) {
+    if (!reducedMotion && gridRef.current) {
+      previousRects.current = new Map([...itemRefs.current.entries()].map(([id, node]) => [id, node.getBoundingClientRect()]));
+    }
+    setLayout(next); saveLayout(pageId, next);
+  }
+  useLayoutEffect(() => {
+    flipTimers.current.forEach(timer => clearTimeout(timer));
+    flipTimers.current = [];
+    if (reducedMotion || !previousRects.current) { previousRects.current = null; return undefined; }
+    const oldRects = previousRects.current;
+    previousRects.current = null;
+    const moved = [];
+    itemRefs.current.forEach((node, id) => {
+      const oldRect = oldRects.get(id);
+      if (!oldRect || !node) return;
+      const nextRect = node.getBoundingClientRect();
+      const dx = oldRect.left - nextRect.left;
+      const dy = oldRect.top - nextRect.top;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      node.style.transition = 'none';
+      node.style.transform = `translate(${dx}px, ${dy}px)`;
+      moved.push(node);
+    });
+    if (!moved.length) return undefined;
+    void gridRef.current?.offsetWidth;
+    const frame = requestAnimationFrame(() => moved.forEach(node => {
+      node.style.transition = 'transform 200ms var(--ease-standard)';
+      node.style.transform = '';
+    }));
+    const timer = window.setTimeout(() => moved.forEach(node => { node.style.transition = ''; node.style.transform = ''; }), 220);
+    flipTimers.current.push(timer);
+    return () => { cancelAnimationFrame(frame); moved.forEach(node => { node.style.transition = ''; node.style.transform = ''; }); };
+  }, [layout, reducedMotion]);
   function move(from, to) {
     if (from === to || from == null || to == null) return;
     const next = [...layout]; const [item] = next.splice(from, 1); next.splice(to, 0, item); commit(next);
@@ -106,9 +144,11 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
       </div>
     </div>
     {editing && <div className="layoutNotice"><Icon name="drag"/><span>拖动组件改变顺序，也可以替换、隐藏或调整宽度。排布只保存在这台设备上。</span></div>}
-    <div className="widgetGrid">
+    <div className="widgetGrid" ref={gridRef}>
       {layout.map((item, index) => <article
-        key={`${item.id}-${index}`}
+        key={item.id}
+        data-widget-id={item.id}
+        ref={node => { if (node) itemRefs.current.set(item.id, node); else itemRefs.current.delete(item.id); }}
         className={`widgetCard span-${item.span || 1} ${editing ? 'is-editing' : ''}`}
         draggable={editing}
         onDragStart={() => setDragged(index)}
