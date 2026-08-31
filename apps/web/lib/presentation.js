@@ -58,6 +58,15 @@ export const sourceTypeLabel = value => labelFor('sourceType', value, '其他资
 export const activityLabel = value => labelFor('activity', value, '未知活动');
 export const connectionLabel = value => labelFor('connection', value);
 export const domainLabel = value => labelFor('domain', value, '当前兴趣');
+
+export function domainDisplayName(area) {
+  if (!area) return '通用兴趣';
+  const known = domainLabel(area.domain_pack_id);
+  if (known !== '当前兴趣') return known;
+  const raw = String(area.domain_name || '').trim();
+  if (!raw || /[_/.]/.test(raw) || /^[a-z0-9-]+$/i.test(raw)) return '自定义兴趣';
+  return raw.slice(0, 80);
+}
 export const platformLabel = value => labelFor('platform', value, '未知平台');
 export const capabilityLabel = value => labelFor('capability', value, '本轮对话');
 export const revisionModeLabel = value => labelFor('revisionMode', value, '修改');
@@ -75,6 +84,14 @@ const REVERIFICATION_REASON_LABELS = {
 const ENGINE_REASON_LABELS = {
   'FEATURE_DEEP_RESEARCH disabled': '深入研究能力暂未启用',
   'engine planning failed': '研究计划暂时无法建立',
+};
+
+const ENGINE_LABELS = {
+  native: '本地执行服务',
+  fallback: '备用生成通道',
+  'local-template': '本地模板',
+  deepseek: 'DeepSeek',
+  deepseek_transport: 'DeepSeek',
 };
 
 const REVIEW_ISSUE_LABELS = {
@@ -110,6 +127,10 @@ export function reverificationReasonLabel(value) {
 
 export function engineReasonLabel(value) {
   return labelForMap(ENGINE_REASON_LABELS, value, '研究结果不完整，需要进一步检查');
+}
+
+export function engineLabel(value) {
+  return labelForMap(ENGINE_LABELS, value, '生成通道');
 }
 
 export function reviewIssueLabel(issue) {

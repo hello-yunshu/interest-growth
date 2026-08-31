@@ -139,9 +139,9 @@ jobs:
       - name: Lint Web
         working-directory: apps/web
         run: npm run lint
-      - name: Run ClientRuntime tests (contract + Android runtime + connect-controller)
+      - name: Run Web unit tests (presentation + ClientRuntime)
         working-directory: apps/web
-        run: node --test lib/runtime/test/*.test.mjs
+        run: npm run test:web-unit
       - name: Build static Web
         working-directory: apps/web
         env:

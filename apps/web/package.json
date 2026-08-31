@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint app components lib --max-warnings=0",
+    "test:web-unit": "node --test lib/test/*.test.mjs lib/runtime/test/*.test.mjs",
     "e2e:web": "playwright test"
   },
   "dependencies": {
