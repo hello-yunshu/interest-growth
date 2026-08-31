@@ -128,7 +128,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7.0.1 # v7.0.1
       - name: Set up Node
-        uses: actions/setup-node@v6.5.0 # v6.5.0
+        uses: actions/setup-node@v7.0.0 # v7.0.0
         with:
           node-version: "22"
           cache: npm
@@ -162,7 +162,7 @@ jobs:
         with:
           toolchain: stable
       - name: Set up Node
-        uses: actions/setup-node@v6.5.0 # v6.5.0
+        uses: actions/setup-node@v7.0.0 # v7.0.0
         with:
           node-version: "22"
           cache: npm
@@ -205,7 +205,7 @@ jobs:
           python -m pip install -e ".[rag-graphrag]" pip-audit
           pip-audit --skip-editable --ignore-vuln PYSEC-2026-113
       - name: Set up Node
-        uses: actions/setup-node@v6.5.0 # v6.5.0
+        uses: actions/setup-node@v7.0.0 # v7.0.0
         with:
           node-version: "22"
           cache: npm

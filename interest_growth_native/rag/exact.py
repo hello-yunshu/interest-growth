@@ -433,7 +433,7 @@ class PageIndexExactAdapter:
 
     engine_id = "pageindex"
     upstream_distribution = "pageindex"
-    reviewed_version = "0.1.3 SDK reviewed 2026-08-13"
+    reviewed_version = "0.2.8 SDK reviewed 2026-08-31"
 
     def __init__(
         self,
@@ -447,7 +447,7 @@ class PageIndexExactAdapter:
         if not api_key:
             raise ExactRagDependencyError("PageIndex API key must be supplied from server-side secret storage")
         if runtime is None:
-            _checked_distribution(self.upstream_distribution, ("0.1.3",))
+            _checked_distribution(self.upstream_distribution, ("0.2.8",))
             from pageindex import PageIndexClient
 
             runtime = SimpleNamespace(PageIndexClient=PageIndexClient)
@@ -514,9 +514,15 @@ class PageIndexExactAdapter:
     def retrieve(self, built: _Built, *, query: str, top_k: int) -> list[RetrievalCandidate]:
         output = []
         for doc_id, source in built.upstream.items():
-            submitted = self.client.submit_retrieval_query(doc_id, query, thinking=False)
+            submit_query = getattr(self.client, "submit_query", None) or getattr(
+                self.client, "submit_retrieval_query"
+            )
+            submitted = submit_query(doc_id, query, thinking=False)
             retrieval_id = self._operation_id(submitted, "retrieval_id", "id")
-            payload = self._wait(self.client.get_retrieval_result, retrieval_id)
+            get_retrieval = getattr(self.client, "get_retrieval", None) or getattr(
+                self.client, "get_retrieval_result"
+            )
+            payload = self._wait(get_retrieval, retrieval_id)
             for row in self._hits(payload):
                 ordinal = len(output)
                 text = str(row.get("text") or row.get("content") or row.get("snippet") or row.get("summary") or "")
