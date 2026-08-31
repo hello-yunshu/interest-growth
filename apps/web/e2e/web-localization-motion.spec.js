@@ -18,6 +18,12 @@ function initScript() {
     async invoke(cmd, args = {}) {
       if (cmd === 'desktop_runtime') return { runtimeId: 'desktop-local', status: 'ok', version: '1.0.0', platform: 'linux', endpoint: '' };
       if (cmd === 'desktop_runtime_mode') return { runtimeId: 'desktop-local', activeRuntimeId: 'desktop-local', pendingRuntimeId: 'desktop-local' };
+      if (cmd === 'restart_desktop_core') {
+        window.__E2E_RESTART_CALLS = (window.__E2E_RESTART_CALLS || 0) + 1;
+        if (window.__E2E_DELAY_RESTART__) await new Promise(resolve => setTimeout(resolve, 500));
+        if (window.__E2E_REJECT_RESTART__) throw { code: 'LOCAL_SERVICE_UNAVAILABLE' };
+        return { status: 'ok', version: '1.0.0' };
+      }
       if (args.kind && /secret|provider/i.test(cmd)) return { kind: args.kind, configured: false, secureStoreAvailable: false };
       return {};
     },
@@ -47,7 +53,14 @@ test('overlays, activity trace and reduced motion have functional fallbacks', as
   const search = page.locator('button.globalSearch');
   await search.focus();
   await search.click();
-  await expect(page.locator('[role="dialog"][aria-label="快速跳转"]')).toBeVisible();
+  const commandDialog = page.locator('[role="dialog"][aria-label="快速跳转"]');
+  await expect(commandDialog).toBeVisible();
+  await expect(commandDialog.locator('input')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(commandDialog).toContainText('快速跳转');
+  expect(await commandDialog.evaluate(dialog => dialog.contains(document.activeElement))).toBeTruthy();
+  await page.keyboard.press('Shift+Tab');
+  await expect(commandDialog.locator('input')).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.locator('.commandBackdrop')).toHaveCount(0, { timeout: 1_000 });
   await expect(search).toBeFocused();
@@ -118,4 +131,78 @@ test('Curiosity write action is busy, disabled and not duplicated', async ({ pag
   await expect(submit).toHaveAttribute('aria-label', '记录问题', { timeout: 2_000 });
   await input.fill('确认忙碌态已经结束');
   await expect(submit).toBeEnabled({ timeout: 2_000 });
+});
+
+test('Learning sections are unique and concept save is busy-safe', async ({ page }) => {
+  let writes = 0;
+  await page.route(/\/api\/concepts(?:\?.*)?$/, async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() !== 'POST' || !url.pathname.endsWith('/concepts')) return route.continue();
+    writes += 1;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'learning-busy-test' }) });
+  });
+  await ready(page, '/learning');
+  await expect(page.getByRole('heading', { name: '建立一个概念', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: '概念与理解', exact: true })).toHaveCount(1);
+
+  await page.getByRole('tab', { name: /笔记/ }).click();
+  await expect(page.getByRole('heading', { name: '写一条学习笔记', exact: true })).toHaveCount(1);
+  await page.getByRole('tab', { name: /练习/ }).click();
+  await expect(page.getByRole('heading', { name: '新增一道练习', exact: true })).toHaveCount(1);
+
+  await page.getByRole('tab', { name: /概念/ }).click();
+  const conceptCard = page.locator('section.card').filter({ hasText: '建立一个概念' }).first();
+  await conceptCard.locator('input').fill('忙碌态测试概念');
+  const save = conceptCard.locator('button').first();
+  await save.click();
+  await expect(save).toBeDisabled();
+  await expect(save).toHaveText('正在保存…');
+  await save.click({ force: true });
+  await expect.poll(() => writes).toBe(1);
+  await expect(save).toBeEnabled({ timeout: 2_000 });
+});
+
+test('System feature write is busy-safe and handles failure in user copy', async ({ page }) => {
+  let writes = 0;
+  await page.route(/\/api\/features\/[^/]+$/, async route => {
+    const request = route.request();
+    if (request.method() !== 'PUT') return route.continue();
+    writes += 1;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) });
+  });
+  await ready(page, '/system');
+  await page.getByRole('tab', { name: /功能开关/ }).click();
+  const toggle = page.locator('tbody tr').first().locator('button').first();
+  await toggle.click();
+  await expect(toggle).toBeDisabled();
+  await expect(toggle).toHaveText('处理中…');
+  await toggle.click({ force: true });
+  await expect.poll(() => writes).toBe(1);
+  await expect(toggle).toBeEnabled({ timeout: 2_000 });
+
+  await page.unroute(/\/api\/features\/[^/]+$/);
+  await page.route(/\/api\/features\/[^/]+$/, async route => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'internal feature failure' }) });
+  });
+  await toggle.click();
+  await expect(page.locator('.notice')).toContainText('本地服务');
+});
+
+test('Workspace replace picker preserves unique widget identity', async ({ page }) => {
+  await ready(page, '/learning');
+  await page.getByRole('button', { name: '调整工作台' }).click();
+  const cards = page.locator('.widgetCard');
+  const otherWidgetId = await cards.nth(1).getAttribute('data-widget-id');
+  await cards.first().getByRole('button', { name: '替换' }).click();
+  const picker = page.locator('[role="dialog"][aria-labelledby="widget-picker-title"]');
+  await expect(picker).toBeVisible();
+  const otherTitle = { 'review-queue': '待复习内容', 'questions': '待回答的问题', 'recent-outputs': '最近产出' }[otherWidgetId] || '待复习内容';
+  await expect(picker.getByRole('button', { name: new RegExp(otherTitle) })).toHaveCount(0);
+  await picker.getByRole('button', { name: /学习节奏/ }).click();
+  const ids = await page.locator('.widgetCard').evaluateAll(nodes => nodes.map(node => node.dataset.widgetId));
+  expect(new Set(ids).size).toBe(ids.length);
 });

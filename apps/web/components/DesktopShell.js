@@ -8,7 +8,7 @@ import { api, getDesktopRuntime, refreshDesktopRuntime, getInterestAreaSelector,
 import Icon from './Icon';
 import { useRuntimeCopy } from './useRuntimeCopy';
 import { maybeRunUiIpcE2e } from '../lib/runtime/ui-ipc-e2e';
-import { domainLabel, sourceTypeLabel, toUserMessage } from '../lib/presentation.js';
+import { domainDisplayName, sourceTypeLabel, toUserMessage } from '../lib/presentation.js';
 
 const NAV = [
   { href: '/', label: '今日', icon: 'home', group: 'focus', keywords: 'home dashboard today 首页' },
@@ -39,6 +39,7 @@ function CommandPalette({ open, onClose, runtimeCopy }) {
   const [contentRows, setContentRows] = useState([]);
   const [searching, setSearching] = useState(false);
   const previousFocus = useRef(null);
+  const dialogRef = useRef(null);
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(open);
   const router = useRouter();
@@ -81,10 +82,28 @@ function CommandPalette({ open, onClose, runtimeCopy }) {
   }, [open, query]);
   const rows = useMemo(() => [...navigationRows, ...contentRows], [navigationRows, contentRows]);
   useEffect(() => { setActive(value => Math.min(value, Math.max(0, rows.length - 1))); }, [rows.length]);
+  useEffect(() => {
+    if (!open || !mounted) return undefined;
+    const dialog = dialogRef.current;
+    const controls = () => [...(dialog?.querySelectorAll('input, button, [href], select, textarea, [tabindex]:not([tabindex="-1"])') || [])].filter(node => !node.disabled);
+    dialog?.querySelector('input')?.focus();
+    const handleKeyDown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const items = controls();
+      if (!items.length) return;
+      const first = items[0]; const last = items[items.length - 1];
+      if (!dialog.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
+      else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    dialog?.addEventListener('keydown', handleKeyDown);
+    return () => dialog?.removeEventListener('keydown', handleKeyDown);
+  }, [open, mounted, onClose, rows.length]);
   function choose(item) { if (!item) return; router.push(item.href); onClose(); }
   if (!mounted) return null;
   return <div className={`commandBackdrop ${visible ? 'is-visible' : 'is-closing'}`} onMouseDown={onClose}>
-    <div className="commandPalette" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="快速跳转">
+    <div ref={dialogRef} className="commandPalette" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="快速跳转">
       <div className="commandInputRow"><Icon name="search"/><input autoFocus value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} placeholder="搜索页面、问题、笔记或资料" onKeyDown={event => { if (event.key === 'Escape') onClose(); if (event.key === 'ArrowDown') { event.preventDefault(); setActive(value => Math.min(rows.length - 1, value + 1)); } if (event.key === 'ArrowUp') { event.preventDefault(); setActive(value => Math.max(0, value - 1)); } if (event.key === 'Enter') { event.preventDefault(); choose(rows[active]); } }}/><kbd>ESC</kbd></div>
       <div className="commandResults" aria-live="polite">{rows.map((item, index) => <button key={item.id} className={`commandItem ${index === active ? 'is-active' : ''}`} onMouseEnter={() => setActive(index)} onClick={() => choose(item)}><span className="commandIcon"><Icon name={item.icon}/></span><span><strong>{item.label}</strong><small>{item.detail || item.kind}</small></span>{index === active && <kbd>↵</kbd>}</button>)}{!rows.length && <div className="commandEmpty"><Icon name="search"/><strong>{searching ? runtimeCopy.searchEmptyTitle : '没有找到匹配内容'}</strong><span>{searching ? runtimeCopy.searchEmptyHint : '换一个更短的关键词试试。'}</span></div>}</div>
       <div className="commandFooter"><span>{query.trim() ? '当前兴趣中的页面与内容' : '快速跳转'}</span><span><kbd>↑↓</kbd> 选择 <kbd>↵</kbd> 打开</span></div>
@@ -139,7 +158,7 @@ function AreaSwitcher({ areas, current, onSwitch, onCreated, busy = false }) {
     <span>当前兴趣</span>
     <button ref={triggerRef} className="areaSelectButton" onClick={() => (menuMounted && creating ? closeMenu() : openMenu())} aria-expanded={menuMounted && creating}><strong>{current?.name || '选择兴趣'}</strong><Icon name="chevronDown" size={14}/></button>
     {menuMounted && <div ref={menuRef} className={`areaMenu ${menuVisible ? 'is-visible' : 'is-closing'}`} data-state={menuVisible ? 'open' : 'closing'}>
-      <div className="areaMenuList">{(areas || []).map(area => <button key={area.id} className={area.id === current?.id ? 'active' : ''} disabled={busy || saving} onClick={() => { onSwitch(area.id); closeMenu({ restoreFocus: false }); }}><span>{area.name.slice(0, 1).toUpperCase()}</span><div><strong>{area.name}</strong><small>{area.domain_name || domainLabel(area.domain_pack_id)}</small></div>{area.id === current?.id && <Icon name="check"/>}</button>)}</div>
+      <div className="areaMenuList">{(areas || []).map(area => <button key={area.id} className={area.id === current?.id ? 'active' : ''} disabled={busy || saving} onClick={() => { onSwitch(area.id); closeMenu({ restoreFocus: false }); }}><span>{area.name.slice(0, 1).toUpperCase()}</span><div><strong>{area.name}</strong><small>{domainDisplayName(area)}</small></div>{area.id === current?.id && <Icon name="check"/>}</button>)}</div>
       <form className="areaCreateForm" onSubmit={create}><strong>新建兴趣</strong><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value, slug: event.target.value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/[\u4e00-\u9fa5]/g, '') || `interest-${Date.now()}` })} placeholder="例如：城市摄影" required disabled={busy || saving}/><select value={form.domain_pack_id} onChange={event => setForm({ ...form, domain_pack_id: event.target.value })} disabled={busy || saving}><option value="general">通用兴趣</option><option value="psychology">心理学</option></select>{error && <p className="formError">{error}</p>}<button type="submit" className="compactPrimary" disabled={busy || saving}><Icon name="plus"/>{saving ? '正在创建…' : '创建兴趣'}</button></form>
     </div>}
   </div>;

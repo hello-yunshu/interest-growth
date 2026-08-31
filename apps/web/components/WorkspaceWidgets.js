@@ -36,6 +36,15 @@ export const PAGE_DEFAULTS = {
   growth: [{ id: 'heatmap', span: 2 }, { id: 'weekly-trend', span: 1 }],
 };
 
+function uniqueLayout(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter(item => {
+    if (!item?.id || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
 const META = {
   'recent-outputs': { title: '最近产出', description: '最近沉淀下来的笔记、练习、研究与作品。', icon: 'outputs' },
   focus: { title: '此刻的焦点', description: '在继续学习和下一步之间切换。', icon: 'target' },
@@ -70,7 +79,7 @@ export function useWorkspaceData() {
 export function WorkspaceBoard({ pageId, data, loading = false, compact = false, title = '你的工作台' }) {
   const defaults = PAGE_DEFAULTS[pageId] || [];
   const available = PAGE_WIDGETS[pageId] || [];
-  const [layout, setLayout] = useState(defaults);
+  const [layout, setLayout] = useState(() => uniqueLayout(defaults));
   const [editing, setEditing] = useState(false);
   const [picker, setPicker] = useState(null);
   const [pickerClosing, setPickerClosing] = useState(false);
@@ -89,12 +98,13 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
     pickerCloseTimer.current = window.setTimeout(() => { setPicker(null); setPickerClosing(false); }, 180);
   }, [picker]);
   useEffect(() => () => clearTimeout(pickerCloseTimer.current), []);
-  useEffect(() => setLayout(readLayout(pageId, defaults)), [pageId]);
+  useEffect(() => setLayout(uniqueLayout(readLayout(pageId, defaults))), [pageId]);
   function commit(next) {
+    const safeNext = uniqueLayout(next);
     if (!reducedMotion && gridRef.current) {
       previousRects.current = new Map([...itemRefs.current.entries()].map(([id, node]) => [id, node.getBoundingClientRect()]));
     }
-    setLayout(next); saveLayout(pageId, next);
+    setLayout(safeNext); saveLayout(pageId, safeNext);
   }
   useLayoutEffect(() => {
     flipTimers.current.forEach(timer => clearTimeout(timer));
@@ -129,12 +139,21 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
     const next = [...layout]; const [item] = next.splice(from, 1); next.splice(to, 0, item); commit(next);
   }
   function moveBy(index, offset) { move(index, Math.max(0, Math.min(layout.length - 1, index + offset))); }
-  function replace(index, id) { const next = [...layout]; next[index] = { ...next[index], id }; commit(next); closePicker(); }
+  function replace(index, id) {
+    if (!layout[index] || layout.some((item, itemIndex) => itemIndex !== index && item.id === id)) return;
+    const next = [...layout]; next[index] = { ...next[index], id }; commit(next); closePicker();
+  }
   function remove(index) { commit(layout.filter((_, i) => i !== index)); }
-  function add(id) { commit([...layout, { id, span: id === 'heatmap' || id === 'recent-outputs' ? 2 : 1 }]); closePicker(); }
+  function add(id) {
+    if (layout.some(item => item.id === id)) return;
+    commit([...layout, { id, span: id === 'heatmap' || id === 'recent-outputs' ? 2 : 1 }]); closePicker();
+  }
   function resize(index) { const next = [...layout]; next[index] = { ...next[index], span: next[index].span === 2 ? 1 : 2 }; commit(next); }
-  function reset() { resetLayout(pageId); setLayout(defaults); setEditing(false); }
+  function reset() { resetLayout(pageId); setLayout(uniqueLayout(defaults)); setEditing(false); }
   const unused = available.filter(id => !layout.some(item => item.id === id));
+  const replaceable = picker?.mode === 'replace'
+    ? available.filter(id => id !== layout[picker.index]?.id && !layout.some((item, index) => index !== picker.index && item.id === id))
+    : unused;
   return <section className={`workspaceBoard ${compact ? 'is-compact' : ''}`} aria-label={title}>
     <div className="boardTopline">
       <div><span className="sectionKicker">可按你的方式安排</span>{!compact && <h2>{title}</h2>}</div>
@@ -167,7 +186,7 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
       </article>)}
       {editing && unused.length > 0 && <button className="addWidgetCard" onClick={() => openPicker({ mode: 'add' })}><Icon name="plus" size={22}/><strong>添加组件</strong><span>选择一个对这里有用的入口或统计</span></button>}
     </div>
-    {picker && <WidgetPicker closing={pickerClosing} ids={picker.mode === 'replace' ? available.filter(id => id !== layout[picker.index]?.id) : unused} onChoose={id => picker.mode === 'replace' ? replace(picker.index, id) : add(id)} onClose={closePicker}/>}
+    {picker && <WidgetPicker closing={pickerClosing} ids={replaceable} onChoose={id => picker.mode === 'replace' ? replace(picker.index, id) : add(id)} onClose={closePicker}/>}
   </section>;
 }
 

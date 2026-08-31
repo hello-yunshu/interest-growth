@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   activityLabel,
+  domainDisplayName,
+  engineLabel,
   engineReasonLabel,
   energyLabel,
   platformLabel,
@@ -32,6 +34,10 @@ test('presentation vocabulary maps known backend values and never leaks unknown 
   assert.equal(activityLabel('brand_new_event'), '未知活动');
   assert.equal(verificationLabel('brand_new_backend_state'), '未知状态');
   assert.equal(revisionModeLabel('brand_new_mode'), '修改');
+  assert.equal(engineLabel('native'), '本地执行服务');
+  assert.equal(engineLabel('new_internal_engine'), '生成通道');
+  assert.equal(domainDisplayName({ domain_pack_id: 'psychology', domain_name: 'internal-pack-name' }), '心理学');
+  assert.equal(domainDisplayName({ domain_pack_id: 'unknown', domain_name: 'custom-domain-name' }), '自定义兴趣');
   assert.equal(reverificationReasonLabel('brand_new_reason'), '需要重新核验');
   assert.equal(engineReasonLabel('FEATURE_DEEP_RESEARCH disabled'), '深入研究能力暂未启用');
   assert.equal(engineReasonLabel('brand_new_reason'), '研究结果不完整，需要进一步检查');
