@@ -26,6 +26,7 @@ const labels = {
   severity: { high: '高风险', medium: '中等风险', low: '低风险', critical: '严重风险', warning: '提醒' },
   sourceType: { paper: '论文', book: '书籍', web: '网页', report: '报告', document: '文档', note: '学习笔记', learning_note: '学习笔记', practice: '练习记录', activity: '实践记录' },
   capability: { chat: '对话', deep_question: '深入提问', mastery_path: '学习路径', deep_research: '深入研究', visualize: '可视化' },
+  revisionMode: { rewrite: '改写', shorten: '缩短', expand: '展开' },
   activity: {
     stage_start: '开始阶段', stage_end: '阶段完成', progress: '进展', tool_call: '调用工具',
     tool_result: '工具结果', sources: '来源', wait_for_input: '等待你的输入', error: '出错了',
@@ -59,6 +60,70 @@ export const connectionLabel = value => labelFor('connection', value);
 export const domainLabel = value => labelFor('domain', value, '当前兴趣');
 export const platformLabel = value => labelFor('platform', value, '未知平台');
 export const capabilityLabel = value => labelFor('capability', value, '本轮对话');
+export const revisionModeLabel = value => labelFor('revisionMode', value, '修改');
+
+const REVERIFICATION_REASON_LABELS = {
+  missing_current_version: '缺少当前版本，需要重新核对',
+  no_supporting_evidence: '还没有支持证据，需要重新核对',
+  supporting_evidence_not_human_verified: '支持证据尚未完成人工核验',
+  source_verification_missing_or_revoked: '来源核验缺失或已撤销',
+  claim_not_human_verified: '主张尚未完成人工核验',
+  never_verified_current_version: '当前版本尚未核验',
+  verification_stale: '核验时间已久，需要重新查看',
+};
+
+const ENGINE_REASON_LABELS = {
+  'FEATURE_DEEP_RESEARCH disabled': '深入研究能力暂未启用',
+  'engine planning failed': '研究计划暂时无法建立',
+};
+
+const REVIEW_ISSUE_LABELS = {
+  no_supporting_evidence: '还没有支持证据，不能进入人工核验。',
+  missing_supporting_evidence: '引用的部分支持证据已经不存在。',
+  support_not_human_verified: '至少一条支持证据尚未完成人工核验。',
+  source_not_human_verified: '至少一条支持证据没有指向已人工核验的来源。',
+  ai_summary_only_source: '支持证据仍依赖自动摘要，不能作为已核验证据链。',
+  no_counter_or_boundary_evidence: '还没有记录相反或边界证据，请确认是否存在条件、例外或争议。',
+  missing_counter_evidence: '部分相反或边界证据已经不存在，需要重新核对。',
+  missing_limitations: '主张没有写明限制或适用边界。',
+  confidence_exceeds_evidence_base: '当前证据数量不足以支持这么高的置信度。',
+  absolute_language: '表述可能过于绝对，请确认研究是否支持这样的强度。',
+  diagnostic_language: '表述包含个体诊断意味，不能把群体研究直接转为个体诊断。',
+  causal_language: '表述包含因果意味，请确认研究设计足以支持因果推断。',
+  learning_only_boundary: '当前主张只适合内部学习或暂缓公开。',
+};
+
+const RISK_REVIEW_LABELS = {
+  language_risk: '这段表达需要根据当前领域规则进一步检查。',
+  claim_not_human_verified: '引用的主张尚未完成人工核验。',
+  support_not_fully_verified: '引用主张的支持证据尚未全部核验。',
+  ai_summary_only_source: '引用主张仍依赖自动摘要来源。',
+  claim_not_publishable: '引用主张当前只适合内部学习，暂缓公开。',
+  claim_has_no_counter_evidence: '引用主张还没有相反或边界证据。',
+  no_human_verified_evidence: '当前领域要求事实表达建立人工核验的证据链。',
+  no_counter_evidence: '当前内容还没有记录相反或边界证据。',
+};
+
+export function reverificationReasonLabel(value) {
+  return labelForMap(REVERIFICATION_REASON_LABELS, value, '需要重新核验');
+}
+
+export function engineReasonLabel(value) {
+  return labelForMap(ENGINE_REASON_LABELS, value, '研究结果不完整，需要进一步检查');
+}
+
+export function reviewIssueLabel(issue) {
+  return labelForMap(REVIEW_ISSUE_LABELS, issue?.code, '这项内容需要进一步检查。');
+}
+
+export function riskReviewLabel(review) {
+  return labelForMap(RISK_REVIEW_LABELS, review?.code, '这项内容需要根据当前领域规则进一步检查。');
+}
+
+function labelForMap(map, value, fallback) {
+  const raw = String(value ?? '').trim();
+  return raw && map[raw] ? map[raw] : fallback;
+}
 
 export function statusLabel(value) {
   return taskLabel(value);
