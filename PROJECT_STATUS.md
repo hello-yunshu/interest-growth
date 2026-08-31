@@ -129,7 +129,7 @@ Source + remote Actions closure for the R2 release gates, at branch tip `f197079
 - frozen v0.5 Host archive: exact SHA-256 verified, **246 files**, original **104 tests PASS**;
 - merged Host/native regression suite: **234 tests PASS**;
 - standalone Native Execution Core verification: **97 tests PASS**;
-- reviewed exact RAG API smoke: LlamaIndex 0.14, LightRAG 1.5, GraphRAG 3.1 and PageIndex 0.1.3 PASS;
+- reviewed exact RAG API smoke: LlamaIndex 0.14, LightRAG 1.5, GraphRAG 3.1 and PageIndex 0.2.8 PASS;
 - compileall: PASS;
 - self-audit: PASS;
 - Web ESLint and production static build: PASS (**15 static pages**);
