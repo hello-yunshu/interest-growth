@@ -102,7 +102,7 @@ test('overlays, activity trace and reduced motion have functional fallbacks', as
 test('Curiosity write action is busy, disabled and not duplicated', async ({ page }) => {
   let writes = 0;
   await page.route('**/questions', async route => {
-    if (route.request().method() !== 'POST') return route.continue();
+    if (route.request().method() !== 'POST') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ questions: [] }) });
     writes += 1;
     await new Promise(resolve => setTimeout(resolve, 500));
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'busy-test' }) });
