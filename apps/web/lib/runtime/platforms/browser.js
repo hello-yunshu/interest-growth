@@ -57,7 +57,16 @@ export async function setDesktopProviderSettings(_settings) {
 // enroll a self-hosted server or hold a native keyring credential; browser
 // remote remains a planned (secure-cookie) runtime, so every path stays inert.
 export async function getDesktopRuntimeMode() {
-  return { runtimeId: 'desktop-local', sidecarLaunch: false, sessionImmutable: true };
+  // Keep the browser adapter on the same mode contract as the native
+  // adapters. RuntimeConnect dispatches these values as MODE_LOADED; using
+  // the legacy `runtimeId` field leaves activeRuntimeId undefined and makes
+  // the fail-closed reducer reject the browser connection screen.
+  return {
+    activeRuntimeId: 'desktop-local',
+    pendingRuntimeId: 'desktop-local',
+    sidecarLaunch: false,
+    sessionImmutable: true,
+  };
 }
 
 export async function setDesktopRuntimeMode(_runtimeId) {
