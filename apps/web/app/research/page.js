@@ -4,9 +4,11 @@ import { api, openExternalUrl } from '../../lib/api';
 import { ApprovalCard, FilterTabs, PixelLoader, PromptBar, RecommendationCard, StatusChip, StreamingText, ToolChips } from '../../components/BeautifulUI';
 import { WorkspaceBoard, useWorkspaceData } from '../../components/WorkspaceWidgets';
 import { energyLabel, engineReasonLabel, publishabilityLabel, reverificationReasonLabel, reviewIssueLabel, severityLabel, sourceTypeLabel, statusLabel, toUserMessage, verificationLabel } from '../../lib/presentation.js';
+import { useCapabilityAvailability } from '../../lib/capabilities';
 
 export default function ResearchPage() {
   const workspace = useWorkspaceData();
+  const capability = useCapabilityAvailability();
   const [topics, setTopics] = useState([]);
   const [knowledgeBases, setKnowledgeBases] = useState([]);
   const [selectedKbIds, setSelectedKbIds] = useState([]);
@@ -14,6 +16,9 @@ export default function ResearchPage() {
   const [topicId, setTopicId] = useState('');
   const [question, setQuestion] = useState('');
   const [depth, setDepth] = useState('normal');
+  const [plan, setPlan] = useState(null);
+  const [planTopics, setPlanTopics] = useState('');
+  const [planApproved, setPlanApproved] = useState(false);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [sources, setSources] = useState([]);
@@ -30,6 +35,7 @@ export default function ResearchPage() {
   const [reverification, setReverification] = useState([]);
   const [invalidateDraft, setInvalidateDraft] = useState(null);
   const [ledgerTab, setLedgerTab] = useState('all');
+  const researchAvailable = capability.available('FEATURE_DEEP_RESEARCH', 'capability.research-evidence');
 
   async function loadTopics() {
     const t = await api('/topics'); setTopics(t.topics || []);
@@ -49,9 +55,20 @@ export default function ResearchPage() {
 
   const selectedTopic = useMemo(()=>topics.find(t=>t.id===topicId),[topics,topicId]);
 
+  async function generatePlan() {
+    if (busy || !question.trim()) return;
+    setBusy(true); setMessage(''); setPlanApproved(false);
+    try { const data=await api('/research/plan',{method:'POST',body:JSON.stringify({topic_id:topicId||null,question,depth,knowledge_base_ids:selectedKbIds,use_domain_skills:useSkills})}); setPlan(data.plan||null); setPlanTopics((data.plan?.subquestions||[]).map(item=>typeof item==='string'?item:item.title||'').join('\n')); setMessage('研究计划已生成，请检查并确认后再开始执行。'); }
+    catch(err){setMessage(toUserMessage(err));} finally {setBusy(false);}
+  }
+  function approvePlan() {
+    const subquestions=planTopics.split('\n').map(item=>item.trim()).filter(Boolean);
+    if(subquestions.length<2){setMessage('至少保留两个子问题，才能确认研究计划。');return;}
+    setPlan(current=>({...current,subquestions,approved:true}));setPlanApproved(true);setMessage('研究计划已确认；下一次执行会使用这份快照。');
+  }
   async function run(e) {
-    e?.preventDefault?.(); if (busy) return; setBusy(true); setMessage('');
-    try { setResult(await api('/research/run', { method:'POST', body:JSON.stringify({topic_id: topicId || null, question, depth, knowledge_base_ids:selectedKbIds, use_domain_skills:useSkills}) })); await loadWorkspace(); }
+    e?.preventDefault?.(); if (busy) return; if(!researchAvailable){setMessage('深入研究当前未启用；可继续整理本地证据，但不能执行研究。');return;} if(!planApproved||!plan){setMessage('请先生成并确认研究计划，再开始研究。');return;} setBusy(true); setMessage('');
+    try { setResult(await api('/research/run', { method:'POST', body:JSON.stringify({topic_id: topicId || null, question, depth, knowledge_base_ids:selectedKbIds, use_domain_skills:useSkills, approved_plan:plan}) })); await loadWorkspace(); }
     catch (err) { setMessage(toUserMessage(err)); }
     finally { setBusy(false); }
   }
@@ -118,7 +135,9 @@ export default function ResearchPage() {
           <div><div className="fieldLabel">领域能力</div><label className="check"><input type="checkbox" checked={useSkills} onChange={e=>setUseSkills(e.target.checked)}/><span>使用当前兴趣已配置的领域能力</span></label></div>
         </div>
       </div>
-      <div className="stack sectionTop"><div className="row"><select aria-label="研究深度" className="compactSelect" value={depth} onChange={e=>setDepth(e.target.value)}><option value="light">轻量</option><option value="normal">标准</option><option value="deep">深入</option></select><span className="muted">先生成候选理解，再进入人工证据链。</span></div><PromptBar value={question} onChange={setQuestion} onSubmit={run} disabled={busy} placeholder="输入需要研究的问题…" model={energyLabel(depth)} context={selectedKbIds.map(id=>knowledgeBases.find(k=>k.id===id)?.name).filter(Boolean)}/></div>
+      <div className="stack sectionTop"><div className="row"><select aria-label="研究深度" className="compactSelect" value={depth} onChange={e=>{setDepth(e.target.value);setPlan(null);setPlanApproved(false)}}><option value="light">轻量</option><option value="normal">标准</option><option value="deep">深入</option></select><span className="muted">{researchAvailable ? '先生成候选理解，再进入人工证据链。' : '研究执行当前关闭；本地来源、证据与主张账本仍可维护。'}</span></div><PromptBar value={question} onChange={value=>{setQuestion(value);setPlanApproved(false)}} onSubmit={generatePlan} disabled={busy || !researchAvailable} placeholder="输入需要研究的问题…" model={energyLabel(depth)} context={selectedKbIds.map(id=>knowledgeBases.find(k=>k.id===id)?.name).filter(Boolean)} sendLabel="生成研究计划"/></div>
+      {plan&&<ApprovalCard eyebrow="研究计划" title={planApproved?'已确认这份研究计划':'先检查，再执行研究'} description="执行会把确认后的计划写入 run input；不会展示一份计划、后台偷偷执行另一份。" tone={planApproved?'neutral':'warning'} actions={<button onClick={approvePlan} disabled={busy||planApproved||!researchAvailable}>{planApproved?'计划已确认':'确认计划并允许执行'}</button>}><p><strong>研究简报：</strong>{plan.brief||plan.question}</p><label>子问题（每行一个）<textarea value={planTopics} onChange={event=>{setPlanTopics(event.target.value);setPlanApproved(false)}} disabled={busy||planApproved}/></label><p className="muted">资料类型：{(plan.desired_sources||[]).join('、')||'由当前领域策略决定'} · 深度：{energyLabel(plan.depth||depth)} · 等待人工确认</p></ApprovalCard>}
+      {planApproved&&<div className="row sectionTop"><button onClick={run} disabled={busy||!question.trim()}>{busy?'正在执行…':'执行已确认的研究计划'}</button><span className="muted">研究结果仍是候选理解；来源、Evidence 与 Claim 继续人工维护。</span></div>}
       {message && <p className="notice">{message}</p>}
     </div>
 

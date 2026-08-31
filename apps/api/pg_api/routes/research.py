@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import func, select
 
 from pg_domain import CapabilityStatus
+from interest_growth_native.research import ResearchSubtopic
+from interest_growth_native.errors import ProviderExecutionError, ProviderUnavailable
 
 from ..db import (
     CapabilityRunModel,
@@ -21,7 +23,7 @@ from ..db import (
 from ..engines import ManualResearchEngine
 from ..domains import get_domain_context, filter_rows_to_current_area, require_entity_in_current_area
 from ..events import emit
-from ..features import feature_enabled
+from ..features import require_feature
 from ..plugins import require_plugin_access
 from ..native_execution import get_native_bundle, resolve_native_context
 from ..review import review_claim
@@ -66,17 +68,44 @@ def _resolve_domain_skills(enabled: bool) -> tuple[list[str], list[str]]:
     return requested, []
 
 
+def _approved_outline(plan: dict, question: str, depth: str):
+    """Convert the reviewed UI snapshot into the exact native run input."""
+    refined = str(plan.get("question") or plan.get("brief") or question).strip()
+    topics = []
+    for item in plan.get("subquestions") or []:
+        if isinstance(item, dict):
+            title = str(item.get("title") or item.get("question") or "").strip()
+            overview = str(item.get("overview") or "").strip()
+        else:
+            title, overview = str(item).strip(), ""
+        if title:
+            topics.append(ResearchSubtopic(title, overview))
+    if len(topics) < 2:
+        raise HTTPException(422, {"code": "validation_error", "detail": "approved_plan needs at least two subquestions"})
+    snapshot = dict(plan)
+    snapshot.update({"question": refined, "depth": depth, "approved": True})
+    return refined, tuple(topics[:8]), snapshot
+
+
 
 @router.post("/research/plan")
 async def create_research_plan(body: ResearchRequest, request: Request):
-    if not feature_enabled("FEATURE_DEEP_RESEARCH"):
-        engine = ManualResearchEngine({"domain_name": get_domain_context().domain_name, "research": get_domain_context().research})
-        return {"plan": asdict(await engine.create_plan(body.question, body.depth)), "engine_status": {"engine": "manual-workspace", "degraded": True, "reason": "FEATURE_DEEP_RESEARCH disabled"}}
+    require_feature("FEATURE_DEEP_RESEARCH")
     try:
         context = resolve_native_context(request, "research.run")
-        preview = get_native_bundle().research.preview_outline(
-            context, question=body.question, max_subtopics=5 if body.depth == "deep" else 3,
-        )
+        if body.approved_plan:
+            refined, approved_topics, approved_snapshot = _approved_outline(body.approved_plan, body.question, body.depth)
+            preview = type("ApprovedPreview", (), {
+                "refined_topic": refined,
+                "subtopics": approved_topics,
+                "status": "approved_by_user",
+                "clarification_questions": (),
+            })()
+        else:
+            preview = get_native_bundle().research.preview_outline(
+                context, question=body.question, max_subtopics=5 if body.depth == "deep" else 3,
+            )
+            approved_snapshot = None
         kb_ids, kb_warnings = _resolve_knowledge_base_ids(body.knowledge_base_ids)
         skills, skill_warnings = _resolve_domain_skills(body.use_domain_skills)
         plan = {
@@ -90,11 +119,14 @@ async def create_research_plan(body: ResearchRequest, request: Request):
             "clarification_questions": list(preview.clarification_questions),
             "review_status": preview.status,
         }
+        if approved_snapshot:
+            plan = {**approved_snapshot, **plan, "subquestions": [x.title for x in approved_topics]}
         status = {"engine": "native.interest-growth", "degraded": False, "warnings": kb_warnings + skill_warnings}
     except HTTPException:
         raise
-    except Exception:
-        # Planning failure must not block the user's question; keep a manual plan.
+    except (ProviderUnavailable, ProviderExecutionError):
+        # Provider failure may keep the planning workspace usable, but a disabled
+        # product gate never enters this branch.
         engine = ManualResearchEngine({"domain_name": get_domain_context().domain_name, "research": get_domain_context().research})
         plan = await engine.create_plan(body.question, body.depth)
         status = {"engine": "manual-workspace", "degraded": True, "reason": "engine planning failed"}
@@ -104,6 +136,7 @@ async def create_research_plan(body: ResearchRequest, request: Request):
 
 @router.post("/research/run")
 async def run_research(body: ResearchRequest, request: Request):
+    require_feature("FEATURE_DEEP_RESEARCH")
     if body.topic_id:
         with get_session_factory()() as db:
             if not db.get(TopicModel, body.topic_id):
@@ -119,8 +152,7 @@ async def run_research(body: ResearchRequest, request: Request):
     kb_ids, kb_warnings = _resolve_knowledge_base_ids(body.knowledge_base_ids)
     skills, skill_warnings = _resolve_domain_skills(body.use_domain_skills)
 
-    feature_active = feature_enabled("FEATURE_DEEP_RESEARCH")
-    engine_status = {"engine": "native.interest-growth", "degraded": False} if feature_active else {"engine": "manual-workspace", "degraded": True, "reason": "FEATURE_DEEP_RESEARCH disabled"}
+    engine_status = {"engine": "native.interest-growth", "degraded": False}
     run = CapabilityRunModel(
         topic_id=body.topic_id,
         capability="research",
@@ -134,12 +166,19 @@ async def run_research(body: ResearchRequest, request: Request):
         db.refresh(run)
 
     try:
-        if not feature_active:
-            raise RuntimeError("FEATURE_DEEP_RESEARCH disabled")
         context = resolve_native_context(request, "research.run")
-        preview = get_native_bundle().research.preview_outline(
-            context, question=body.question, max_subtopics=5 if body.depth == "deep" else 3,
-        )
+        if body.approved_plan:
+            refined, approved_topics, approved_snapshot = _approved_outline(body.approved_plan, body.question, body.depth)
+            preview = type("ApprovedPreview", (), {
+                "refined_topic": refined,
+                "subtopics": approved_topics,
+                "status": "approved_by_user",
+            })()
+        else:
+            preview = get_native_bundle().research.preview_outline(
+                context, question=body.question, max_subtopics=5 if body.depth == "deep" else 3,
+            )
+            approved_snapshot = None
         result = get_native_bundle().research.run_confirmed(
             context,
             question=preview.refined_topic,
@@ -157,12 +196,14 @@ async def run_research(body: ResearchRequest, request: Request):
             "skills": skills,
             "depth": body.depth,
         }
+        if approved_snapshot:
+            plan = {**approved_snapshot, **plan, "subquestions": [x.title for x in approved_topics]}
         limitations = list(result.limitations) + kb_warnings + skill_warnings
         candidates = list(result.candidates)
         report = result.answer
         provider = "native.interest-growth"
         result_status = CapabilityStatus.DEGRADED.value if result.partial else CapabilityStatus.COMPLETED.value
-    except Exception as exc:
+    except (ProviderUnavailable, ProviderExecutionError) as exc:
         # An unavailable optional LLM transport keeps the product-owned manual workspace usable.
         manual = ManualResearchEngine({"domain_name": get_domain_context().domain_name, "research": get_domain_context().research})
         manual_plan = await manual.create_plan(body.question, body.depth)
@@ -175,7 +216,7 @@ async def run_research(body: ResearchRequest, request: Request):
         report = fallback.report
         provider = "manual-workspace"
         result_status = CapabilityStatus.DEGRADED.value
-        engine_status = {"engine": "manual-workspace", "degraded": True, "reason": "FEATURE_DEEP_RESEARCH disabled" if not feature_active else type(exc).__name__}
+        engine_status = {"engine": "manual-workspace", "degraded": True, "reason": type(exc).__name__}
 
     source_ids: list[str] = []
     if body.persist_sources and candidates:

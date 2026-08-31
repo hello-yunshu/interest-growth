@@ -96,6 +96,17 @@ class ConceptCreate(BaseModel):
     related_sources: list[str] = Field(default_factory=list)
 
 
+class ConceptUpdate(BaseModel):
+    topic_id: str | None = None
+    name: str | None = None
+    definition: str | None = None
+    examples: list[str] | None = None
+    counterexamples: list[str] | None = None
+    confused_with: list[str] | None = None
+    related_claims: list[str] | None = None
+    related_sources: list[str] | None = None
+
+
 class MasteryUpdate(BaseModel):
     state: str = Field(min_length=1, max_length=40)
     evidence_note: str = ""
@@ -119,6 +130,7 @@ class ResearchRequest(BaseModel):
     persist_sources: bool = True
     knowledge_base_ids: list[str] = Field(default_factory=list)
     use_domain_skills: bool = True
+    approved_plan: dict[str, Any] | None = None
 
 
 class GroundingRefInput(BaseModel):

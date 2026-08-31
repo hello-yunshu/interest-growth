@@ -47,6 +47,7 @@ def compile_book(book_id: str):
     return {'book': model_dict(book), 'chapters': [model_dict(x) for x in chapters]}
 @router.post('/living-books/{book_id}/project')
 async def project(book_id: str, request: Request):
+    _require(read=('living_book','living_book_chapter','topic','concept','claim','claim_version','evidence','source'), write=('living_book',), risks=('network','llm'))
     try: return model_dict(await project_book(book_id, resolve_native_context(request, 'book.run')))
     except (ValueError, RuntimeError) as exc: raise HTTPException(409, str(exc)) from exc
 @router.post('/living-books/{book_id}/confirm-proposal')

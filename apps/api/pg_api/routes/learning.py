@@ -26,10 +26,11 @@ from ..db import (
     get_session_factory,
 )
 from ..events import emit
-from ..features import feature_enabled
+from ..features import feature_enabled, require_feature
+from interest_growth_native.errors import ProviderUnavailable, ProviderExecutionError
 from ..native_execution import get_native_bundle, resolve_native_context
 from ..plugins import require_plugin_access
-from ..schemas import ConceptCreate, LearningAssistRequest, MasteryUpdate
+from ..schemas import ConceptCreate, ConceptUpdate, LearningAssistRequest, MasteryUpdate
 from ..visuals import build_visual_manifest
 from ..serializers import model_dict
 from ..domains import (current_mastery_profile, filter_rows_to_current_area, get_domain_context, require_entity_in_current_area)
@@ -96,8 +97,7 @@ def _save_run(
 @router.post("/concepts")
 def create_concept(body: ConceptCreate):
     require_plugin_access("capability.mastery", read=("topic",), write=("concept", "mastery"))
-    if not feature_enabled("FEATURE_FLEXIBLE_MASTERY"):
-        raise HTTPException(503, "flexible mastery feature disabled")
+    require_feature("FEATURE_FLEXIBLE_MASTERY")
     with get_session_factory()() as db:
         if body.topic_id and not db.get(TopicModel, body.topic_id):
             raise HTTPException(404, "topic not found")
@@ -136,8 +136,7 @@ def list_concepts(topic_id: str | None = None):
 @router.put("/concepts/{concept_id}/mastery")
 def update_mastery(concept_id: str, body: MasteryUpdate):
     require_plugin_access("capability.mastery", read=("concept", "mastery"), write=("mastery",))
-    if not feature_enabled("FEATURE_FLEXIBLE_MASTERY"):
-        raise HTTPException(503, "flexible mastery feature disabled")
+    require_feature("FEATURE_FLEXIBLE_MASTERY")
     with get_session_factory()() as db:
         concept = db.get(ConceptModel, concept_id)
         if not concept:
@@ -191,8 +190,11 @@ async def _concept_assist(concept_id: str, body: LearningAssistRequest, capabili
         topic_id = concept.topic_id
         concept_text = _concept_context(concept, mastery, body.focus)
         current_stage = mastery.state if mastery else current_mastery_profile(db).states[0]
+    # Resolve the guard outside the degradation boundary. Feature/plugin/area/
+    # permission errors are product decisions and must fail closed, never become
+    # a misleading degraded success.
+    native_context = resolve_native_context(request, "learning.run")
     try:
-        native_context = resolve_native_context(request, "learning.run")
         if capability == "mastery_path":
             native = get_native_bundle().learning.mastery_path(
                 native_context, goal=concept.name, current_stage=current_stage,
@@ -226,7 +228,7 @@ async def _concept_assist(concept_id: str, body: LearningAssistRequest, capabili
             limitations=["学习辅助输出不会自动改变 Host 的 Mastery 状态。"],
         )
         return {"run": model_dict(row), "result": result, "warnings": []}
-    except Exception as exc:
+    except (ProviderUnavailable, ProviderExecutionError) as exc:
         fallback = {
             "text": "原生学习辅助暂不可用；本地 Mastery 记录保持不变，可继续阅读、练习、项目或人工学习。",
             "degraded": True,
@@ -254,10 +256,45 @@ async def deep_question(concept_id: str, body: LearningAssistRequest, request: R
     return await _concept_assist(concept_id, body, "deep_question", request)
 
 
+@router.put("/concepts/{concept_id}")
+def update_concept(concept_id: str, body: ConceptUpdate):
+    require_plugin_access("capability.mastery", read=("concept", "topic", "claim", "source"), write=("concept",))
+    with get_session_factory()() as db:
+        concept = db.get(ConceptModel, concept_id)
+        if concept is None:
+            raise HTTPException(404, "concept not found")
+        try:
+            require_entity_in_current_area(db, "concept", concept_id)
+        except ValueError as exc:
+            raise HTTPException(404, "concept not found in current area") from exc
+        values = body.model_dump(exclude_unset=True)
+        if "topic_id" in values and values["topic_id"]:
+            topic = db.get(TopicModel, values["topic_id"])
+            if topic is None:
+                raise HTTPException(404, "topic not found")
+            try:
+                require_entity_in_current_area(db, "topic", values["topic_id"])
+            except ValueError as exc:
+                raise HTTPException(409, "topic not found in current area") from exc
+        for field, entity_type in (("related_claims", "claim"), ("related_sources", "source")):
+            if field in values:
+                ids = list(dict.fromkeys(str(x) for x in values[field]))
+                for entity_id in ids:
+                    try:
+                        require_entity_in_current_area(db, entity_type, entity_id)
+                    except ValueError as exc:
+                        raise HTTPException(409, {"code": "area_scope_mismatch", "entity_type": entity_type, "entity_id": entity_id}) from exc
+                values[field] = ids
+        for field, value in values.items():
+            setattr(concept, field, value)
+        db.commit()
+        db.refresh(concept)
+        return model_dict(concept)
+
+
 @router.post("/concepts/{concept_id}/visualize")
 async def visualize_concept(concept_id: str, body: LearningAssistRequest, request: Request):
-    if not feature_enabled("FEATURE_VISUALIZE"):
-        raise HTTPException(503, "visualize feature disabled")
+    require_feature("FEATURE_VISUALIZE")
     with get_session_factory()() as db:
         concept = db.get(ConceptModel, concept_id)
         if not concept:
@@ -269,8 +306,8 @@ async def visualize_concept(concept_id: str, body: LearningAssistRequest, reques
         topic_id = concept.topic_id
         mastery = db.scalar(select(MasteryRecordModel).where(MasteryRecordModel.concept_id == concept_id))
         concept_text = _concept_context(concept, mastery, body.focus)
+    native_context = resolve_native_context(request, "visualize.run")
     try:
-        native_context = resolve_native_context(request, "visualize.run")
         visual = get_native_bundle().visualize.plan(
             native_context, title=concept.name, content=concept_text, kind="concept_map",
         )
@@ -313,8 +350,7 @@ async def visualize_concept(concept_id: str, body: LearningAssistRequest, reques
 @router.get("/graph")
 def concept_graph(topic_id: str | None = None):
     require_plugin_access("capability.concept-graph", read=("concept", "claim", "claim_version", "evidence", "source"))
-    if not feature_enabled("FEATURE_CONCEPT_GRAPH"):
-        raise HTTPException(503, "concept graph disabled")
+    require_feature("FEATURE_CONCEPT_GRAPH")
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
     with get_session_factory()() as db:
@@ -372,8 +408,7 @@ def concept_graph(topic_id: str | None = None):
 @router.get("/visual-artifacts/{artifact_id}/preview")
 def visual_artifact_preview(artifact_id: str):
     require_plugin_access("capability.concept-graph", read=("artifact",))
-    if not feature_enabled("FEATURE_VISUALIZE"):
-        raise HTTPException(503, "visualize feature disabled")
+    require_feature("FEATURE_VISUALIZE")
     with get_session_factory()() as db:
         row = db.get(ArtifactModel, artifact_id)
         if not row or row.kind not in {"visual_explanation", "concept_map"}:

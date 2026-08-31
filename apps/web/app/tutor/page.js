@@ -16,7 +16,7 @@ export default function TutorPage(){
   async function load(){
     const [t,c,k,p,s,a]=await Promise.all([api('/topics'),api('/concepts'),api('/knowledge/bases'),api('/personas'),api('/tutor/sessions'),api('/areas/current')]);
     const nextPersonas=p.personas||[]; const skills=a.domain?.skills||[];
-    setTopics(t.topics||[]);setConcepts(c.concepts||[]);setBases(k.knowledge_bases||[]);setPersonas(nextPersonas);setSessions(s.sessions||[]);setDomain(a);
+    setTopics(t.topics||[]);setConcepts(c.concepts||[]);setBases(k.knowledge_bases||[]);setPersonas(nextPersonas);setSessions(s.sessions||[]);setDomain(a);setSessionId(old=>old||s.sessions?.[0]?.id||'');
     setForm(old=>({
       ...old,
       title: old.title || '兴趣学习会话',
@@ -24,7 +24,19 @@ export default function TutorPage(){
       skill_names: (old.skill_names||[]).filter(name=>skills.includes(name)),
     }));
   }
-  async function loadTurns(id=sessionId){if(!id){setTurns([]);return;}const x=await api(`/tutor/sessions/${id}/turns`);setTurns(x.turns||[])}
+  async function loadTurns(id=sessionId){
+    if(!id){setTurns([]);setActiveTurnId('');setEvents([]);setPending(null);return;}
+    const x=await api(`/tutor/sessions/${id}/turns`);const next=x.turns||[];setTurns(next);
+    const candidate=[...next].reverse().find(turn=>turn.upstream_turn_id&&['running','awaiting_input'].includes(turn.status));
+    if(!candidate){setActiveTurnId('');setEvents([]);setPending(null);return;}
+    try {
+      const replay=await api(`/tutor/sessions/${id}/native-turns/${candidate.id}/events`);
+      const replayEvents=replay.events||[];
+      const waitEvent=replayEvents.find(event=>event.category==='wait_for_input');
+      const persistedPending=candidate.pending_input_json?.content?candidate.pending_input_json:null;
+      setActiveTurnId(candidate.id);setEvents(replayEvents);setPending(waitEvent||persistedPending);setRunning(false);
+    } catch(error) { setMsg(toUserMessage(error)); }
+  }
   useEffect(()=>{load().catch(e=>setMsg(toUserMessage(e)));},[]);
   useEffect(()=>{loadTurns(sessionId).catch(e=>setMsg(toUserMessage(e)));},[sessionId]);
   function toggleKb(id){setForm(f=>({...f,knowledge_base_ids:f.knowledge_base_ids.includes(id)?f.knowledge_base_ids.filter(x=>x!==id):[...f.knowledge_base_ids,id]}))}

@@ -41,4 +41,12 @@ def feature_enabled(name: str) -> bool:
 
 def require_feature(name: str) -> None:
     if not feature_enabled(name):
-        raise HTTPException(status_code=503, detail={"code": "feature_disabled", "feature": name})
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "feature_disabled",
+                "feature": name,
+                "detail": f"Feature {name} is disabled",
+                "recoverable": True,
+            },
+        )

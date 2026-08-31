@@ -103,7 +103,9 @@ export function friendlyApiError(error, client) {
 }
 
 function createHttpError(status, data, detail, client = null) {
-  const code = typeof data === 'object' && data?.code ? data.code : `HTTP_${status}`;
+  const code = typeof data === 'object' && (data?.code || data?.detail?.code)
+    ? (data.code || data.detail.code)
+    : `HTTP_${status}`;
   const raw = typeof detail === 'string' ? detail : JSON.stringify(detail || data || '');
   const error = new Error('');
   error.code = code;

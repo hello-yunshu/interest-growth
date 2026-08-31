@@ -88,9 +88,9 @@ def test_feature_flags_isolate_deep_research_and_growth_feedback(client):
     run = client.post(
         "/api/research/run",
         json={"topic_id": topic["id"], "question": q["question"], "depth": "deep"},
-    ).json()
-    assert run["engine_status"]["degraded"] is True
-    assert "FEATURE_DEEP_RESEARCH disabled" in run["engine_status"]["reason"]
+    )
+    assert run.status_code == 503
+    assert run.json()["detail"]["code"] == "feature_disabled"
 
     assert client.put("/api/features/FEATURE_GROWTH_FEEDBACK", json={"enabled": False}).status_code == 200
     paused = client.post(f"/api/questions/{q['id']}/pause")

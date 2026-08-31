@@ -7,6 +7,7 @@ const labels = {
   mastery: {
     unfamiliar: '还不熟悉', familiar: '已经见过', explain: '可以解释', example: '可以举例',
     distinguish: '能够区分', transfer: '能够迁移', evidence_boundary: '知道证据边界', stable_expression: '表达稳定',
+    understand: '开始理解', practice: '可以练习', apply: '可以应用', reflect: '能够反思', self_directed: '能够自主推进',
   },
   verification: {
     unverified: '未核验', source_identified: '已定位原始来源', human_verified: '已人工核验',
@@ -158,6 +159,11 @@ export function toUserMessage(error, context = {}) {
   const code = errorCode(error);
   const status = Number(error?.status || error?.httpStatus || 0);
   const remote = context.remote === true;
+  if (code === 'FEATURE_DISABLED') return '这项功能开关已关闭，可以在设置中重新启用。';
+  if (code === 'PLUGIN_DISABLED' || code === 'CAPABILITY_DISABLED_FOR_AREA' || code === 'AREA_CAPABILITY_DISABLED') return '这项能力在当前兴趣中已停用，可以在设置中重新启用。';
+  if (code === 'PLUGIN_NOT_INSTALLED') return '这项能力尚未安装，请先在设置中安装可信组件。';
+  if (code === 'AREA_SCOPE_MISMATCH') return '这项内容不属于当前兴趣范围。';
+  if (code === 'PROVIDER_UNAVAILABLE' || code === 'PROVIDER_ERROR') return '执行服务暂时不可用；没有重复提交或改变已有数据。';
   if (code === 'REMOTE_TOKEN_EXPIRED' || code === 'LOGIN_EXPIRED' || status === 401) return '登录状态已过期，请重新连接服务器。';
   if (code === 'IDENTITY_CHANGED' || code === 'SERVER_IDENTITY_CHANGED') return '服务器身份发生变化，请重新验证后再接入。';
   if (code === 'RATE_LIMITED' || status === 429) return '请求有些频繁，请稍后再试。';

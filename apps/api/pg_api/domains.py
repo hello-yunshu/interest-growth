@@ -559,3 +559,13 @@ def current_mastery_profile(db=None) -> MasteryProfileModel:
 
 def current_mastery_states() -> list[str]:
     return list(current_mastery_profile().states or [])
+
+
+def mastery_profile_summary(profile: MasteryProfileModel) -> dict[str, Any]:
+    """Serialize the active profile without making the renderer infer a domain."""
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "description": profile.description,
+        "states": [{"id": state, "label": state} for state in (profile.states or [])],
+    }

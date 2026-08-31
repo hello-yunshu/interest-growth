@@ -219,3 +219,35 @@ export function SafeSvgPreview({ svg = '', alt = '生成的信息卡' }) {
   if (!src) return null;
   return <div className="buiSvgPreview"><img src={src} alt={alt}/></div>;
 }
+
+export function VisualExplanation({ manifest = null, raw = null }) {
+  const data = manifest || raw || {};
+  const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+  const edges = Array.isArray(data.edges) ? data.edges : [];
+  const nodeById = new Map(nodes.map(node => [String(node.id), node]));
+  return <section className="buiVisual" aria-label="可视化解释">
+    <div className="buiVisualHead"><div><div className="buiKicker">结构化理解</div><h3>{data.title || '概念关系'}</h3></div><StatusChip tone="warning">人工审核后使用</StatusChip></div>
+    {!nodes.length && <div className="buiEmptyRow">还没有可展示的结构化节点。</div>}
+    {!!nodes.length && <div className="buiVisualNodes">{nodes.map(node => <article className="buiVisualNode" key={node.id}><strong>{node.label || node.id}</strong><small>{node.type || '节点'}</small></article>)}</div>}
+    {!!edges.length && <div className="buiVisualEdges"><span className="buiRailLabel">关系</span>{edges.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}><strong>{nodeById.get(edge.from)?.label || edge.from}</strong><span>{edge.type || '相关'} →</span><strong>{nodeById.get(edge.to)?.label || edge.to}</strong></div>)}</div>}
+    {!!data.annotations?.length && <div className="buiVisualNotes">{data.annotations.map((note, index) => <p key={index}>{note}</p>)}</div>}
+    {raw && <details className="sectionTop"><summary>查看原始结构（调试）</summary><CodeBlock compact filename="visualization.raw.json" language="json" code={JSON.stringify(raw, null, 2)}/></details>}
+  </section>;
+}
+
+export function GraphView({ graph = null, title = '知识关系', empty = '当前范围还没有可连接的记录。', filters = true }) {
+  const [type, setType] = useState('all');
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const visible = type === 'all' ? nodes : nodes.filter(node => node.type === type);
+  const ids = new Set(visible.map(node => node.id));
+  const visibleEdges = edges.filter(edge => ids.has(edge.from) && ids.has(edge.to));
+  const types = [...new Set(nodes.map(node => node.type).filter(Boolean))];
+  return <section className="buiGraph" aria-label={title}>
+    <div className="buiGraphHead"><div><div className="buiKicker">关系视图</div><h3>{title}</h3></div>{filters && <select aria-label="节点类型筛选" value={type} onChange={event => setType(event.target.value)}><option value="all">全部节点</option>{types.map(item => <option key={item} value={item}>{item}</option>)}</select>}</div>
+    {!nodes.length && <div className="buiEmptyRow">{empty}</div>}
+    {!!nodes.length && <><div className="buiGraphNodes">{visible.map(node => <article className="buiGraphNode" key={node.id}><StatusChip tone={node.type === 'claim' ? 'warning' : node.type === 'source' ? 'accent' : 'neutral'}>{node.type || '记录'}</StatusChip><strong>{node.label || node.key || node.content_preview || node.id}</strong>{(node.verification_state || node.layer) && <small>{node.verification_state || node.layer}</small>}</article>)}</div><div className="buiGraphEdges"><span className="buiRailLabel">{visibleEdges.length} 条关系</span>{visibleEdges.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}><span>{nodeLabel(nodes, edge.from)}</span><StatusChip>{edge.type || edge.relation || '相关'}</StatusChip><span>{nodeLabel(nodes, edge.to)}</span></div>)}</div></>}
+  </section>;
+}
+
+function nodeLabel(nodes, id) { return nodes.find(node => node.id === id)?.label || id; }

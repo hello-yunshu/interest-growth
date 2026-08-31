@@ -1,5 +1,9 @@
 # 09 · Roadmap / Completion Map
 
+> Historical completion map. The current Native Core contract, current-schema
+> boundary and exact verification status are defined by
+> `docs/audits/INTEREST_GROWTH_1X_FULL_IMPLEMENTATION_AUDIT.md`.
+
 The original phase contract remains preserved in `00_DEVELOPMENT_PHASE_PLAN.md`. This file records what is now implemented after the independent audit and DeepTutor deep-integration pass.
 
 ## P0 · Architecture Foundation — implemented

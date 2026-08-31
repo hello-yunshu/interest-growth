@@ -1,5 +1,8 @@
 # Project Status
 
+> Current implementation audit status is tracked separately from historical
+> release notes. See `docs/audits/INTEREST_GROWTH_1X_FULL_IMPLEMENTATION_AUDIT.md`.
+
 ## Current release dashboard
 
 - **Current product version:** `1.0.20`
