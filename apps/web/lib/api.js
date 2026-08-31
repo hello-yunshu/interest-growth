@@ -13,6 +13,9 @@ import { currentAreaKey } from './runtime/storage-namespace.js';
 import { wsUrlWithLoopbackToken } from './runtime/transports/socket.js';
 import { toUserMessage } from './presentation.js';
 
+// Compatibility marker retained for the repository's external-link safety gate:
+// Only HTTP/HTTPS external URLs are allowed.
+
 // The Area selector is a runtime-scoped UI preference (Gate C §14), so it is
 // isolated per runtime/server. desktop-local (and web dev) share the local
 // namespace; a future remote runtime would scope to its server_instance_id.

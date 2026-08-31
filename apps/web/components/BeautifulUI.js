@@ -213,7 +213,7 @@ export function SelectionActions({ label = '选中内容可以这样处理', act
   return <div className="buiSelection"><div className="buiSelectionTop"><span>{label}</span>{input}</div><div className="buiSelectionActions">{actions.map((action, i) => <button type="button" onClick={action.onClick} disabled={action.disabled} className={action.primary ? 'is-primary' : ''} key={action.label || i}>{action.label}</button>)}</div></div>;
 }
 
-export function SafeSvgPreview({ svg = '', alt = 'Generated information card' }) {
+export function SafeSvgPreview({ svg = '', alt = '生成的信息卡' }) {
   const src = useMemo(() => svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : '', [svg]);
   if (!src) return null;
   return <div className="buiSvgPreview"><img src={src} alt={alt}/></div>;
