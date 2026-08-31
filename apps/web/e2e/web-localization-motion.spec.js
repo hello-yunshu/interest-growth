@@ -115,5 +115,7 @@ test('Curiosity write action is busy, disabled and not duplicated', async ({ pag
   await expect(submit).toBeDisabled();
   await submit.click({ force: true });
   await expect.poll(() => writes).toBe(1);
+  await expect(submit).toHaveAttribute('aria-label', '记录问题', { timeout: 2_000 });
+  await input.fill('确认忙碌态已经结束');
   await expect(submit).toBeEnabled({ timeout: 2_000 });
 });
