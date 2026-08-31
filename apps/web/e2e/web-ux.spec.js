@@ -24,11 +24,16 @@ const PAGES = [
   { path: '/', label: 'dashboard' },
   { path: '/curiosity', label: 'curiosity' },
   { path: '/research', label: 'research' },
+  { path: '/knowledge', label: 'knowledge' },
   { path: '/learning', label: 'learning' },
+  { path: '/tutor', label: 'tutor' },
+  { path: '/outputs', label: 'outputs' },
+  { path: '/writing', label: 'writing' },
+  { path: '/book', label: 'book' },
   { path: '/growth', label: 'growth' },
   { path: '/content', label: 'content' },
+  { path: '/career', label: 'career' },
   { path: '/system', label: 'system' },
-  { path: '/knowledge', label: 'knowledge' },
 ];
 
 const STACK_MARKERS = [

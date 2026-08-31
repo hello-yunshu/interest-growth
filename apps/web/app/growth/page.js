@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { toUserMessage } from '../../lib/presentation.js';
 import { CodeBlock, InsightCards, StatusChip } from '../../components/BeautifulUI';
 import { WorkspaceBoard, useWorkspaceData } from '../../components/WorkspaceWidgets';
 import { useRuntimeCopy } from '../../components/useRuntimeCopy';
@@ -15,9 +16,9 @@ export default function GrowthPage() {
   const [message, setMessage] = useState('');
   const [form, setForm] = useState({ attracted_question: '', interest_drain: '', understanding_change: '', continue_topic: '', next_energy_mode: 'normal' });
   async function load() { const [nextNarrative, nextMemory] = await Promise.all([api('/growth/narrative'), api('/growth/memory')]); setNarrative(nextNarrative); setMemory(nextMemory.memory || []); }
-  useEffect(() => { load().catch(error => setMessage(error.message)); }, []);
-  async function save(event) { event.preventDefault(); try { await api('/reflections', { method: 'POST', body: JSON.stringify(form) }); await load(); workspace.reload(); setMessage(runtimeCopy.savedCopy); } catch (error) { setMessage(error.message); } }
-  async function openMemoryGraph() { try { setGraph(await api('/memory/graph')); } catch (error) { setMessage(error.message); } }
+  useEffect(() => { load().catch(error => setMessage(toUserMessage(error))); }, []);
+  async function save(event) { event.preventDefault(); try { await api('/reflections', { method: 'POST', body: JSON.stringify(form) }); await load(); workspace.reload(); setMessage(runtimeCopy.savedCopy); } catch (error) { setMessage(toUserMessage(error)); } }
+  async function openMemoryGraph() { try { setGraph(await api('/memory/graph')); } catch (error) { setMessage(toUserMessage(error)); } }
   const hasLongTerm = memory.some(item => item.layer === 'g3_long_term');
   return <div className="stack growthPage">
     <section className="pageLead"><div><div className="eyebrow">成长回顾</div><h1>看见理解怎样变化，不计算连续天数。</h1><p className="muted">{narrative?.narrative || '还没有足够记录形成长期回顾。先留下一个真实问题就好。'}</p></div><StatusChip tone="success">没有打卡压力</StatusChip></section>

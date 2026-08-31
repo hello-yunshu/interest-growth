@@ -210,7 +210,7 @@ export function buildRuntimeLabels(client, connectionState) {
   const remote = client?.descriptor?.dataLocation === 'self-hosted-server';
   if (remote) {
     const state = connectionState || client?.connection?.state || 'Initializing';
-    const meta = REMOTE_STATE_META[state] || { status: state, footer: state };
+    const meta = REMOTE_STATE_META[state] || { status: '未知连接状态', footer: '连接状态未知' };
     return {
       dataLocation: 'self-hosted-server',
       dataStatusLabel: `自托管服务器 · ${meta.status}`,

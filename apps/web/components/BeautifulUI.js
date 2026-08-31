@@ -2,6 +2,20 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Icon from './Icon';
+import { activityLabel, statusLabel } from '../lib/presentation.js';
+
+export function useReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!query) return undefined;
+    const update = () => setReduced(query.matches);
+    update();
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+  return reduced;
+}
 
 export function StatusChip({ children, tone = 'neutral', pulse = false }) {
   return <span className={`buiChip buiChip--${tone} ${pulse ? 'buiChip--pulse' : ''}`}>{children}</span>;
@@ -17,7 +31,8 @@ export function PixelLoader({ label = '正在处理', active = true, startedAt =
     const id = setInterval(tick, 100);
     return () => clearInterval(id);
   }, [active, startedAt]);
-  return <div className={`buiLoader ${active ? 'is-active' : 'is-done'}`} role="status" aria-live="polite">
+  const reducedMotion = useReducedMotion();
+  return <div className={`buiLoader ${active ? 'is-active' : 'is-done'} ${reducedMotion ? 'is-reduced-motion' : ''}`} role="status" aria-live="polite">
     <div className="buiPixelGrid" aria-hidden="true">{Array.from({ length: 15 }, (_, i) => <i key={i} style={{ '--i': i }} />)}</div>
     <div className="buiLoaderCopy"><strong>{label}</strong><span>{active ? `${elapsed.toFixed(1)} 秒` : '已完成'}{detail ? ` · ${detail}` : ''}</span></div>
   </div>;
@@ -26,16 +41,16 @@ export function PixelLoader({ label = '正在处理', active = true, startedAt =
 function eventLabel(event) {
   const category = event?.category || event?.type || 'activity';
   if (category === 'answer_delta') return '回答';
-  if (category === 'tool_call') return event?.metadata?.tool_name || event?.tool_name || '调用工具';
-  if (category === 'tool_result') return event?.metadata?.tool_name || event?.tool_name || '工具结果';
+  if (category === 'tool_call') return event?.metadata?.tool_name ? `调用：${event.metadata.tool_name}` : '调用工具';
+  if (category === 'tool_result') return event?.metadata?.tool_name ? `完成：${event.metadata.tool_name}` : '工具结果';
   if (category === 'sources') return '来源';
   if (category === 'progress') return '进展';
   if (category === 'wait_for_input') return '等待你的输入';
-  if (category === 'stage_start') return event?.metadata?.stage || '开始阶段';
-  if (category === 'stage_end') return event?.metadata?.stage || '阶段完成';
+  if (category === 'stage_start') return event?.metadata?.stage ? `开始：${event.metadata.stage}` : '开始阶段';
+  if (category === 'stage_end') return event?.metadata?.stage ? `完成：${event.metadata.stage}` : '阶段完成';
   if (category === 'error') return '出错了';
   if (category === 'done') return '已完成';
-  return String(category).replaceAll('_', ' ');
+  return activityLabel(category);
 }
 
 function eventTone(event) {
@@ -57,7 +72,7 @@ const PUBLIC_TRACE_CATEGORIES = new Set(['stage_start', 'stage_end', 'progress',
 function publicEventDetail(event) {
   const category = String(event?.category || event?.type || '').toLowerCase();
   if (category === 'tool_call') return '已经请求调用工具';
-  if (category === 'tool_result') return event?.metadata?.status || '工具已经完成';
+  if (category === 'tool_result') return event?.metadata?.status ? `工具已完成（${statusLabel(event.metadata.status)}）` : '工具已经完成';
   if (category === 'sources') {
     const count = event?.metadata?.count ?? event?.sources?.length;
     return count !== undefined ? `找到 ${count} 个可用来源` : '已有可用来源';
@@ -74,21 +89,22 @@ export function ActivityTrace({ events = [], title = '活动记录', defaultOpen
       <span className="buiTraceTitle"><span className="buiActivityDot" />{title}</span>
       <span className="buiTraceMeta">{publicEvents.length} 条 <span className={`buiChevron ${open ? 'is-open' : ''}`}>›</span></span>
     </button>
-    {open && <div className="buiTraceBody">
+    <div className={`buiTraceBody ${open ? 'is-open' : ''}`} aria-hidden={!open}>
       {!publicEvents.length && <div className="buiTraceEmpty">{empty}</div>}
       {publicEvents.map((event, index) => <div className="buiTraceRow" key={`${event?.seq ?? index}-${index}`}>
         <span className={`buiTraceNode buiTraceNode--${eventTone(event)}`} />
         <div><strong>{eventLabel(event)}</strong><p>{publicEventDetail(event)}</p></div>
         {event?.seq !== undefined && <span className="buiTraceSeq">#{event.seq}</span>}
       </div>)}
-    </div>}
+    </div>
   </section>;
 }
 
 export function StreamingText({ text = '', sources = [], followUps = [], streaming = false, title = '回答', actions = null }) {
+  const reducedMotion = useReducedMotion();
   return <section className="buiStream">
     <div className="buiStreamTop"><span>{title}</span>{streaming && <StatusChip tone="accent" pulse>正在生成</StatusChip>}</div>
-    <div className={`buiStreamText ${streaming ? 'is-streaming' : ''}`}>{text || <span className="buiPlaceholder">回答会在这里逐步出现。</span>}</div>
+    <div className={`buiStreamText ${streaming && !reducedMotion ? 'is-streaming' : ''}`}>{text || <span className="buiPlaceholder">回答会在这里出现。</span>}</div>
     {!!sources.length && <div className="buiSourceRail"><span className="buiRailLabel">{sources.length} 个来源</span>{sources.slice(0, 8).map((source, i) => <span className="buiSourcePill" key={source.id || `${source.title}-${i}`}><Icon name="source" size={13}/>{source.title || source.name || source.source || `来源 ${i + 1}`}</span>)}</div>}
     {!!followUps.length && <div className="buiFollowUps"><span className="buiRailLabel">可以继续追问</span>{followUps.map((x, i) => <button type="button" className="buiFollowButton" key={`${x}-${i}`}>{x}</button>)}</div>}
     {actions && <div className="buiStreamActions">{actions}</div>}
@@ -123,8 +139,8 @@ export function TaskRows({ tasks = [], empty = '没有进行中的任务。' }) 
     const isDone = status === 'completed' || status === 'done';
     return <div className="buiTask" key={task.id || `${task.title}-${index}`}>
       <span className={`buiTaskIndex is-${status}`}>{isDone ? '✓' : index + 1}</span>
-      <div className="buiTaskCopy"><strong>{task.title}</strong>{task.detail && <p>{task.detail}</p>}{task.meta && !isDone && <div className="buiTaskMeta">{task.meta}</div>}{typeof task.progress === 'number' && <div className="buiProgress"><i className={status === 'running' ? 'is-running' : ''} style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }} /></div>}</div>
-      <StatusChip tone={status === 'failed' ? 'danger' : status === 'running' ? 'accent' : isDone ? 'success' : 'neutral'}>{task.meta || status}</StatusChip>
+      <div className="buiTaskCopy"><strong>{task.title}</strong>{task.detail && <p>{task.detail}</p>}{task.metaLabel && !isDone && <div className="buiTaskMeta">{task.metaLabel}</div>}{typeof task.progress === 'number' && <div className="buiProgress"><i className={status === 'running' ? 'is-running' : ''} style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }} /></div>}</div>
+      <StatusChip tone={status === 'failed' ? 'danger' : status === 'running' ? 'accent' : isDone ? 'success' : 'neutral'}>{task.metaLabel || statusLabel(status)}</StatusChip>
     </div>;
   })}</div>;
 }

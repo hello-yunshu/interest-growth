@@ -7,6 +7,8 @@ import Icon from './Icon';
 import { buildHeatmap, buildOutputDistribution, buildWeeklyTrend, formatRelativeDate, loadWorkspaceData, normalizeClaimRecord, outputTypeMeta } from '../lib/workspaceData';
 import { readLayout, resetLayout, saveLayout } from '../lib/workspaceLayout';
 import { useRuntimeCopy } from './useRuntimeCopy';
+import { useReducedMotion } from './BeautifulUI';
+import { statusLabel, toUserMessage } from '../lib/presentation.js';
 
 export const PAGE_WIDGETS = {
   home: ['recent-outputs', 'focus', 'heatmap', 'questions', 'old-note', 'weekly-trend', 'output-distribution'],
@@ -59,7 +61,7 @@ export function useWorkspaceData() {
   const reload = () => {
     setState(current => ({ ...current, loading: true, error: '' }));
     loadWorkspaceData().then(data => setState({ loading: false, data, error: data.offline ? runtimeCopy.offlineCopy : '' }))
-      .catch(error => setState({ loading: false, data: null, error: error.message }));
+      .catch(error => setState({ loading: false, data: null, error: toUserMessage(error) }));
   };
   useEffect(reload, []);
   return { ...state, reload };
@@ -71,8 +73,17 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
   const [layout, setLayout] = useState(defaults);
   const [editing, setEditing] = useState(false);
   const [picker, setPicker] = useState(null);
+  const [pickerClosing, setPickerClosing] = useState(false);
+  const pickerCloseTimer = useRef(null);
   const [dragged, setDragged] = useState(null);
-  const closePicker = useCallback(() => setPicker(null), []);
+  const openPicker = useCallback(next => { clearTimeout(pickerCloseTimer.current); setPickerClosing(false); setPicker(next); }, []);
+  const closePicker = useCallback(() => {
+    if (!picker) return;
+    setPickerClosing(true);
+    clearTimeout(pickerCloseTimer.current);
+    pickerCloseTimer.current = window.setTimeout(() => { setPicker(null); setPickerClosing(false); }, 180);
+  }, [picker]);
+  useEffect(() => () => clearTimeout(pickerCloseTimer.current), []);
   useEffect(() => setLayout(readLayout(pageId, defaults)), [pageId]);
   function commit(next) { setLayout(next); saveLayout(pageId, next); }
   function move(from, to) {
@@ -80,9 +91,9 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
     const next = [...layout]; const [item] = next.splice(from, 1); next.splice(to, 0, item); commit(next);
   }
   function moveBy(index, offset) { move(index, Math.max(0, Math.min(layout.length - 1, index + offset))); }
-  function replace(index, id) { const next = [...layout]; next[index] = { ...next[index], id }; commit(next); setPicker(null); }
+  function replace(index, id) { const next = [...layout]; next[index] = { ...next[index], id }; commit(next); closePicker(); }
   function remove(index) { commit(layout.filter((_, i) => i !== index)); }
-  function add(id) { commit([...layout, { id, span: id === 'heatmap' || id === 'recent-outputs' ? 2 : 1 }]); setPicker(null); }
+  function add(id) { commit([...layout, { id, span: id === 'heatmap' || id === 'recent-outputs' ? 2 : 1 }]); closePicker(); }
   function resize(index) { const next = [...layout]; next[index] = { ...next[index], span: next[index].span === 2 ? 1 : 2 }; commit(next); }
   function reset() { resetLayout(pageId); setLayout(defaults); setEditing(false); }
   const unused = available.filter(id => !layout.some(item => item.id === id));
@@ -91,7 +102,7 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
       <div><span className="sectionKicker">可按你的方式安排</span>{!compact && <h2>{title}</h2>}</div>
       <div className="boardActions">
         {editing && <button className="quietButton" onClick={reset}><Icon name="refresh"/>恢复默认</button>}
-        <button className={`quietButton ${editing ? 'is-active' : ''}`} onClick={() => { setEditing(value => !value); setPicker(null); }}><Icon name={editing ? 'check' : 'settings'}/>{editing ? '完成调整' : '调整工作台'}</button>
+        <button className={`quietButton ${editing ? 'is-active' : ''}`} onClick={() => { setEditing(value => !value); closePicker(); }}><Icon name={editing ? 'check' : 'settings'}/>{editing ? '完成调整' : '调整工作台'}</button>
       </div>
     </div>
     {editing && <div className="layoutNotice"><Icon name="drag"/><span>拖动组件改变顺序，也可以替换、隐藏或调整宽度。排布只保存在这台设备上。</span></div>}
@@ -109,18 +120,18 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
           <button onClick={() => moveBy(index, -1)} disabled={index === 0} aria-label={`将${META[item.id]?.title || '组件'}向前移动`} title="向前移动"><Icon name="arrowUp"/></button>
           <button onClick={() => moveBy(index, 1)} disabled={index === layout.length - 1} aria-label={`将${META[item.id]?.title || '组件'}向后移动`} title="向后移动"><Icon name="arrowDown"/></button>
           <button onClick={() => resize(index)} aria-label={`调整${META[item.id]?.title || '组件'}宽度`} title="调整宽度"><Icon name="reorder"/></button>
-          <button onClick={() => setPicker({ mode: 'replace', index })}>替换</button>
+          <button onClick={() => openPicker({ mode: 'replace', index })}>替换</button>
           <button onClick={() => remove(index)} aria-label={`隐藏${META[item.id]?.title || '组件'}`} title="隐藏"><Icon name="close"/></button>
         </div>}
         <Widget id={item.id} data={data} loading={loading}/>
       </article>)}
-      {editing && unused.length > 0 && <button className="addWidgetCard" onClick={() => setPicker({ mode: 'add' })}><Icon name="plus" size={22}/><strong>添加组件</strong><span>选择一个对这里有用的入口或统计</span></button>}
+      {editing && unused.length > 0 && <button className="addWidgetCard" onClick={() => openPicker({ mode: 'add' })}><Icon name="plus" size={22}/><strong>添加组件</strong><span>选择一个对这里有用的入口或统计</span></button>}
     </div>
-    {picker && <WidgetPicker ids={picker.mode === 'replace' ? available.filter(id => id !== layout[picker.index]?.id) : unused} onChoose={id => picker.mode === 'replace' ? replace(picker.index, id) : add(id)} onClose={closePicker}/>}
+    {picker && <WidgetPicker closing={pickerClosing} ids={picker.mode === 'replace' ? available.filter(id => id !== layout[picker.index]?.id) : unused} onChoose={id => picker.mode === 'replace' ? replace(picker.index, id) : add(id)} onClose={closePicker}/>}
   </section>;
 }
 
-function WidgetPicker({ ids, onChoose, onClose }) {
+function WidgetPicker({ ids, onChoose, onClose, closing = false }) {
   const dialogRef = useRef(null);
   const returnFocusRef = useRef(null);
   useEffect(() => {
@@ -140,7 +151,7 @@ function WidgetPicker({ ids, onChoose, onClose }) {
     dialog?.addEventListener('keydown', handleKeyDown);
     return () => { dialog?.removeEventListener('keydown', handleKeyDown); returnFocusRef.current?.focus?.(); };
   }, [onClose]);
-  return <div className="widgetPickerBackdrop" onMouseDown={onClose}>
+  return <div className={`widgetPickerBackdrop ${closing ? 'is-closing' : ''}`} onMouseDown={onClose}>
     <div ref={dialogRef} className="widgetPicker" role="dialog" aria-modal="true" aria-labelledby="widget-picker-title" onMouseDown={event => event.stopPropagation()}>
       <div className="pickerHeader"><div><span className="sectionKicker">组件目录</span><h3 id="widget-picker-title">这里放什么？</h3></div><button onClick={onClose} aria-label="关闭组件目录"><Icon name="close"/></button></div>
       <div className="pickerGrid">{ids.map(id => <button key={id} onClick={() => onChoose(id)}><span className="pickerIcon"><Icon name={META[id]?.icon}/></span><span><strong>{META[id]?.title}</strong><small>{META[id]?.description}</small></span><Icon name="arrowRight"/></button>)}</div>
@@ -204,15 +215,17 @@ function HeatmapWidget({ data }) {
 }
 
 function WeeklyTrendWidget({ data }) {
+  const reducedMotion = useReducedMotion();
   const rows = buildWeeklyTrend(data.timeline, 10);
-  return <div className="chartBlock"><ResponsiveContainer width="100%" height={190}><AreaChart data={rows} margin={{ top: 10, right: 8, left: -24, bottom: 0 }}><CartesianGrid vertical={false} stroke="#e9e5dd"/><XAxis dataKey="name" tick={{ fontSize: 10, fill: '#85837e' }} axisLine={false} tickLine={false} interval={2}/><YAxis allowDecimals={false} tick={{ fontSize: 10, fill: '#85837e' }} axisLine={false} tickLine={false}/><Tooltip content={<QuietTooltip suffix=" 条记录"/>}/><Area type="monotone" dataKey="count" stroke="#4e775e" strokeWidth={2} fill="#dfe9df" fillOpacity={0.7}/></AreaChart></ResponsiveContainer><p className="chartFootnote">这里只呈现投入节奏，不评价连续性。</p></div>;
+  return <div className="chartBlock"><ResponsiveContainer width="100%" height={190}><AreaChart data={rows} margin={{ top: 10, right: 8, left: -24, bottom: 0 }}><CartesianGrid vertical={false} stroke="#e9e5dd"/><XAxis dataKey="name" tick={{ fontSize: 10, fill: '#85837e' }} axisLine={false} tickLine={false} interval={2}/><YAxis allowDecimals={false} tick={{ fontSize: 10, fill: '#85837e' }} axisLine={false} tickLine={false}/><Tooltip content={<QuietTooltip suffix=" 条记录"/>}/><Area type="monotone" dataKey="count" stroke="#4e775e" strokeWidth={2} fill="#dfe9df" fillOpacity={0.7} isAnimationActive={!reducedMotion} animationDuration={380}/></AreaChart></ResponsiveContainer><p className="chartFootnote">这里只呈现投入节奏，不评价连续性。</p></div>;
 }
 
 function OutputDistributionWidget({ data }) {
+  const reducedMotion = useReducedMotion();
   const rows = buildOutputDistribution(data.outputs);
   const total = rows.reduce((sum, item) => sum + item.value, 0);
   if (!rows.length) return <EmptyWidget icon="dashboard" text="有了学习成果后，这里会展示它们的类型构成。" href="/learning" action="开始学习"/>;
-  return <div className="distribution"><div className="donut"><ResponsiveContainer width="100%" height={178}><PieChart><Pie data={rows} dataKey="value" nameKey="name" innerRadius={52} outerRadius={72} paddingAngle={2}>{rows.map(item => <Cell key={item.type} fill={item.color}/>)}</Pie><Tooltip content={<QuietTooltip suffix=" 条"/>}/></PieChart></ResponsiveContainer><div className="donutCenter"><strong>{total}</strong><span>项成果</span></div></div><div className="distributionLegend">{rows.slice(0, 6).map(item => <div key={item.type}><i style={{ background: item.color }}/><span>{item.name}</span><strong>{item.value}</strong></div>)}</div></div>;
+  return <div className="distribution"><div className="donut"><ResponsiveContainer width="100%" height={178}><PieChart><Pie data={rows} dataKey="value" nameKey="name" innerRadius={52} outerRadius={72} paddingAngle={2} isAnimationActive={!reducedMotion} animationDuration={380}>{rows.map(item => <Cell key={item.type} fill={item.color}/>)}</Pie><Tooltip content={<QuietTooltip suffix=" 条"/>}/></PieChart></ResponsiveContainer><div className="donutCenter"><strong>{total}</strong><span>项成果</span></div></div><div className="distributionLegend">{rows.slice(0, 6).map(item => <div key={item.type}><i style={{ background: item.color }}/><span>{item.name}</span><strong>{item.value}</strong></div>)}</div></div>;
 }
 
 function QuestionsWidget({ data }) { const rows = data.dashboard?.recent_questions || []; return rows.length ? <div className="linkRows">{rows.slice(0, 4).map(row => <Link href="/curiosity" key={row.id}><Icon name="question"/><span><strong>{row.question}</strong><small>{energyLabel(row.energy_mode)} · 回来过 {row.returned_count || 0} 次</small></span><Icon name="arrowRight"/></Link>)}</div> : <EmptyWidget icon="question" text="还没有悬而未决的问题。" href="/curiosity" action="记下一个问题"/>; }
@@ -226,7 +239,7 @@ function LearningResumeWidget({ data }) { const item = data.practice?.practice?.
 function ReviewQueueWidget({ data }) { const rows = data.practice?.practice?.filter(bundle => !bundle.attempts?.length) || []; return <MetricList value={rows.length} label="项内容可以复习" rows={rows.slice(0, 3).map(row => row.item?.prompt)} href="/learning" empty="目前没有待复习内容。"/>; }
 function MasteryEvidenceWidget({ data }) { const rows = data.mastery?.evidence || []; return <MetricList value={rows.length} label="条明确保留的证据" rows={rows.slice(0, 3).map(row => row.note || '练习作答证据')} href="/learning" empty="还没有明确保留的掌握证据。"/>; }
 function TutorResumeWidget({ data }) { const session = data.sessions?.sessions?.find(row => row.status !== 'closed') || data.sessions?.sessions?.[0]; return session ? <div className="primaryEntry"><span><Icon name="tutor" size={24}/></span><strong>{session.title}</strong><p>{session.status === 'closed' ? '这段对话已经结束，也可以作为新问题的起点。' : '这段导师对话仍在进行中。'}</p><Link href="/tutor">打开对话 <Icon name="arrowRight"/></Link></div> : <EmptyWidget icon="tutor" text="还没有导师会话。可以带着一个具体问题开始。" href="/tutor" action="开始对话"/>; }
-function DraftsWidget({ data }) { const rows = data.writing?.documents || []; return rows.length ? <div className="cleanRows compact">{rows.slice(0, 4).map(row => <Link href="/writing" className="cleanRow" key={row.id}><span className="rowIcon"><Icon name="pen"/></span><span className="rowMain"><strong>{row.title}</strong><small>{row.status === 'draft' ? '草稿' : row.status}</small></span><time>{formatRelativeDate(row.updated_at)}</time></Link>)}</div> : <EmptyWidget icon="pen" text="还没有草稿。研究结论或学习笔记都可以成为开头。" href="/writing" action="新建草稿"/>; }
+function DraftsWidget({ data }) { const rows = data.writing?.documents || []; return rows.length ? <div className="cleanRows compact">{rows.slice(0, 4).map(row => <Link href="/writing" className="cleanRow" key={row.id}><span className="rowIcon"><Icon name="pen"/></span><span className="rowMain"><strong>{row.title}</strong><small>{row.status === 'draft' ? '草稿' : statusLabel(row.status)}</small></span><time>{formatRelativeDate(row.updated_at)}</time></Link>)}</div> : <EmptyWidget icon="pen" text="还没有草稿。研究结论或学习笔记都可以成为开头。" href="/writing" action="新建草稿"/>; }
 function NeedsShapingWidget({ data }) { const rows = data.outputs.filter(item => ['note', 'writing', 'activity'].includes(item.type) && !item.raw?.approved_at); return <SimpleOutputRows rows={rows} empty="目前没有需要整理的内容。" href="/outputs"/>; }
 
 function SimpleOutputRows({ rows, empty, href }) { return rows.length ? <div className="cleanRows compact">{rows.slice(0, 4).map(item => <Link href={item.href} className="cleanRow" key={item.id}><span className="rowIcon"><Icon name={item.icon}/></span><span className="rowMain"><strong>{item.title}</strong><small>{item.label}</small></span><time>{formatRelativeDate(item.date)}</time></Link>)}</div> : <EmptyWidget icon="outputs" text={empty} href={href} action="前往查看"/>; }

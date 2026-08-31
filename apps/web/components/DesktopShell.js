@@ -8,6 +8,7 @@ import { api, getDesktopRuntime, refreshDesktopRuntime, getInterestAreaSelector,
 import Icon from './Icon';
 import { useRuntimeCopy } from './useRuntimeCopy';
 import { maybeRunUiIpcE2e } from '../lib/runtime/ui-ipc-e2e';
+import { domainLabel, sourceTypeLabel, toUserMessage } from '../lib/presentation.js';
 
 const NAV = [
   { href: '/', label: '今日', icon: 'home', group: 'focus', keywords: 'home dashboard today 首页' },
@@ -38,10 +39,22 @@ function CommandPalette({ open, onClose, runtimeCopy }) {
   const [contentRows, setContentRows] = useState([]);
   const [searching, setSearching] = useState(false);
   const previousFocus = useRef(null);
+  const [mounted, setMounted] = useState(open);
+  const [visible, setVisible] = useState(open);
   const router = useRouter();
   useEffect(() => {
-    if (open) { previousFocus.current = document.activeElement; setQuery(''); setActive(0); setContentRows([]); }
-    else previousFocus.current?.focus?.();
+    if (open) {
+      previousFocus.current = document.activeElement;
+      setMounted(true);
+      requestAnimationFrame(() => setVisible(true));
+      setQuery(''); setActive(0); setContentRows([]);
+    } else if (mounted) {
+      setVisible(false);
+      const timer = window.setTimeout(() => setMounted(false), 180);
+      previousFocus.current?.focus?.();
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
   }, [open]);
   const navigationRows = useMemo(() => {
     const value = query.trim().toLowerCase();
@@ -60,7 +73,7 @@ function CommandPalette({ open, onClose, runtimeCopy }) {
       setContentRows([
         ...(questions.questions || []).filter(row => contains(row.question)).map(row => ({ id: `question:${row.id}`, label: row.question, detail: '保留的问题', kind: '问题', icon: 'question', href: '/curiosity' })),
         ...(notes.notes || []).filter(row => contains(`${row.title} ${row.body_markdown}`)).map(row => ({ id: `note:${row.id}`, label: row.title || '未命名笔记', detail: excerpt(row.body_markdown), kind: '笔记', icon: 'pen', href: '/learning' })),
-        ...(sources.sources || []).filter(row => contains(`${row.title} ${row.original_filename} ${row.source_type}`)).map(row => ({ id: `source:${row.id}`, label: row.title || row.original_filename || '未命名资料', detail: row.original_filename || row.source_type || '本地资料', kind: '资料', icon: 'source', href: '/knowledge' })),
+        ...(sources.sources || []).filter(row => contains(`${row.title} ${row.original_filename} ${row.source_type}`)).map(row => ({ id: `source:${row.id}`, label: row.title || row.original_filename || '未命名资料', detail: row.original_filename || sourceTypeLabel(row.source_type), kind: '资料', icon: 'source', href: '/knowledge' })),
       ].slice(0, 30));
       setSearching(false);
     }, 180);
@@ -69,8 +82,8 @@ function CommandPalette({ open, onClose, runtimeCopy }) {
   const rows = useMemo(() => [...navigationRows, ...contentRows], [navigationRows, contentRows]);
   useEffect(() => { setActive(value => Math.min(value, Math.max(0, rows.length - 1))); }, [rows.length]);
   function choose(item) { if (!item) return; router.push(item.href); onClose(); }
-  if (!open) return null;
-  return <div className="commandBackdrop" onMouseDown={onClose}>
+  if (!mounted) return null;
+  return <div className={`commandBackdrop ${visible ? 'is-visible' : 'is-closing'}`} onMouseDown={onClose}>
     <div className="commandPalette" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="快速跳转">
       <div className="commandInputRow"><Icon name="search"/><input autoFocus value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} placeholder="搜索页面、问题、笔记或资料" onKeyDown={event => { if (event.key === 'Escape') onClose(); if (event.key === 'ArrowDown') { event.preventDefault(); setActive(value => Math.min(rows.length - 1, value + 1)); } if (event.key === 'ArrowUp') { event.preventDefault(); setActive(value => Math.max(0, value - 1)); } if (event.key === 'Enter') { event.preventDefault(); choose(rows[active]); } }}/><kbd>ESC</kbd></div>
       <div className="commandResults" aria-live="polite">{rows.map((item, index) => <button key={item.id} className={`commandItem ${index === active ? 'is-active' : ''}`} onMouseEnter={() => setActive(index)} onClick={() => choose(item)}><span className="commandIcon"><Icon name={item.icon}/></span><span><strong>{item.label}</strong><small>{item.detail || item.kind}</small></span>{index === active && <kbd>↵</kbd>}</button>)}{!rows.length && <div className="commandEmpty"><Icon name="search"/><strong>{searching ? runtimeCopy.searchEmptyTitle : '没有找到匹配内容'}</strong><span>{searching ? runtimeCopy.searchEmptyHint : '换一个更短的关键词试试。'}</span></div>}</div>
@@ -93,13 +106,13 @@ function AreaSwitcher({ areas, current, onSwitch, onCreated }) {
     try {
       const row = await api('/areas', { method: 'POST', body: JSON.stringify(form) });
       setCreating(false); setForm({ name: '', slug: '', domain_pack_id: 'general' }); await onCreated(row);
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(toUserMessage(err)); }
   }
   return <div className="topAreaSwitcher">
     <span>当前兴趣</span>
     <button className="areaSelectButton" onClick={() => setCreating(value => !value)} aria-expanded={creating}><strong>{current?.name || '选择兴趣'}</strong><Icon name="chevronDown" size={14}/></button>
-    {creating && <div className="areaMenu">
-      <div className="areaMenuList">{(areas || []).map(area => <button key={area.id} className={area.id === current?.id ? 'active' : ''} onClick={() => { onSwitch(area.id); setCreating(false); }}><span>{area.name.slice(0, 1).toUpperCase()}</span><div><strong>{area.name}</strong><small>{area.domain_name || area.domain_pack_id}</small></div>{area.id === current?.id && <Icon name="check"/>}</button>)}</div>
+    {creating && <div className="areaMenu" data-state="open">
+      <div className="areaMenuList">{(areas || []).map(area => <button key={area.id} className={area.id === current?.id ? 'active' : ''} onClick={() => { onSwitch(area.id); setCreating(false); }}><span>{area.name.slice(0, 1).toUpperCase()}</span><div><strong>{area.name}</strong><small>{area.domain_name || domainLabel(area.domain_pack_id)}</small></div>{area.id === current?.id && <Icon name="check"/>}</button>)}</div>
       <form className="areaCreateForm" onSubmit={create}><strong>新建兴趣</strong><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value, slug: event.target.value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/[\u4e00-\u9fa5]/g, '') || `interest-${Date.now()}` })} placeholder="例如：城市摄影" required/><select value={form.domain_pack_id} onChange={event => setForm({ ...form, domain_pack_id: event.target.value })}><option value="general">通用兴趣</option><option value="psychology">心理学</option></select>{error && <p className="formError">{error}</p>}<button type="submit" className="compactPrimary"><Icon name="plus"/>创建兴趣</button></form>
     </div>}
   </div>;

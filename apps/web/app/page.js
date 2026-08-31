@@ -7,6 +7,7 @@ import { PromptBar } from '../components/BeautifulUI';
 import { WorkspaceBoard, useWorkspaceData } from '../components/WorkspaceWidgets';
 import { useRuntimeCopy } from '../components/useRuntimeCopy';
 import { api } from '../lib/api';
+import { toUserMessage } from '../lib/presentation.js';
 
 export default function Home() {
   const router = useRouter();
@@ -21,7 +22,7 @@ export default function Home() {
     try {
       await api('/questions', { method: 'POST', body: JSON.stringify({ question: question.trim(), energy_mode: 'normal' }) });
       setQuestion(''); router.push('/curiosity');
-    } catch (err) { setMessage(err.message); }
+    } catch (err) { setMessage(toUserMessage(err)); }
     finally { setBusy(false); }
   }
   return <div className="homePage">
