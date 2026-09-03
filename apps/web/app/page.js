@@ -28,12 +28,24 @@ export default function Home() {
   }
   return <div className="homePage">
     <section className="homeHero">
-      <h1>今天想把哪个兴趣往前推一点？</h1>
-      <p>把想知道的记下来。你可以探索、练习、整理，也可以先停在这里。</p>
-      <div className="outputPromise"><Icon name="lightbulb"/><span>探索、练习和整理的结果会沉淀为学习成果</span></div>
-      <div className="row energyPicker" aria-label="选择投入强度"><span className="muted">这次想怎么推进？</span><select aria-label="这次想怎么推进" value={energy} onChange={event => setEnergy(event.target.value)} disabled={busy}><option value="light">轻量看看</option><option value="normal">正常推进</option><option value="deep">深入投入</option></select></div>
-      <PromptBar className="capturePrompt questionComposer" value={question} onChange={setQuestion} onSubmit={submit} placeholder="记下一个问题" ariaLabel="记下一个问题" disabled={busy} leadingIcon="pencil" shortcutHint commands={false} sendLabel="提交问题"/>
-      {message && <p className="inlineError"><Icon name="warning"/>{message}</p>}
+      <div className="homeHeroIntro">
+        <div className="homeHeroCopy">
+          <h1>今天想把哪个兴趣往前推一点？</h1>
+          <p>把想知道的记下来。你可以探索、练习、整理，也可以先停在这里。</p>
+        </div>
+        <aside className="homeHeroAside" aria-label="开始提示">
+          <span className="homeHeroAsideIcon"><Icon name="spark" size={17}/></span>
+          <div><span>今天的开始不需要很大</span><strong>写下一个你愿意继续的问题。</strong></div>
+        </aside>
+      </div>
+      <div className="homeCapture">
+        <div className="homeCaptureHeader">
+          <div className="homeCaptureTitle"><strong>从一个小问题开始</strong><span>探索、练习和整理的结果会沉淀为学习成果。</span></div>
+          <label className="energyPicker"><span>投入方式</span><select aria-label="这次想怎么推进" value={energy} onChange={event => setEnergy(event.target.value)} disabled={busy}><option value="light">轻量看看</option><option value="normal">正常推进</option><option value="deep">深入投入</option></select></label>
+        </div>
+        <PromptBar className="capturePrompt questionComposer" value={question} onChange={setQuestion} onSubmit={submit} placeholder="记下一个问题" ariaLabel="记下一个问题" disabled={busy} leadingIcon="pencil" shortcutHint commands={false} sendLabel="提交问题"/>
+        {message && <p className="inlineError" role="alert"><Icon name="warning"/>{message}</p>}
+      </div>
     </section>
     {error && <div className="serviceNotice"><Icon name="warning"/><span>{error}</span><button onClick={reload}>重试</button></div>}
     <WorkspaceBoard pageId="home" data={data} loading={loading} compact title="今日工作台"/>

@@ -156,7 +156,7 @@ export function WorkspaceBoard({ pageId, data, loading = false, compact = false,
     : unused;
   return <section className={`workspaceBoard ${compact ? 'is-compact' : ''}`} aria-label={title}>
     <div className="boardTopline">
-      <div><span className="sectionKicker">可按你的方式安排</span>{!compact && <h2>{title}</h2>}</div>
+      <div>{!compact && <h2>{title}</h2>}<span className="boardHint">可按你的方式安排</span></div>
       <div className="boardActions">
         {editing && <button className="quietButton" onClick={reset}><Icon name="refresh"/>恢复默认</button>}
         <button className={`quietButton ${editing ? 'is-active' : ''}`} onClick={() => { setEditing(value => !value); closePicker(); }}><Icon name={editing ? 'check' : 'settings'}/>{editing ? '完成调整' : '调整工作台'}</button>
@@ -212,7 +212,7 @@ function WidgetPicker({ ids, onChoose, onClose, closing = false }) {
   }, [onClose]);
   return <div className={`widgetPickerBackdrop ${closing ? 'is-closing' : ''}`} onMouseDown={onClose}>
     <div ref={dialogRef} className="widgetPicker" role="dialog" aria-modal="true" aria-labelledby="widget-picker-title" onMouseDown={event => event.stopPropagation()}>
-      <div className="pickerHeader"><div><span className="sectionKicker">组件目录</span><h3 id="widget-picker-title">这里放什么？</h3></div><button onClick={onClose} aria-label="关闭组件目录"><Icon name="close"/></button></div>
+      <div className="pickerHeader"><div><h3 id="widget-picker-title">这里放什么？</h3><span className="boardHint">挑一个对当前兴趣有用的入口。</span></div><button onClick={onClose} aria-label="关闭组件目录"><Icon name="close"/></button></div>
       <div className="pickerGrid">{ids.map(id => <button key={id} onClick={() => onChoose(id)}><span className="pickerIcon"><Icon name={META[id]?.icon}/></span><span><strong>{META[id]?.title}</strong><small>{META[id]?.description}</small></span><Icon name="arrowRight"/></button>)}</div>
     </div>
   </div>;
