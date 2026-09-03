@@ -120,13 +120,103 @@ def render_card(body: CardRenderRequest):
 
 
 @router.get("/artifacts")
-def list_artifacts(topic_id: str | None = None):
+def list_artifacts(topic_id: str | None = None, include_archived: bool = False):
     require_plugin_access("capability.content-studio", read=("artifact",))
     with get_session_factory()() as db:
         stmt = select(ArtifactModel).order_by(ArtifactModel.created_at.desc()).limit(200)
         if topic_id:
             stmt = stmt.where(ArtifactModel.topic_id == topic_id)
+        if not include_archived:
+            stmt = stmt.where(ArtifactModel.status == "active")
         return {"artifacts": [model_dict(x) for x in filter_rows_to_current_area(db, db.scalars(stmt).all(), "artifact")]}
+
+
+@router.get("/artifacts/{artifact_id}")
+def get_artifact(artifact_id: str):
+    require_plugin_access("capability.content-studio", read=("artifact", "grounding_ref"))
+    with get_session_factory()() as db:
+        row = db.get(ArtifactModel, artifact_id)
+        if not row:
+            raise HTTPException(404, "artifact not found")
+        try:
+            require_entity_in_current_area(db, "artifact", artifact_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        payload: dict[str, object] = {"artifact": model_dict(row)}
+        refs = db.scalars(select(GroundingRefModel).where(
+            GroundingRefModel.owner_type == "artifact",
+            GroundingRefModel.owner_id == artifact_id,
+        )).all()
+        payload["grounding_refs"] = [model_dict(ref) for ref in refs]
+        metadata = dict(row.metadata_json or {})
+        if row.key and row.kind not in {"export"}:
+            try:
+                raw = get_storage().read_text(row.key)
+                payload["content"] = raw if len(raw) <= 50000 else raw[:50000]
+                payload["content_truncated"] = len(raw) > 50000
+            except (OSError, UnicodeDecodeError):
+                payload["content"] = None
+        if metadata.get("mime_type") == "image/svg+xml":
+            payload["preview_url"] = f"/api/visual-artifacts/{artifact_id}/preview"
+        return payload
+
+
+@router.post("/artifacts/{artifact_id}/archive")
+def archive_artifact(artifact_id: str):
+    require_plugin_access("capability.content-studio", read=("artifact",), write=("artifact",))
+    with get_session_factory()() as db:
+        row = db.get(ArtifactModel, artifact_id)
+        if not row:
+            raise HTTPException(404, "artifact not found")
+        try:
+            require_entity_in_current_area(db, "artifact", artifact_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        row.status = "archived"
+        db.commit(); db.refresh(row)
+        return model_dict(row)
+
+
+@router.post("/artifacts/{artifact_id}/restore")
+def restore_artifact(artifact_id: str):
+    require_plugin_access("capability.content-studio", read=("artifact",), write=("artifact",))
+    with get_session_factory()() as db:
+        row = db.get(ArtifactModel, artifact_id)
+        if not row:
+            raise HTTPException(404, "artifact not found")
+        try:
+            require_entity_in_current_area(db, "artifact", artifact_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        row.status = "active"
+        db.commit(); db.refresh(row)
+        return model_dict(row)
+
+
+@router.delete("/artifacts/{artifact_id}")
+def delete_artifact(artifact_id: str):
+    require_plugin_access("capability.content-studio", read=("artifact",), write=("artifact",))
+    with get_session_factory()() as db:
+        row = db.get(ArtifactModel, artifact_id)
+        if not row:
+            raise HTTPException(404, "artifact not found")
+        try:
+            require_entity_in_current_area(db, "artifact", artifact_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        key = row.key
+        db.query(GroundingRefModel).filter(
+            GroundingRefModel.owner_type == "artifact",
+            GroundingRefModel.owner_id == artifact_id,
+        ).delete(synchronize_session=False)
+        db.delete(row)
+        db.commit()
+    if key:
+        path = get_storage().path_for(key)
+        if path.is_file():
+            path.unlink()
+    emit("artifact.deleted", {"artifact_id": artifact_id})
+    return {"id": artifact_id, "deleted": True}
 
 
 @router.post("/artifacts/{artifact_id}/approve")

@@ -6,7 +6,7 @@ Interest Growth 是一个 **local-first、multi-interest** 的 Windows/macOS 桌
 
 所有产品能力都由 Interest Growth 的 **Native Core** 实现。DeepSeek 只作为可选模型传输层，为已获授权的原生能力提供模型推理；它不持有产品身份、流程或数据。数据库、Source/Artifact、Evidence/Claim、Practice、Note、Growth Memory、Writing、Living Book 与人工审核状态均由本地 Host 持有。
 
-## 当前 1X 产品契约（全量审计基线）
+## 当前 1.0.20 产品契约（全量审计基线）
 
 - 当前实现只支持 `CURRENT_SCHEMA_VERSION` 的全新 Host 数据库；旧数据库不会自动迁移，也不承诺兼容。schema 不兼容时必须 fail-closed。备份与恢复只接受同一当前 schema，恢复前保留可回退的现有数据。
 - General 与 Psychology 都由后端返回各自的 Mastery Profile；前端不得硬编码另一领域的状态、标签或证据规则。
@@ -15,7 +15,9 @@ Interest Growth 是一个 **local-first、multi-interest** 的 Windows/macOS 桌
 
 本节描述当前产品契约。下方带有旧版本号的章节是历史实现记录，不能单独作为当前发布或兼容性证明；当前 commit、Actions 与发布边界以 `docs/audits/INTEREST_GROWTH_1X_FULL_IMPLEMENTATION_AUDIT.md` 及对应 exact-SHA 证据为准。
 
-## v0.6 原生执行产品
+## 历史 v0.6 原生执行实现
+
+以下内容记录原生执行核心的演进背景；当前契约以本节上方和最终审计文件为准。
 
 v0.6 把原生执行核心接入真实 Host，而不是把两个源码包并排放置：
 
@@ -132,7 +134,9 @@ Tauri 2
 - native Save dialog；
 - signed updater architecture。
 
-## Planned v0.7 self-hosted cross-device mode
+## 历史 v0.7 自托管与跨设备设计
+
+v0.7 文档是已完成的跨设备设计/实现记录，不是当前浏览器端正式支持承诺。当前正式运行时仍为 `desktop-local`、`desktop-remote` 和 `android-remote`；`browser-remote` 只保留为实验性描述。
 
 The approved next direction is an additive self-hosted mode rather than a replacement for the existing local desktop runtime:
 
@@ -185,9 +189,9 @@ Schema ledger：
 
 它们是 **upgrade compatibility anchors**，不是当前产品品牌。未来如果要改，必须做一轮专门的 App Data / credential / updater migration，而不是字符串替换。
 
-## Known v0.5 compatibility limitation
+## 当前 1X 生命周期收口
 
-历史 `knowledge_bases.name` 与 Tutor Persona name 仍是全局唯一。它不会造成 Area 数据泄漏，但两个 Area 暂时不能创建完全同名的 Knowledge Base / user Persona。安全移除这些 legacy unique constraints 需要专门的 non-additive migration，因此没有混入本次 additive v0.5 升级。
+Knowledge Base 与 Tutor Persona 的名称按 Interest Area 参与隔离，不再依赖全局唯一约束；Source、Evidence、Concept、Practice、Note、Artifact、Writing、Living Book、Tutor、Reflection 与 Career Experiment 均提供明确的编辑、归档/恢复或删除路径。删除来源会让依赖的 Claim、Artifact 与 Living Book 进入需要复核/过期状态，而不会静默保留失效依据。
 
 ## 开发运行
 

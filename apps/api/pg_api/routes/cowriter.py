@@ -4,6 +4,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..cowriter import create_document, decide_revision, document_bundle, list_documents, propose_revision, update_document
+from ..db import WritingDocumentModel, WritingRevisionModel, get_session_factory
+from ..domains import require_entity_in_current_area
+from sqlalchemy import select
 from ..features import feature_enabled
 from ..plugins import require_plugin_access
 from ..serializers import model_dict
@@ -19,14 +22,16 @@ class DocumentCreate(BaseModel):
 class DocumentUpdate(BaseModel):
     title: str | None = None
     content_markdown: str | None = None
-    status: str | None = None
+    status: str | None = Field(default=None, pattern='^(draft|review|published|archived)$')
 
 class RevisionCreate(BaseModel):
-    selected_text: str = Field(min_length=1)
+    selected_text: str = Field(default='', min_length=0)
     instruction: str = ''
     mode: str = 'rewrite'
     tools: list[str] = []
     knowledge_base_id: str | None = None
+    selection_start: int | None = Field(default=None, ge=0)
+    selection_end: int | None = Field(default=None, ge=0)
 
 class RevisionDecision(BaseModel):
     accept: bool
@@ -38,8 +43,11 @@ def _require(*, read=(), write=(), risks=()):
         raise HTTPException(503, 'Co-Writer disabled')
 
 @router.get('/writing/documents')
-def documents():
-    _require(read=('writing_document',)); return {'documents': [model_dict(x) for x in list_documents()]}
+def documents(include_archived: bool = False):
+    _require(read=('writing_document',))
+    rows = list_documents()
+    if not include_archived: rows = [row for row in rows if row.status != 'archived']
+    return {'documents': [model_dict(x) for x in rows]}
 
 @router.post('/writing/documents')
 def add_document(body: DocumentCreate):
@@ -76,3 +84,28 @@ def decide(revision_id: str, body: RevisionDecision):
     try: revision, document = decide_revision(revision_id, accept=body.accept)
     except ValueError as exc: raise HTTPException(409, str(exc)) from exc
     return {'revision': model_dict(revision), 'document': model_dict(document)}
+
+@router.post('/writing/documents/{document_id}/archive')
+def archive_document(document_id: str):
+    _require(read=('writing_document',), write=('writing_document',))
+    try: return model_dict(update_document(document_id, status='archived'))
+    except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+
+@router.post('/writing/documents/{document_id}/restore')
+def restore_document(document_id: str):
+    _require(read=('writing_document',), write=('writing_document',))
+    try: return model_dict(update_document(document_id, status='draft'))
+    except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+
+@router.delete('/writing/documents/{document_id}')
+def delete_document(document_id: str):
+    _require(read=('writing_document', 'writing_revision'), write=('writing_document', 'writing_revision'))
+    with get_session_factory()() as db:
+        row = db.get(WritingDocumentModel, document_id)
+        if not row: raise HTTPException(404, 'writing document not found')
+        try: require_entity_in_current_area(db, 'writing_document', document_id)
+        except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+        revisions = db.scalars(select(WritingRevisionModel).where(WritingRevisionModel.document_id == document_id)).all()
+        for revision in revisions: db.delete(revision)
+        db.delete(row); db.commit()
+    return {'id': document_id, 'deleted': True, 'revisions_deleted': len(revisions)}

@@ -210,3 +210,48 @@ def test_persist_sources_keeps_verified_false(client):
     for sid in source_ids:
         assert by_id[sid]["verified"] is False
         assert by_id[sid]["verified_at"] is None
+
+
+def test_provider_failure_uses_the_approved_plan_snapshot(client, monkeypatch):
+    """A provider outage may degrade execution, but may not replace Plan A."""
+    from interest_growth_native.errors import ProviderUnavailable
+    from pg_api.routes import research as research_routes
+
+    captured = {}
+
+    class FailingResearch:
+        def run_confirmed(self, _context, *, question, subtopics, **kwargs):
+            captured["question"] = question
+            captured["subquestions"] = [item.title for item in subtopics]
+            captured["outline_status"] = kwargs["outline_status"]
+            raise ProviderUnavailable("fixture provider unavailable")
+
+    class FailingBundle:
+        research = FailingResearch()
+
+    monkeypatch.setattr(research_routes, "get_native_bundle", lambda: FailingBundle())
+    topic = _topic(client)
+    approved = {
+        "question": "Plan A 的研究问题",
+        "brief": "用户确认的研究范围",
+        "subquestions": ["先看定义", "再看反例"],
+        "desired_sources": ["原始资料", "反方资料"],
+        "depth": "normal",
+        "approved": True,
+    }
+    response = client.post("/api/research/run", json={
+        "topic_id": topic["id"],
+        "question": "不要执行的原始问题",
+        "depth": "normal",
+        "approved_plan": approved,
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["run"]["status"] == "degraded"
+    assert captured == {
+        "question": "Plan A 的研究问题",
+        "subquestions": ["先看定义", "再看反例"],
+        "outline_status": "approved_by_user",
+    }
+    assert body["result"]["plan"]["question"] == approved["question"]
+    assert body["result"]["plan"]["subquestions"] == approved["subquestions"]

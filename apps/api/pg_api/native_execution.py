@@ -162,6 +162,14 @@ OPERATION_POLICIES: dict[str, dict[str, Any]] = {
         "read": ("auxiliary_agent_memory",),
         "scope_read": ("agent_memory",),
     },
+    "memory.clear": {
+        "plugin": "capability.memory-graph",
+        "feature": "FEATURE_MEMORY_GRAPH",
+        "read": ("auxiliary_agent_memory",),
+        "write": ("auxiliary_agent_memory",),
+        "scope_read": ("agent_memory",),
+        "scope_write": ("agent_memory",),
+    },
 }
 
 

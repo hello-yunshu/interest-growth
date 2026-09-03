@@ -50,3 +50,36 @@ def test_career_summary_returns_cautious_signal_contract(client):
     assert summary["signal"]["direction"] == "教学"
     assert summary["signal"]["confidence"] == "low"
     assert summary["signal"]["sample_size"] == 1
+
+
+def test_mastery_patch_preserves_evidence_note_when_omitted(client):
+    topic = client.post("/api/topics", json={"title": "证据保留"}).json()
+    concept = client.post("/api/concepts", json={"topic_id": topic["id"], "name": "概念"}).json()["concept"]
+    first = client.put(f"/api/concepts/{concept['id']}/mastery", json={
+        "state": "familiar", "evidence_note": "我能解释它的适用边界。",
+    })
+    assert first.status_code == 200
+    second = client.put(f"/api/concepts/{concept['id']}/mastery", json={"state": "explain"})
+    assert second.status_code == 200
+    assert second.json()["evidence_note"] == "我能解释它的适用边界。"
+
+
+def test_question_patch_cannot_bypass_lifecycle_service(client):
+    question = client.post("/api/questions", json={"question": "状态机问题"}).json()
+    blocked = client.patch(f"/api/questions/{question['id']}", json={"state": "closed"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "question_state_transition_required"
+    assert client.get(f"/api/questions/{question['id']}").json()["state"] == "captured"
+
+
+def test_system_plugin_error_paths_return_http_errors(client):
+    for path in (
+        "/api/plugins/unknown-plugin/install",
+        "/api/plugins/unknown-plugin/uninstall",
+        "/api/plugins/unknown-plugin/update",
+        "/api/plugins/unknown-plugin/rollback",
+    ):
+        response = client.post(path)
+        assert response.status_code == 404, (path, response.text)
+    response = client.put("/api/features/unknown-feature", json={"enabled": True})
+    assert response.status_code == 404

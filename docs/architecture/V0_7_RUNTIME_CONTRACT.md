@@ -1,4 +1,8 @@
-# Interest Growth v0.7 — Runtime Contract (Gate A, frozen)
+# Interest Growth v0.7 — Runtime Contract (historical)
+
+> Historical design record. The current 1X contract formally supports
+> `desktop-local`, `desktop-remote` and `android-remote`; `browser-remote` is
+> experimental and is not included in the supported runtime list.
 
 This document freezes the runtime semantics that every v0.7 client and the
 self-hosted server must implement. It is normative for Gate B–G. Behavior
@@ -12,7 +16,7 @@ compatibility check.
 | `desktop-local` | Tauri 2 (Windows/macOS) | local device | Python Core on loopback | OS App Data (`psychology_growth.db` + Sources + Artifacts) | existing desktop installer/DMG path |
 | `desktop-remote` | Tauri 2 (Windows/macOS) | self-hosted server | none (remote only) | server DB + server vaults | same desktop package |
 | `android-remote` | Tauri 2 (Android) | self-hosted server | never bundles Python | server DB + server vaults | direct APK sideload |
-| `browser-remote` | static Next.js export in a WebView-free browser | self-hosted server | none | server DB + server vaults | served only by the controlled HTTPS deployment |
+| `browser-remote` | static Next.js export in a WebView-free browser | self-hosted server | none | server DB + server vaults | experimental only; no formal release support |
 
 Frozen semantics:
 

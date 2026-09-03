@@ -11,6 +11,7 @@ from pg_domain import CapabilityStatus
 
 from ..db import (
     CapabilityRunModel,
+    EntityAreaBindingModel,
     KnowledgeBaseModel,
     KnowledgeIngestionRunModel,
     KnowledgeSourceIndexModel,
@@ -122,8 +123,6 @@ def create_knowledge_base(body: KnowledgeBaseCreate):
     _require_knowledge_feature(write=("knowledge_base",))
     _require_selectable_engine(body.rag_provider)
     with get_session_factory()() as db:
-        if db.scalar(select(KnowledgeBaseModel).where(KnowledgeBaseModel.name == body.name)):
-            raise HTTPException(409, "knowledge base name already exists")
         row = KnowledgeBaseModel(
             name=body.name,
             description=body.description,
@@ -138,6 +137,25 @@ def create_knowledge_base(body: KnowledgeBaseCreate):
         db.refresh(row)
     emit("knowledge_base.created", {"knowledge_base_id": row.id, "provider": row.rag_provider})
     return model_dict(row)
+
+
+@router.delete("/knowledge/bases/{kb_id}")
+def delete_knowledge_base(kb_id: str):
+    _require_knowledge_feature(read=("knowledge_base", "knowledge_mapping", "knowledge_ingestion_run", "retrieval_candidate"), write=("knowledge_base", "knowledge_mapping", "knowledge_ingestion_run", "retrieval_candidate"))
+    with get_session_factory()() as db:
+        kb = db.get(KnowledgeBaseModel, kb_id)
+        if not kb: raise HTTPException(404, "knowledge base not found")
+        try: require_entity_in_current_area(db, "knowledge_base", kb_id)
+        except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+        mappings = db.scalars(select(KnowledgeSourceIndexModel).where(KnowledgeSourceIndexModel.knowledge_base_id == kb_id)).all()
+        candidates = db.scalars(select(RetrievalCandidateModel).where(RetrievalCandidateModel.knowledge_base_id == kb_id)).all()
+        runs = db.scalars(select(KnowledgeIngestionRunModel).where(KnowledgeIngestionRunModel.knowledge_base_id == kb_id)).all()
+        for row in [*mappings, *candidates, *runs]: db.delete(row)
+        db.query(EntityAreaBindingModel).filter(EntityAreaBindingModel.entity_type == "knowledge_base", EntityAreaBindingModel.entity_id == kb_id).delete(synchronize_session=False)
+        db.delete(kb); db.commit()
+    get_native_bundle().retrieval.invalidate(kb_id)
+    emit("knowledge_base.deleted", {"knowledge_base_id": kb_id, "source_files_preserved": True})
+    return {"id": kb_id, "deleted": True, "source_files_preserved": True, "mappings_deleted": len(mappings), "candidates_deleted": len(candidates)}
 
 
 @router.put("/knowledge/bases/{kb_id}")
@@ -267,6 +285,29 @@ def link_source(kb_id: str, source_id: str):
         db.refresh(row)
     emit("knowledge_source.linked", {"knowledge_base_id": kb_id, "source_id": source_id})
     return model_dict(row)
+
+
+@router.post("/knowledge/bases/{kb_id}/sources/{source_id}/unlink")
+@router.delete("/knowledge/bases/{kb_id}/sources/{source_id}")
+def unlink_source(kb_id: str, source_id: str):
+    _require_knowledge_feature(read=("knowledge_base", "source", "knowledge_mapping", "retrieval_candidate"), write=("knowledge_mapping", "retrieval_candidate"))
+    with get_session_factory()() as db:
+        kb = db.get(KnowledgeBaseModel, kb_id); source = db.get(SourceModel, source_id)
+        if not kb or not source: raise HTTPException(404, "knowledge base or source not found")
+        try:
+            require_entity_in_current_area(db, "knowledge_base", kb_id)
+            require_entity_in_current_area(db, "source", source_id)
+        except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+        mapping = db.scalar(select(KnowledgeSourceIndexModel).where(KnowledgeSourceIndexModel.knowledge_base_id == kb_id, KnowledgeSourceIndexModel.source_id == source_id))
+        if mapping: db.delete(mapping)
+        candidates = db.scalars(select(RetrievalCandidateModel).where(RetrievalCandidateModel.knowledge_base_id == kb_id, RetrievalCandidateModel.source_id == source_id)).all()
+        for candidate in candidates: db.delete(candidate)
+        remaining = db.scalar(select(KnowledgeSourceIndexModel.id).where(KnowledgeSourceIndexModel.knowledge_base_id == kb_id))
+        kb.status = "ready" if remaining else "local_only"
+        db.commit()
+    get_native_bundle().retrieval.invalidate(kb_id)
+    emit("knowledge_source.unlinked", {"knowledge_base_id": kb_id, "source_id": source_id})
+    return {"knowledge_base_id": kb_id, "source_id": source_id, "unlinked": True, "source_file_preserved": True, "candidates_deleted": len(candidates)}
 
 
 @router.post("/knowledge/bases/{kb_id}/sources/{source_id}/sync")

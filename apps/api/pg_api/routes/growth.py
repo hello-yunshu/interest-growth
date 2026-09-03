@@ -13,6 +13,7 @@ from ..db import (
     ReflectionModel,
     get_session_factory,
 )
+from fastapi import HTTPException
 from ..events import emit
 from ..domains import filter_rows_to_current_area, get_domain_context, resolve_area
 from ..features import require_feature
@@ -227,10 +228,42 @@ def create_reflection(body: ReflectionCreate):
 
 
 @router.get("/reflections")
-def list_reflections(limit: int = 50):
+def list_reflections(limit: int = 50, include_archived: bool = False):
     require_plugin_access("capability.reflection", read=("reflection",))
     with get_session_factory()() as db:
-        rows = filter_rows_to_current_area(db, db.scalars(
-            select(ReflectionModel).order_by(ReflectionModel.created_at.desc()).limit(min(limit, 200))
-        ).all(), "reflection")
+        stmt = select(ReflectionModel).order_by(ReflectionModel.created_at.desc()).limit(min(limit, 200))
+        if not include_archived: stmt = stmt.where(ReflectionModel.status == "active")
+        rows = filter_rows_to_current_area(db, db.scalars(stmt).all(), "reflection")
         return {"reflections": [model_dict(x) for x in rows]}
+
+
+@router.post("/reflections/{reflection_id}/archive")
+def archive_reflection(reflection_id: str):
+    require_plugin_access("capability.reflection", read=("reflection",), write=("reflection",))
+    with get_session_factory()() as db:
+        row = db.get(ReflectionModel, reflection_id)
+        if not row: raise HTTPException(404, "reflection not found")
+        rows = filter_rows_to_current_area(db, [row], "reflection")
+        if not rows: raise HTTPException(404, "reflection not found in current area")
+        row.status = "archived"; db.commit(); db.refresh(row); return model_dict(row)
+
+
+@router.post("/reflections/{reflection_id}/restore")
+def restore_reflection(reflection_id: str):
+    require_plugin_access("capability.reflection", read=("reflection",), write=("reflection",))
+    with get_session_factory()() as db:
+        row = db.get(ReflectionModel, reflection_id)
+        if not row: raise HTTPException(404, "reflection not found")
+        if not filter_rows_to_current_area(db, [row], "reflection"): raise HTTPException(404, "reflection not found in current area")
+        row.status = "active"; db.commit(); db.refresh(row); return model_dict(row)
+
+
+@router.delete("/reflections/{reflection_id}")
+def delete_reflection(reflection_id: str):
+    require_plugin_access("capability.reflection", read=("reflection",), write=("reflection",))
+    with get_session_factory()() as db:
+        row = db.get(ReflectionModel, reflection_id)
+        if not row: raise HTTPException(404, "reflection not found")
+        if not filter_rows_to_current_area(db, [row], "reflection"): raise HTTPException(404, "reflection not found in current area")
+        db.delete(row); db.commit()
+    return {"id": reflection_id, "deleted": True}

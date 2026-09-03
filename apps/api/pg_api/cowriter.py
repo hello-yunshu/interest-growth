@@ -46,6 +46,8 @@ async def propose_revision(
     mode: str = 'rewrite',
     tools: list[str] | None = None,
     knowledge_base_id: str | None = None,
+    selection_start: int | None = None,
+    selection_end: int | None = None,
 ) -> WritingRevisionModel:
     allowed_modes = {'rewrite', 'shorten', 'expand', 'none'}
     if mode not in allowed_modes: raise ValueError('unsupported edit mode')
@@ -55,9 +57,16 @@ async def propose_revision(
         if not document: raise ValueError('writing document not found')
         require_entity_in_current_area(db, 'writing_document', document_id)
         base = document.content_markdown
-        start = base.find(selected_text)
-        if not selected_text or start < 0: raise ValueError('selected text is not present in current document')
-        end = start + len(selected_text)
+        if selection_start is not None or selection_end is not None:
+            if selection_start is None or selection_end is None or selection_end <= selection_start:
+                raise ValueError('selection_start and selection_end must describe a non-empty range')
+            start, end = selection_start, selection_end
+            if end > len(base) or base[start:end] != selected_text:
+                raise ValueError('selected range is stale or does not match current document')
+        else:
+            start = base.find(selected_text)
+            if not selected_text or start < 0: raise ValueError('selected text is not present in current document')
+            end = start + len(selected_text)
         base_revision_id = f"{document.id}:{document.updated_at.isoformat()}"
     if 'rag' in tools:
         if not knowledge_base_id: raise ValueError('rag edit requires a local knowledge_base_id')
