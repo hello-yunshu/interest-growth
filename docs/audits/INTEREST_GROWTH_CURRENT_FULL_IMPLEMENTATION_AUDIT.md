@@ -1,65 +1,77 @@
 # Interest Growth 当前全仓库实现审计
 
 审计日期：2026-09-04
-审计基线：本轮提交（基于远端 `main` `11d3a6c64f252ff3868c8b611644722efcf313f6`）
-产品版本：1.0.20
+审计 SHA：`1b02417c2cf7b23ad2e7acfa6f88d12ea8b86fdf`
+分支：`main`，与 `origin/main` 一致
+产品版本：`1.0.20`
 
 ## 结论
 
-本轮已完成 P0，并完成 P1/P2 中与当前产品声明直接相关的真实闭环：Native Core 仍是唯一执行核心；Research 使用同一份用户批准快照；Curiosity 只能通过显式状态机推进；学习辅助能力按独立 Feature/Plugin/Area gate 判定；Evidence、Source、Concept、Practice、Note、Artifact、Writing、Living Book、Tutor、Reflection 与 Career Experiment 均有可持久化的生命周期路径。
+本轮针对最新 `main` 完成了全仓库代码审计、当前可复现缺陷修复、锁文件/安全说明收口，并已推送。P0 的 HTTP 错误契约、批准计划快照、CapabilityRun 状态、独立能力门禁、掌握证据保留和 Curiosity 状态机在源码与测试中保持闭环；本轮另外修复了真实关系图占位、Curiosity 状态动作显示、UI 中文文案断言和可选 RAG 安全扫描阻断。
 
-代码与 Web 验证为 `PASS`。当前没有把静态检查替代成发布证据：exact-SHA CI、构建产物签名/发布、Windows/macOS/Android 真机和公共 TLS 仍需在对应环境重新取得证据。
+这不是一次新的产品发布：远端 `v1.0.20` 已于 2026-08-30 发布，注释 tag 最终指向 `d6290b44616cb66c288bf3468904e86bf43365d9`。本 SHA 是其后的 `main` 源码审计提交；若要把本轮修改作为新版本发布，仍需重新走版本化 Candidate/Promotion/Tag/Release 流程。
 
-## P0/P1/P2 实现矩阵
+## P0 / P1 / P2 特性矩阵
 
-| 能力 | Frontend → API → Gate → Backend/Native → DB/Storage → UI/Recovery/Lifecycle | 判定 |
-| --- | --- | --- |
-| 系统错误契约 | System 页面 → `/plugins/*`、`/features/*`、Area capability API → unknown plugin/feature 与冲突均为 typed 404/409 → PluginRuntime → Feature/Area 状态持久化 → UI 显示错误并可重试 | ✅ 完整实现 |
-| Research 计划快照 | Research Plan/ApprovalCard → `/research/plan`、`/research/run` → Feature、Plugin、Area、Permission、Domain/KB gate 在创建 RUNNING 前完成 → Native Research 或显式 provider degraded fallback 均消费 approved snapshot → CapabilityRun/Source/Evidence/Claim → reload 可查看同一计划；失败为 FAILED | ✅ 完整实现 |
-| Research gate 顺序 | 研究入口 → `resolve_native_context` → Area/Feature/Plugin/Area capability/Permission/Domain/KB → 最后创建 RUNNING → Native/provider → CapabilityRun 状态 | ✅ 完整实现 |
-| Curiosity 状态机 | Home/Curiosity → `/questions/{id}/explore|pause|return|promote|close` → capability gate + `QuestionTransitionService` → QuestionModel 与 GrowthEvent → UI 按状态呈现 → 非法转移 409；generic PATCH 不可改 state/active/returned_count | ✅ 完整实现 |
-| Mastery Evidence | Learning → `/concepts/{id}/mastery` 与 `/mastery-evidence/{id}/invalidate` → Practice/Area/Permission gate → MasteryRecord/MasteryEvidence → evidence note 在只更新 state 时保留 → 可显式失效且保留原因 | ✅ 完整实现 |
-| Learning 独立门禁 | Learning → mastery assist / visualize / concept graph / knowledge 各自读取 capability state → Feature + Plugin installed/enabled + Area enabled → 对应 Native capability → UI 独立禁用与错误态；能力状态支持 loading/available/unavailable/error | ✅ 完整实现 |
-| Interest Area | System/Area → `/areas`、`/areas/{id}`、capability API → current Area scope → Domain Pack/Profile 与 EntityAreaBinding → General 不读取 Psychology 专属状态；变更后前端可 refresh | ✅ 完整实现 |
-| Energy mode | Home/Curiosity/Reflection → Question/Reflection API → enum 校验 → Question/Reflection 持久化 → UI 使用用户选择的 light/normal/deep，不再硬编码 normal | ✅ 完整实现 |
-| Source/Evidence/Claim | Research/Knowledge → Source、Evidence、Claim、reverification API → Area/Permission/verification gates → Host DB + source vault → source 删除会标记依赖 Claim/Artifact/Book 需要复核/过期，不静默保留失效依据 | ✅ 完整实现 |
-| Knowledge Base | Knowledge → KB create/update/link/unlink/delete/sync/rebuild → Feature/Plugin/Area/Permission → Native retrieval/index + Host mapping → 原始 Source 文件保留，KB 删除/解除映射不制造孤儿候选 | ✅ 完整实现 |
-| Concept/Practice/Note | Learning → edit/archive/restore/delete endpoints → scoped selectors + dependency checks → Host DB → Concept 删除有依赖时阻断或显式 force；Practice attempt 与 Note mapping 清理 | ✅ 完整实现 |
-| Tutor | Tutor → session/update/native turn/replay/resume/cancel/archive/restore/delete → Feature/Plugin/Area/Permission/Native operation → Host Session/Turn + Native checkpoint/events/aux memory → reload 恢复同一 turn；辅助 memory 可单独清空且不触碰 Growth Memory | ✅ 完整实现 |
-| Co-Writer | Writing textarea selection → `/writing/documents/{id}/revisions` → Feature/Plugin/Native gate → WritingRevision + document update → selectionStart/End 校验 current document/base SHA → Diff Accept/Reject 与 stale-base 保护 | ✅ 完整实现 |
-| Living Book | Book → local compile/project/confirm proposal/confirm spine + archive/restore/delete → Feature/Plugin/Area/Permission → Host Book/Chapter，Native 仅生成 proposal → 审阅 UI 展示真实 proposal/spine JSON、章节来源与 stale 状态 | ✅ 完整实现 |
-| Artifact | Content/Learning → `/artifacts`、详情、approve/export/archive/restore/delete → Content/Graph/Permission/Human Review gate → Artifact storage + GroundingRef → `/artifacts/detail?id=` 可用于 static export，`/artifacts/[id]` 保留语义路由；批准不等于外部发布 | ✅ 完整实现 |
-| Growth/Reflection | Growth → `/growth/*`、`/reflections`、archive/restore/delete → Growth capability/Feature → Growth Memory authoritative；Native auxiliary read-only/可清空 → UI 分开展示两类记忆，不伪装为同一事实 | ✅ 完整实现 |
-| Career Experiment | Career → create/update/complete/archive/restore/delete → Career Feature/Plugin/Area → CareerExperiment + summary basis/confidence/sample/ties → UI 明示低置信度与不替用户决策 | ✅ 完整实现 |
-| General/Psychology 边界 | Area selector → 所有 direct-ID API 验证 EntityAreaBinding → Domain Pack 提供 rules/profile/skills/personas → Host DB → General 页面不出现 Psychology mastery/提示词/专属证据规则 | ✅ 完整实现 |
-
-## P3 与明确边界
-
-| 项目 | 审计结论 |
+| 能力 | 当前实现链路与判断 |
 | --- | --- |
-| Native Core root/package mirror | `scripts/verify_native_core_sync.py` 通过；本轮修改后已同步镜像。保留双目录作为发布镜像，不再允许内容漂移。 |
-| Browser remote | API 的正式支持列表为 `desktop-local`、`desktop-remote`、`android-remote`；`browser-remote` 在 capability response 和 v0.7 历史文档中明确为 experimental，不作为正式 release claim。 |
-| RAG 层次 | Native lexical/lightgraph/concept-graph/heading 与 reviewed exact adapters 保留；retrieval candidate 仍不是 Evidence，外部索引仍是可重建投影。 |
-| 历史文档 | README、Development Contract、v0.7 runtime contract 已标注 current/historical 边界；旧版本号文档不再被当作当前发布证据。 |
-| 未来外部集成 | 本轮未新增未经闭环验证的第三方集成；优先保证 Host/Native/Area/Permission/Review contracts。 |
+| 系统错误契约 | System → typed API error → UI 用户文案；未知插件、能力和冲突不伪装成功。✅ |
+| Research 计划快照 | 先完成 Area/Feature/Plugin/Permission/Domain/KB gate，再创建 RUNNING；执行消费同一份 approved snapshot，失败显式 FAILED。✅ |
+| CapabilityRun | 创建前完成 gate；异常路径 terminalize，不留下孤儿 RUNNING。✅ |
+| Curiosity | `captured → exploring → returned/paused → active_topic/closed` 由服务端状态机控制；UI 按状态显示 Explore/Pause/Return/Promote/Close。✅ |
+| 掌握证据 | 更新 mastery state 不覆盖 `evidence_note`；Practice promotion 与显式失效保留来源和原因。✅ |
+| 学习能力门禁 | mastery、visualize、concept graph、knowledge/RAG 分别读取 Feature + Plugin + Area capability；loading/error/unavailable 时 fail-closed。✅ |
+| 多兴趣与 Domain Pack | EntityAreaBinding + current Area 过滤；General 与 Psychology 的实体、规则、掌握标准隔离。✅ |
+| Energy mode | Question/Reflection 持久化 `light/normal/deep`，前端不再硬编码 normal。✅ |
+| Source / Evidence / Claim | 来源核验、失效传播、主张版本和再核验队列保留；候选检索结果不能直接成为 Evidence。✅ |
+| Knowledge Base / RAG | Native provider 与 reviewed exact adapter 分开；无 adapter 时返回 requires_review，禁止静默 fallback；unlink/delete 保留原始 Source 文件并清理投影。✅ |
+| Learning / Practice / Note | 概念、练习、作答、笔记与 mastery evidence 均有持久化路径和依赖检查。✅ |
+| Graph / Visualize | GraphView 已为真实 SVG 关系查看器：类型筛选、搜索、缩放、平移、节点选择、邻居聚焦；Visualize 复用同一 viewer，不再是卡片/列表占位。✅ |
+| Tutor | Session/Turn/replay/resume/cancel/archive/restore/delete 由 Host 持有；能力、权限和恢复失败均显式反馈。✅ |
+| CoWriter | 选择区、base/current 校验、Diff、Accept/Reject 和 stale-base 保护存在；正文不会被 AI 自动覆盖。✅ |
+| Living Book | 本地 compile、proposal/spine review、confirm、章节来源指纹及 archive/restore/delete 存在；提案不是事实。✅ |
+| Artifact / Content | 生成包、依据、人工批准、导出、archive/restore/delete 分离；批准不代表外部发布。✅ |
+| Growth / Memory | Growth Memory 是权威；Native auxiliary memory 可独立清除，不冒充用户成长事实。✅ |
+| Career Experiment | 实验、结果、证据、反思、置信度和生命周期路径存在，不替用户作职业决定。✅ |
+
+## 本轮源码修复
+
+- 将 `VisualExplanation` 与 `GraphView` 接入真实可交互关系图，并加入键盘可达性、节点搜索、缩放、平移和邻居聚焦。
+- Curiosity 页面按服务端状态只显示合法动作，避免状态与动作错配。
+- 修复 activity trace 的真实用户文案断言：`工具已经完成`。
+- 将可选 GraphRAG 的 NLTK 下限和 `uv.lock` 统一到 `3.10.3`；CI 的 `PYSEC-2026-3740` 例外仅限可选 RAG scanner metadata mismatch，并在 `SECURITY.md` 留下 review 条件，不放宽旧版本。
+- 更新 `CHANGELOG.md` / `PROJECT_STATUS.md`，把已发布的 `v1.0.20` 与当前 post-release main audit 分离。
+- 保持 Native Core 镜像目录：`verify_native_core_sync.py` 通过，镜像漂移由脚本和 CI 约束；没有证据证明可安全删除任一发布镜像。
 
 ## 验证记录
 
 | Gate | 结果 | 证据 |
 | --- | --- | --- |
-| Python compileall | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 -m compileall -q apps packages adapters scripts tests` |
-| Python full test | PASS | `./.venv/bin/pytest -q`，本轮最终全量通过 |
+| Python full test | PASS | `./.venv/bin/pytest -q -p no:cacheprovider`：全量通过 |
+| UI adoption tests | PASS | `tests/test_beautiful_ui_adoption.py`：13 passed |
+| Web unit | PASS | `npm run test:web-unit`：103 passed |
 | Web lint | PASS | `npm run lint` |
-| Web unit | PASS | `npm run test:web-unit`，103 passed |
-| Web production build | PASS | `npm run build`，Next static export completed |
-| Browser responsive/a11y/localization | PASS | Playwright 58/58 passed；4 个 Home 视口修复后专项 4/4 passed；覆盖 360/390/768/1440 |
+| Web production build | PASS | `npm run build` |
 | Native Core sync | PASS | `python3 scripts/verify_native_core_sync.py` |
-| Source manifest | PASS | `python3 scripts/generate_source_manifest.py --check`，477 entries |
-| self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
-| Rust desktop check | PASS | `cargo check --locked`；仅有既有 dead-code warnings |
-| exact-SHA GitHub Actions | ❓ 需要真实环境验证 | 本地尚未取得本轮工作树对应 commit 的新 Actions run |
-| Windows/macOS/Android 真机、签名与公开 TLS | ❓ 需要真实环境验证 | 本机没有对应硬件/发布证据；不能用本地 green tests 替代 |
+| Source manifest | PASS | `python3 scripts/generate_source_manifest.py --check` |
+| Self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
+| Rust source | PASS locally | `cargo check --locked`；仅既有 dead-code warnings |
+| Current-SHA GitHub Actions | CI/Web E2E PASS；Build Artifacts IN PROGRESS | CI `33806311238` `success`、Web E2E `33806311156` `success`；Build Artifacts `33806311152`：macOS/Android `success`，Windows 仍 `in_progress`，全部绑定本 SHA |
 
-## 变更后的交付边界
+## 发布、设备与环境边界
 
-本轮源代码已达到当前产品契约的实现闭环，发布状态仍应写作：`CODE COMPLETE / RELEASE EVIDENCE PENDING`，直到变更提交后的 exact-SHA CI、Artifacts、签名和真实设备证据全部取得。任何 72h/7d soak 若按用户批准跳过，都应记录为 `SKIPPED (user-approved)`，不得写成 PASS。
+- 已发布稳定版本：`v1.0.20`；GitHub release assets 包含 Android arm64 APK、macOS arm64 app、Windows x64 installer、server bundle、SBOM、checksum 和 release verification 文档。
+- 本轮不是新 Stable 发布，也没有把当前 SHA 的 CI/Artifacts 运行中状态写成 release PASS。
+- Android emulator、Android physical device、Windows/macOS packaged runtime、代码签名、公开 TLS、自托管跨设备和 72h/7d soak 未在本机重新取得本轮完整证据；它们应写作 `NOT RUN` 或 `SKIPPED (user-approved)`，不能由本地测试推断通过。
+- Browser remote 仍是 experimental；正式 runtime claim 仅覆盖已声明的 desktop-local、desktop-remote、android-remote 路径。
+
+## 当前剩余限制与后续建议
+
+1. 等待并记录 Build Artifacts `33806311152` 的 Windows completed 结果；如失败，只修复该 SHA 暴露的真实问题并重新验证。
+2. 若要发布本轮代码，先生成新版本，再执行 exact-SHA Candidate → Promotion → immutable tag → exact-tag Release matrix。
+3. 继续补齐缺少真实硬件/公网环境的设备、签名、TLS、跨设备和长期 soak 证据；不得用 waiver 冒充 PASS。
+4. 后续 UI 迭代应优先把已存在的后端 archive/restore/delete 能力逐页补到 Learning/Research/Knowledge 等列表操作，并为这些生命周期动作增加浏览器级覆盖。
+
+## 最终判定
+
+当前判定：`SOURCE / LOCAL TESTS PASS; CI + WEB E2E PASS; ARTIFACTS PARTIAL; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。Windows 制品 job 完成前不宣称当前 SHA 的制品矩阵完整通过，也不把本轮提交宣称为新的 Stable release。
