@@ -21,7 +21,7 @@ def test_beautiful_ai_primitives_cover_reference_interactions(project_root):
         "PixelLoader", "ActivityTrace", "StreamingText", "ApprovalCard", "ToolChips",
         "TaskRows", "ChatPanel", "PromptBar", "RecommendationCard", "ContextCards",
         "DiffTable", "RecordsTable", "FilterTabs", "InsightCards", "CodeBlock",
-        "FineTunePanel", "SelectionActions", "SafeSvgPreview",
+        "FineTunePanel", "SelectionActions", "SafeSvgPreview", "GraphView",
     ]
     for name in expected:
         assert f"export function {name}" in ui, name
@@ -70,6 +70,18 @@ def test_activity_trace_explicitly_excludes_private_reasoning_categories(project
     tutor = (project_root / "apps/web/app/tutor/page.js").read_text(encoding="utf-8")
     assert "ActivityTrace" in tutor
     assert "JSON.stringify(events.filter" not in tutor
+
+
+def test_graph_view_is_a_real_interactive_surface(project_root):
+    ui = (project_root / "apps/web/components/BeautifulUI.js").read_text(encoding="utf-8")
+    for marker in [
+        "buiGraphCanvas", "viewBox=", "markerEnd", "搜索节点", "缩小关系图",
+        "放大关系图", "拖动画布可平移", "只看邻居", "data-graph-node",
+    ]:
+        assert marker in ui, marker
+    css = (project_root / "apps/web/app/globals.css").read_text(encoding="utf-8")
+    assert ".buiGraphSvgNode" in css
+    assert ".buiGraphCanvas" in css
 
 
 def test_next16_lint_uses_explicit_eslint_cli(project_root):

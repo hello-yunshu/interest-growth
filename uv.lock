@@ -1690,7 +1690,7 @@ requires-dist = [
     { name = "httpx2", marker = "extra == 'dev'", specifier = ">=2,<3" },
     { name = "lightrag-hku", marker = "extra == 'rag-lightrag'", specifier = ">=1.5,<1.6" },
     { name = "llama-index-core", marker = "extra == 'rag-llamaindex'", specifier = ">=0.14,<0.15" },
-    { name = "nltk", marker = "extra == 'rag-graphrag'", specifier = ">=3.10.0" },
+    { name = "nltk", marker = "extra == 'rag-graphrag'", specifier = ">=3.10.3" },
     { name = "pageindex", marker = "extra == 'rag-pageindex'", specifier = "==0.2.8" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pyinstaller", marker = "extra == 'desktop'", specifier = ">=6.15" },

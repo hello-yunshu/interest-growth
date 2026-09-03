@@ -47,8 +47,8 @@ from first-party permission enforcement.
   The optional RAG adapter remains subject to review whenever that extra is
   enabled.
 - **Current mitigation:** the CI waiver is scoped only to the optional RAG
-  audit step; default runtime dependencies remain fail-closed. NLTK is kept at
-  `>=3.10.0` for the separate advisories observed in the same optional audit.
+  audit step; default runtime dependencies remain fail-closed. NLTK is pinned
+  by the project at `>=3.10.3` for the separate advisory below.
 - **Why upgrade is currently blocked:** the reviewed GraphRAG 3.1 constraint
   requires the affected pyarrow major/minor line, and no compatible upstream
   fix has been validated without changing the reviewed adapter contract.
@@ -57,4 +57,24 @@ from first-party permission enforcement.
 - **Review condition:** remove this waiver immediately after a compatible
   GraphRAG/pyarrow resolution is verified; otherwise review by 2026-09-30 or
   before the next release that changes RAG packaging.
+- **Owner:** Interest Growth maintainers.
+
+### PYSEC-2026-3740 — NLTK advisory metadata mismatch at fixed version
+
+- **Advisory:** `PYSEC-2026-3740`
+- **Affected package/version:** the structured upstream advisory lists affected
+  NLTK versions through `3.10.2` and records `3.10.3` as fixed, while its
+  prose and the current `pip-audit` database still report `3.10.3` as
+  vulnerable with no fix version.
+- **Shipped/default status:** NLTK is only reachable through the opt-in
+  `rag-graphrag` extra; it is not installed by the default server, desktop,
+  Android or Stable release artifact paths.
+- **Current mitigation:** the optional extra requires and locks NLTK
+  `3.10.3`; CI ignores this identifier only in the optional RAG audit because
+  the scanner currently has no actionable fixed version. Versions below
+  `3.10.3` are not permitted by the project declaration.
+- **Review condition:** re-run the optional audit when the advisory metadata or
+  pip-audit database publishes a consistent fixed-version result, and remove
+  the narrow ignore then; review by 2026-09-30 or before the next RAG packaging
+  change.
 - **Owner:** Interest Growth maintainers.

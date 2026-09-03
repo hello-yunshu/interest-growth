@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Icon from './Icon';
 import { activityLabel, statusLabel } from '../lib/presentation.js';
 
@@ -73,7 +73,7 @@ function publicEventDetail(event) {
   const category = String(event?.category || event?.type || '').toLowerCase();
   if (category === 'error') return '执行未完成，请检查设置或稍后重试。';
   if (category === 'tool_call') return '已请求调用工具';
-  if (category === 'tool_result') return event?.metadata?.status ? `工具已完成（${statusLabel(event.metadata.status)}）` : '工具已完成';
+  if (category === 'tool_result') return event?.metadata?.status ? `工具已经完成（${statusLabel(event.metadata.status)}）` : '工具已经完成';
   if (category === 'sources') {
     const count = event?.metadata?.count ?? event?.sources?.length;
     return count !== undefined ? `找到 ${count} 个可用来源` : '已有可用来源';
@@ -224,12 +224,9 @@ export function VisualExplanation({ manifest = null, raw = null }) {
   const data = manifest || raw || {};
   const nodes = Array.isArray(data.nodes) ? data.nodes : [];
   const edges = Array.isArray(data.edges) ? data.edges : [];
-  const nodeById = new Map(nodes.map(node => [String(node.id), node]));
   return <section className="buiVisual" aria-label="可视化解释">
     <div className="buiVisualHead"><div><div className="buiKicker">结构化视图</div><h3>{data.title || '概念关系'}</h3></div><StatusChip tone="warning">使用前人工审核</StatusChip></div>
-    {!nodes.length && <div className="buiEmptyRow">还没有可展示的结构化节点。</div>}
-    {!!nodes.length && <div className="buiVisualNodes">{nodes.map(node => <article className="buiVisualNode" key={node.id}><strong>{node.label || node.id}</strong><small>{node.type || '节点'}</small></article>)}</div>}
-    {!!edges.length && <div className="buiVisualEdges"><span className="buiRailLabel">关系</span>{edges.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}><strong>{nodeById.get(edge.from)?.label || edge.from}</strong><span>{edge.type || '相关'} →</span><strong>{nodeById.get(edge.to)?.label || edge.to}</strong></div>)}</div>}
+    <GraphView graph={{ nodes, edges }} title={data.title || '概念关系'} filters={false} />
     {!!data.annotations?.length && <div className="buiVisualNotes">{data.annotations.map((note, index) => <p key={index}>{note}</p>)}</div>}
     {raw && <details className="sectionTop"><summary>查看原始结构（调试）</summary><CodeBlock compact filename="visualization.raw.json" language="json" code={JSON.stringify(raw, null, 2)}/></details>}
   </section>;
@@ -237,16 +234,52 @@ export function VisualExplanation({ manifest = null, raw = null }) {
 
 export function GraphView({ graph = null, title = '知识关系', empty = '当前范围还没有可连接的记录。', filters = true }) {
   const [type, setType] = useState('all');
+  const [query, setQuery] = useState('');
+  const [selectedId, setSelectedId] = useState('');
+  const [focusNeighbors, setFocusNeighbors] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const drag = useRef(null);
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const visible = type === 'all' ? nodes : nodes.filter(node => node.type === type);
+  const normalizedQuery = query.trim().toLowerCase();
+  const matching = nodes.filter(node => {
+    if (type !== 'all' && node.type !== type) return false;
+    if (!normalizedQuery) return true;
+    return [node.label, node.key, node.content_preview, node.id, node.type].some(value => String(value || '').toLowerCase().includes(normalizedQuery));
+  });
+  const neighborIds = new Set(selectedId ? [selectedId] : []);
+  edges.forEach(edge => {
+    if (edge.from === selectedId) neighborIds.add(edge.to);
+    if (edge.to === selectedId) neighborIds.add(edge.from);
+  });
+  const visible = focusNeighbors && selectedId ? matching.filter(node => neighborIds.has(node.id)) : matching;
   const ids = new Set(visible.map(node => node.id));
   const visibleEdges = edges.filter(edge => ids.has(edge.from) && ids.has(edge.to));
   const types = [...new Set(nodes.map(node => node.type).filter(Boolean))];
+  const columns = 4;
+  const rowCount = Math.max(1, Math.ceil(visible.length / columns));
+  const height = Math.max(300, rowCount * 92 + 80);
+  const positions = new Map(visible.map((node, index) => [node.id, { x: 130 + (index % columns) * 220, y: 56 + Math.floor(index / columns) * 92 }]));
+  const selected = nodes.find(node => node.id === selectedId);
+  function zoomBy(delta) { setZoom(value => Math.min(1.8, Math.max(0.65, Number((value + delta).toFixed(2))))); }
+  function startPan(event) {
+    if (event.target.closest?.('[data-graph-node]')) return;
+    drag.current = { x: event.clientX, y: event.clientY, pan };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  function movePan(event) {
+    if (!drag.current) return;
+    setPan({ x: drag.current.pan.x + (event.clientX - drag.current.x) / zoom, y: drag.current.pan.y + (event.clientY - drag.current.y) / zoom });
+  }
+  function endPan() { drag.current = null; }
   return <section className="buiGraph" aria-label={title}>
-    <div className="buiGraphHead"><div><div className="buiKicker">关系视图</div><h3>{title}</h3></div>{filters && <select aria-label="节点类型筛选" value={type} onChange={event => setType(event.target.value)}><option value="all">全部节点</option>{types.map(item => <option key={item} value={item}>{item}</option>)}</select>}</div>
+    <div className="buiGraphHead"><div><div className="buiKicker">关系视图</div><h3>{title}</h3></div><div className="buiGraphTools">{filters && <select aria-label="节点类型筛选" value={type} onChange={event => setType(event.target.value)}><option value="all">全部节点</option>{types.map(item => <option key={item} value={item}>{item}</option>)}</select>}<label className="buiGraphSearch"><span className="srOnly">搜索节点</span><input aria-label="搜索节点" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索节点"/></label><button type="button" className="buiGraphButton" onClick={() => zoomBy(-0.15)} aria-label="缩小关系图">−</button><span className="buiGraphZoom" aria-live="polite">{Math.round(zoom * 100)}%</span><button type="button" className="buiGraphButton" onClick={() => zoomBy(0.15)} aria-label="放大关系图">＋</button><button type="button" className="buiGraphButton" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} aria-label="重置关系图视图">重置</button></div></div>
     {!nodes.length && <div className="buiEmptyRow">{empty}</div>}
-    {!!nodes.length && <><div className="buiGraphNodes">{visible.map(node => <article className="buiGraphNode" key={node.id}><StatusChip tone={node.type === 'claim' ? 'warning' : node.type === 'source' ? 'accent' : 'neutral'}>{node.type || '记录'}</StatusChip><strong>{node.label || node.key || node.content_preview || node.id}</strong>{(node.verification_state || node.layer) && <small>{node.verification_state || node.layer}</small>}</article>)}</div><div className="buiGraphEdges"><span className="buiRailLabel">{visibleEdges.length} 条关系</span>{visibleEdges.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}><span>{nodeLabel(nodes, edge.from)}</span><StatusChip>{edge.type || edge.relation || '相关'}</StatusChip><span>{nodeLabel(nodes, edge.to)}</span></div>)}</div></>}
+    {!!nodes.length && <><div className="buiGraphCanvas" onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} role="application" aria-label="可缩放、可平移的关系图"><svg viewBox={`0 0 1000 ${height}`} role="img" aria-label={`${title}，${visible.length} 个节点，${visibleEdges.length} 条关系`}><defs><marker id="buiGraphArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="currentColor"/></marker></defs><g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+      {visibleEdges.map((edge, index) => { const from = positions.get(edge.from); const to = positions.get(edge.to); if (!from || !to) return null; return <g key={`${edge.from}-${edge.to}-${index}`} className="buiGraphLink"><line x1={from.x} y1={from.y} x2={to.x} y2={to.y} markerEnd="url(#buiGraphArrow)"/><text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 - 5}>{edge.type || edge.relation || '相关'}</text></g>; })}
+      {visible.map(node => { const point = positions.get(node.id); const active = node.id === selectedId; return <g key={node.id} data-graph-node="true" className={`buiGraphSvgNode ${active ? 'is-selected' : ''}`} transform={`translate(${point.x} ${point.y})`} role="button" tabIndex="0" aria-label={`选择节点 ${node.label || node.key || node.id}`} onClick={() => { setSelectedId(node.id); setFocusNeighbors(false); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(node.id); setFocusNeighbors(false); } }}><rect x="-82" y="-26" width="164" height="52" rx="12"/><text className="buiGraphNodeType" x="-68" y="-8">{node.type || '记录'}</text><text className="buiGraphNodeLabel" x="-68" y="11">{String(node.label || node.key || node.content_preview || node.id).slice(0, 24)}</text></g>; })}
+    </g></svg></div><div className="buiGraphFooter"><span className="buiRailLabel">{visible.length} 个节点 · {visibleEdges.length} 条关系 · 拖动画布可平移</span>{selected && <div className="buiGraphSelection"><strong>{selected.label || selected.key || selected.id}</strong><span>{selected.type || '记录'}{selected.verification_state ? ` · ${selected.verification_state}` : selected.layer ? ` · ${selected.layer}` : ''}</span><button type="button" className="tableLink" onClick={() => setFocusNeighbors(value => !value)}>{focusNeighbors ? '显示全部节点' : '只看邻居'}</button></div>}</div></>}
   </section>;
 }
 

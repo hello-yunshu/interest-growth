@@ -1,10 +1,11 @@
 # Changelog
 
-## 1.0.20 — v1.0.20 Stable Candidate (2026-08-22)
+## 1.0.20 — v1.0.20 Stable (2026-08-30)
 
-**Status**: pending Stable Candidate Actions verification.
+**Status**: published as the formal GitHub Release `v1.0.20`.
 
-This candidate supersedes the immutable v1.0.19 tag after release-engineering closure.
+The current `main` implementation audit is a post-release source audit and
+does not retroactively change the immutable release artifact.
 
 All notable changes to the public package are recorded here. This file does
 not invent commit history for unpublished work.
