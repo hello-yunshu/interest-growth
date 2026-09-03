@@ -28,7 +28,7 @@ test('presentation vocabulary maps known backend values and never leaks unknown 
   assert.equal(sourceTypeLabel('paper'), '论文');
   assert.equal(revisionModeLabel('rewrite'), '改写');
   assert.equal(platformLabel('macos'), 'macOS');
-  assert.equal(reverificationReasonLabel('verification_stale'), '核验时间已久，需要重新查看');
+  assert.equal(reverificationReasonLabel('verification_stale'), '核验时间较久，需要重新查看');
   assert.equal(reviewIssueLabel({ code: 'diagnostic_language', message: 'Claim raw diagnostic' }), '表述包含个体诊断意味，不能把群体研究直接转为个体诊断。');
   assert.equal(riskReviewLabel({ code: 'claim_not_human_verified', message: 'raw human_verified' }), '引用的主张尚未完成人工核验。');
   assert.equal(activityLabel('brand_new_event'), '未知活动');
@@ -46,8 +46,8 @@ test('presentation vocabulary maps known backend values and never leaks unknown 
 });
 
 test('error copy is safe for common HTTP and transport failures', () => {
-  assert.equal(toUserMessage({ status: 401 }), '登录状态已过期，请重新连接服务器。');
-  assert.equal(toUserMessage({ status: 500 }, { remote: true }), '自托管服务器暂时出错，请稍后重试。');
-  assert.equal(toUserMessage({ code: 'INVALID_EXTERNAL_URL' }), '链接无效。请使用以 http 或 https 开头的公开链接。');
-  assert.equal(toUserMessage({ message: 'invalid authentication state' }), '刚才没有完成，请再试一次。');
+  assert.equal(toUserMessage({ status: 401 }), '登录已过期。请重新连接服务器。');
+  assert.equal(toUserMessage({ status: 500 }, { remote: true }), '自托管服务器暂时出错。请稍后重试。');
+  assert.equal(toUserMessage({ code: 'INVALID_EXTERNAL_URL' }), '链接无法使用。请输入以 http 或 https 开头的公开链接。');
+  assert.equal(toUserMessage({ message: 'invalid authentication state' }), '操作未完成。请稍后重试。');
 });

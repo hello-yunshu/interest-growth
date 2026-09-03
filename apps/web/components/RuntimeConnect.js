@@ -45,9 +45,9 @@ const CONNECTION_META = {
   Reconnecting: { label: '重新连接中', tone: 'warning' },
   Offline: { label: '离线', tone: 'danger' },
   LoginExpired: { label: '登录已过期', tone: 'danger' },
-  IdentityChanged: { label: '服务器身份变化', tone: 'danger' },
-  UpdateRequired: { label: '需要更新客户端', tone: 'danger' },
-  UnsupportedServer: { label: '服务器不受支持', tone: 'danger' },
+  IdentityChanged: { label: '服务器实例已变化', tone: 'danger' },
+  UpdateRequired: { label: '需要更新应用', tone: 'danger' },
+  UnsupportedServer: { label: '服务器版本不受支持', tone: 'danger' },
   LocalCoreError: { label: '本地服务异常', tone: 'danger' },
 };
 
@@ -56,7 +56,7 @@ function shortId(value) {
 }
 
 function formatSeen(value) {
-  if (!value) return '从未在线';
+  if (!value) return '从未连接';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   const diff = Date.now() - date.getTime();
@@ -283,7 +283,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
         pendingRuntimeId: info?.pendingRuntimeId || info?.activeRuntimeId || target,
       });
       setDismissedRestart(false);
-      flash(`已保存运行时切换。切换将在应用重启后生效。`);
+      flash('运行时切换已保存，重启应用后生效。');
     } catch (error) {
       flash(toUserMessage(error, { remote: true }), 'error');
     } finally {
@@ -330,7 +330,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       await remoteBootstrapOwner(probe.normalizedOrigin, ownerPassword, bootstrapToken);
       setOwnerPassword('');
       setBootstrapToken('');
-      flash('管理员密码已创建。现在可以用它登录这台服务器。');
+      flash('管理员密码已创建。现在可以用它登录服务器。');
       setProbe({ ...probe, server: { ...probe.server, ownerConfigured: true } });
     } catch (error) {
       flash(toUserMessage(error, { remote: true }), 'error');
@@ -397,10 +397,10 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       const { result } = await runRemoteAction(() => remoteVerifyIdentity());
       if (result?.identityChanged) {
         machineRef.current?.handle('IDENTITY_MISMATCH');
-        flash('检测到服务器身份变化：同一地址后面的服务器实例已被替换。请重新验证后再接入。', 'error');
+        flash('检测到服务器实例变化。请重新验证后再连接。', 'error');
       } else {
         machineRef.current?.handle('RECONNECT_OK');
-        flash('服务器身份验证通过：与接入时是同一实例。');
+        flash('服务器身份验证通过，实例未发生变化。');
       }
     } catch (error) {
       flash(toUserMessage(error, { remote: true }), 'error');
@@ -422,7 +422,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       setDevicesLoaded(false);
       machineRef.current?.handle('RESET');
       if (revoke && result && !result.revoked) {
-        flash('已从本机移除登录信息，但服务器端设备撤销未确认。', 'error');
+        flash('已从本机移除登录信息，但服务器尚未确认设备撤销。', 'error');
       } else if (revoke) {
         flash('已退出登录并撤销这台设备。');
       } else {
@@ -454,7 +454,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     setMsg({ tone: 'success', text: '' });
     try {
       await runRemoteAction(() => remoteRevokeDevice(target.id, revokePassword));
-      flash(`设备“${target.name}”已撤销，其本地凭据将失效。`);
+      flash(`设备“${target.name}”已撤销，本地凭据将失效。`);
       await loadDevices();
     } catch (error) {
       flash(toUserMessage(error, { remote: true }), 'error');
@@ -468,7 +468,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
   const deviceColumns = useMemo(() => [
     { key: 'name', label: '设备', render: row => <strong>{row.name}{row.current ? '（当前）' : ''}</strong> },
     { key: 'platform', label: '平台', render: row => platformLabel(row.platform) },
-    { key: 'seen', label: '最近在线', render: row => formatSeen(row.last_seen_at) },
+    { key: 'seen', label: '最近连接', render: row => formatSeen(row.last_seen_at) },
     { key: 'state', label: '状态', render: row => <StatusChip tone={row.revoked_at ? 'neutral' : 'success'}>{row.revoked_at ? '已撤销' : '活跃'}</StatusChip> },
     { key: 'action', label: '操作', render: row => row.revoked_at ? <span className="muted smallText">—</span> : <button className="tableLink danger" onClick={() => doRevoke(row)} disabled={busy}>{row.current ? '退出并撤销' : '撤销'}</button> },
   ], [busy]);
@@ -476,7 +476,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
   if (!desktop) {
     return <section className="card">
       <div className="cardHeader"><div><div className="eyebrow">连接</div><h3>本机应用</h3></div><StatusChip tone="neutral">浏览器开发模式</StatusChip></div>
-      <p className="muted">运行时切换与自托管服务器接入只在桌面应用内可用。浏览器远程访问（安全 Cookie 认证）仍为规划能力，v0.7 未提供。</p>
+      <p className="muted">运行时切换与自托管服务器接入只在桌面应用内可用。浏览器远程访问（安全 Cookie 认证）仍在规划中，v0.7 暂不提供。</p>
     </section>;
   }
 
@@ -487,7 +487,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
           <div>
             <div className="eyebrow">运行时模式</div>
             <h3>Android 客户端</h3>
-            <p className="muted">Android 版始终通过自托管服务器接入，没有本机数据模式：数据保存在你的服务器，本机不复制、不同步离线数据。</p>
+            <p className="muted">Android 版始终通过自托管服务器接入，不提供本机数据模式：数据保存在你的服务器，本机不复制，也不同步离线数据。</p>
           </div>
           <StatusChip tone="accent">自托管服务器</StatusChip>
         </div>
@@ -500,25 +500,25 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
         <div>
           <div className="eyebrow">运行时模式</div>
           <h3>数据保存在哪里</h3>
-          <p className="muted">运行时模式决定数据源与安全边界。切换会保存为下一次启动的配置，并需要重启应用后生效。</p>
+          <p className="muted">运行时模式决定数据源与安全边界。切换会保存为下次启动的配置，重启应用后生效。</p>
         </div>
         <StatusChip tone={isRemote ? 'accent' : 'success'}>{isRemote ? '自托管服务器' : '本机'}</StatusChip>
       </div>
       <div className="runtimeModeGrid">
         <button type="button" className={`runtimeModeCard ${!isRemote ? 'is-active' : ''}`} onClick={() => chooseMode('desktop-local')} disabled={busy}>
           <span className="runtimeModeMark">本机</span>
-          <span className="runtimeModeCopy"><strong>本机</strong><small>数据保存在这台设备，由本机 Core 提供服务。</small></span>
+          <span className="runtimeModeCopy"><strong>本机</strong><small>数据保存在这台设备，由本地服务提供支持。</small></span>
           {!isRemote && <StatusChip tone="success">当前</StatusChip>}
         </button>
         <button type="button" className={`runtimeModeCard ${isRemote ? 'is-active' : ''}`} onClick={() => chooseMode('desktop-remote')} disabled={busy}>
           <span className="runtimeModeMark">服务器</span>
-          <span className="runtimeModeCopy"><strong>自托管服务器</strong><small>数据保存在你的服务器，通过安全凭据连接，不在本机复制。</small></span>
+          <span className="runtimeModeCopy"><strong>自托管服务器</strong><small>数据保存在你的服务器，通过安全凭据连接，不会复制到本机。</small></span>
           {isRemote && <StatusChip tone="accent">当前</StatusChip>}
         </button>
       </div>
       {confirmTarget && (
         <div className="runtimeConfirm">
-          <p>确定切换到 {confirmTarget === 'desktop-remote' ? '自托管服务器' : '本机'} 吗？切换只会在应用重启后生效，本机数据与服务器数据不会被自动合并。</p>
+          <p>确定切换到 {confirmTarget === 'desktop-remote' ? '自托管服务器' : '本机'} 吗？切换会在应用重启后生效，本机数据与服务器数据不会自动合并。</p>
           <div className="row">
             <button className="secondary" onClick={() => setConfirmTarget(null)} disabled={busy}>取消</button>
             <button onClick={confirmSwitch} disabled={busy}>保存并切换</button>
@@ -527,11 +527,11 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
       )}
       {needsRestart && (
         <div className="notice">
-          <strong>需要重启应用才能进入 {runtimeState.pendingRuntimeId === 'desktop-remote' ? '自托管服务器' : '本机'} 模式。</strong>
+          <strong>重启应用后才能进入 {runtimeState.pendingRuntimeId === 'desktop-remote' ? '自托管服务器' : '本机'} 模式。</strong>
           <span> 重启后当前会话将切换到所选数据源；本机数据与服务器数据保持分离，不会被自动合并。</span>
           <div className="row sectionTop">
             <button className="secondary" onClick={() => setDismissedRestart(true)} disabled={busy}>稍后重启</button>
-            <button onClick={doRestart} disabled={busy}>{busy ? '正在重启…' : '立即重启'}</button>
+            <button onClick={doRestart} disabled={busy}>{busy ? '正在重启…' : '重启应用'}</button>
           </div>
         </div>
       )}
@@ -563,8 +563,8 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
                 <div className="row"><strong>{probe.server?.serverDisplayName || '未命名服务器'}</strong><StatusChip tone="neutral">{probe.normalizedOrigin}</StatusChip></div>
                 <div className="providerHeroRow"><span>服务器版本</span><strong>{probe.server?.serverVersion || '—'}</strong></div>
                 <div className="providerHeroRow"><span>实例 ID</span><strong className="pathEllipsis" style={{ maxWidth: 220 }}>{probe.server?.serverInstanceId || '—'}</strong></div>
-                <div className="providerHeroRow"><span>认证模式</span><StatusChip tone={probe.server?.authEnabled ? 'success' : 'warning'}>{probe.server?.authEnabled ? '单机主设备（已启用）' : '未启用远程认证'}</StatusChip></div>
-                {!probe.server?.authEnabled && <p className="notice error">这台服务器没有启用远程设备认证，无法接入。</p>}
+                <div className="providerHeroRow"><span>认证模式</span><StatusChip tone={probe.server?.authEnabled ? 'success' : 'warning'}>{probe.server?.authEnabled ? '主设备认证（已启用）' : '远程认证未启用'}</StatusChip></div>
+                {!probe.server?.authEnabled && <p className="notice error">这台服务器未启用远程设备认证，无法接入。</p>}
 
                 {probe.server?.authEnabled && !probe.server?.ownerConfigured && (
                   <form className="stack sectionTop" onSubmit={doBootstrap}>
@@ -590,7 +590,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
                       <input id="remoteLoginPassword" type="password" autoComplete="current-password" value={ownerPassword} onChange={event => setOwnerPassword(event.target.value)} disabled={busy}/>
                     </div>
                     <div className="fieldGroup">
-                      <label htmlFor="remoteDeviceName">这台设备的名称</label>
+                      <label htmlFor="remoteDeviceName">设备名称</label>
                       <input id="remoteDeviceName" type="text" autoComplete="off" placeholder="例如：工作室的电脑" value={deviceName} onChange={event => setDeviceName(event.target.value)} disabled={busy}/>
                     </div>
                     <div className="row">
@@ -610,7 +610,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
               <div className="row"><strong>{session.serverDisplayName || '自托管服务器'}</strong><StatusChip tone="neutral">{session.normalizedOrigin}</StatusChip></div>
               <div className="providerHeroRow"><span>服务器版本</span><strong>{session.serverVersion || '—'}</strong></div>
               <div className="providerHeroRow"><span>实例 ID</span><strong className="pathEllipsis" style={{ maxWidth: 220 }}>{shortId(session.serverInstanceId)}…</strong></div>
-              <div className="providerHeroRow"><span>本机设备</span><strong>{session.deviceName || session.deviceId || '—'}</strong></div>
+              <div className="providerHeroRow"><span>当前设备</span><strong>{session.deviceName || session.deviceId || '—'}</strong></div>
               {session.authExpired && <p className="notice warning">会话已过期，需要重新登录。</p>}
             </div>
 
@@ -625,8 +625,8 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
             )}
 
             <div className="row">
-              <button className="secondary" onClick={doRefresh} disabled={busy}>立即刷新会话</button>
-              <button className="secondary" onClick={doVerifyIdentity} disabled={busy}>验证服务器身份</button>
+              <button className="secondary" onClick={doRefresh} disabled={busy}>刷新连接</button>
+              <button className="secondary" onClick={doVerifyIdentity} disabled={busy}>验证服务器</button>
               <button className="ghost danger" onClick={() => doLogout(false)} disabled={busy}>退出登录</button>
               <button className="ghost danger" onClick={() => doLogout(true)} disabled={busy}>退出并撤销这台设备</button>
             </div>
@@ -638,7 +638,7 @@ export default function RuntimeConnect({ onRuntimeChanged }) {
     {isRemote && session?.enrolled && session?.connected && (
       <section className="card">
         <div className="cardHeader">
-          <div><div className="eyebrow">设备管理</div><h3>已接入的设备</h3></div>
+          <div><div className="eyebrow">设备管理</div><h3>已连接设备</h3></div>
           {!devicesLoaded && <StatusChip tone="neutral">加载中</StatusChip>}
         </div>
         <RecordsTable columns={deviceColumns} rows={devices} empty="还没有读取到设备列表。" rowKey="id"/>

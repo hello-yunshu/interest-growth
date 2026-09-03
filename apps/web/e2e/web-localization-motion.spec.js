@@ -144,7 +144,7 @@ test('Learning sections are unique and concept save is busy-safe', async ({ page
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'learning-busy-test' }) });
   });
   await ready(page, '/learning');
-  await expect(page.getByRole('heading', { name: '建立一个概念', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: '创建概念', exact: true })).toHaveCount(1);
   await expect(page.getByRole('heading', { name: '概念与理解', exact: true })).toHaveCount(1);
 
   await page.getByRole('tab', { name: /笔记/ }).click();
@@ -153,7 +153,7 @@ test('Learning sections are unique and concept save is busy-safe', async ({ page
   await expect(page.getByRole('heading', { name: '新增一道练习', exact: true })).toHaveCount(1);
 
   await page.getByRole('tab', { name: /概念/ }).click();
-  const conceptCard = page.locator('section.card').filter({ hasText: '建立一个概念' }).first();
+  const conceptCard = page.locator('section.card').filter({ hasText: '创建概念' }).first();
   await conceptCard.locator('input').fill('忙碌态测试概念');
   const save = conceptCard.locator('button').first();
   await save.click();
