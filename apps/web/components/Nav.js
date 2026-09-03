@@ -3,7 +3,7 @@ import Link from 'next/link';
 const items = [
   ['/', '首页'],
   ['/curiosity', '好奇心'],
-  ['/knowledge', '知识库'],
+  ['/knowledge', '资料库'],
   ['/research', '研究'],
   ['/learning', '学习'],
   ['/tutor', '导师会话'],

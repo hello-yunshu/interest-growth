@@ -73,7 +73,7 @@ export async function loadWorkspaceData() {
       const claim = normalizeClaimRecord(row);
       return output('research', claim, claim.statement || '研究结论', claim.limitations);
     }),
-    ...safeArray(data.artifacts.artifacts).map(row => output('artifact', row, row.title, row.approved_at ? '已经人工确认' : '等待你确认')),
+    ...safeArray(data.artifacts.artifacts).map(row => output('artifact', row, row.title, row.approved_at ? '已人工确认' : '待你确认')),
     ...safeArray(data.writing.documents).map(row => output('writing', row, row.title, cleanExcerpt(row.content_markdown))),
     ...safeArray(data.books.books).map(row => output('book', row, row.title, row.intent)),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));

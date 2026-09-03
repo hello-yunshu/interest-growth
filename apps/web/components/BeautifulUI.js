@@ -72,13 +72,13 @@ const PUBLIC_TRACE_CATEGORIES = new Set(['stage_start', 'stage_end', 'progress',
 function publicEventDetail(event) {
   const category = String(event?.category || event?.type || '').toLowerCase();
   if (category === 'error') return '执行未完成，请检查设置或稍后重试。';
-  if (category === 'tool_call') return '已经请求调用工具';
-  if (category === 'tool_result') return event?.metadata?.status ? `工具已完成（${statusLabel(event.metadata.status)}）` : '工具已经完成';
+  if (category === 'tool_call') return '已请求调用工具';
+  if (category === 'tool_result') return event?.metadata?.status ? `工具已完成（${statusLabel(event.metadata.status)}）` : '工具已完成';
   if (category === 'sources') {
     const count = event?.metadata?.count ?? event?.sources?.length;
     return count !== undefined ? `找到 ${count} 个可用来源` : '已有可用来源';
   }
-  if (category === 'done') return '本轮已经完成';
+  if (category === 'done') return '本轮已完成';
   return String(event?.detail || event?.metadata?.message || event?.content || '').slice(0, 420) || '运行记录';
 }
 
@@ -105,9 +105,9 @@ export function StreamingText({ text = '', sources = [], followUps = [], streami
   const reducedMotion = useReducedMotion();
   return <section className="buiStream">
     <div className="buiStreamTop"><span>{title}</span>{streaming && <StatusChip tone="accent" pulse>正在生成</StatusChip>}</div>
-    <div className={`buiStreamText ${streaming && !reducedMotion ? 'is-streaming' : ''}`}>{text || <span className="buiPlaceholder">回答会在这里出现。</span>}</div>
+    <div className={`buiStreamText ${streaming && !reducedMotion ? 'is-streaming' : ''}`}>{text || <span className="buiPlaceholder">回答将在这里显示。</span>}</div>
     {!!sources.length && <div className="buiSourceRail"><span className="buiRailLabel">{sources.length} 个来源</span>{sources.slice(0, 8).map((source, i) => <span className="buiSourcePill" key={source.id || `${source.title}-${i}`}><Icon name="source" size={13}/>{source.title || source.name || source.source || `来源 ${i + 1}`}</span>)}</div>}
-    {!!followUps.length && <div className="buiFollowUps"><span className="buiRailLabel">可以继续追问</span>{followUps.map((x, i) => <button type="button" className="buiFollowButton" key={`${x}-${i}`}>{x}</button>)}</div>}
+    {!!followUps.length && <div className="buiFollowUps"><span className="buiRailLabel">继续追问</span>{followUps.map((x, i) => <button type="button" className="buiFollowButton" key={`${x}-${i}`}>{x}</button>)}</div>}
     {actions && <div className="buiStreamActions">{actions}</div>}
   </section>;
 }
@@ -210,7 +210,7 @@ export function FineTunePanel({ title = '调整', fields = [], children, actions
   return <section className="buiFineTune"><div className="buiFineTuneHead"><div><div className="buiKicker">细节检查</div><strong>{title}</strong></div><StatusChip tone="neutral">可调整</StatusChip></div><div className="buiFineTuneGrid">{fields.map((field, i) => <label key={field.key || i}><span>{field.label}</span>{field.node || <input value={field.value ?? ''} readOnly />}</label>)}</div>{children}{actions && <div className="buiFineTuneActions">{actions}</div>}</section>;
 }
 
-export function SelectionActions({ label = '选中内容可以这样处理', actions = [], input = null }) {
+export function SelectionActions({ label = '处理选中内容', actions = [], input = null }) {
   return <div className="buiSelection"><div className="buiSelectionTop"><span>{label}</span>{input}</div><div className="buiSelectionActions">{actions.map((action, i) => <button type="button" onClick={action.onClick} disabled={action.disabled} className={action.primary ? 'is-primary' : ''} key={action.label || i}>{action.label}</button>)}</div></div>;
 }
 
@@ -226,7 +226,7 @@ export function VisualExplanation({ manifest = null, raw = null }) {
   const edges = Array.isArray(data.edges) ? data.edges : [];
   const nodeById = new Map(nodes.map(node => [String(node.id), node]));
   return <section className="buiVisual" aria-label="可视化解释">
-    <div className="buiVisualHead"><div><div className="buiKicker">结构化理解</div><h3>{data.title || '概念关系'}</h3></div><StatusChip tone="warning">人工审核后使用</StatusChip></div>
+    <div className="buiVisualHead"><div><div className="buiKicker">结构化视图</div><h3>{data.title || '概念关系'}</h3></div><StatusChip tone="warning">使用前人工审核</StatusChip></div>
     {!nodes.length && <div className="buiEmptyRow">还没有可展示的结构化节点。</div>}
     {!!nodes.length && <div className="buiVisualNodes">{nodes.map(node => <article className="buiVisualNode" key={node.id}><strong>{node.label || node.id}</strong><small>{node.type || '节点'}</small></article>)}</div>}
     {!!edges.length && <div className="buiVisualEdges"><span className="buiRailLabel">关系</span>{edges.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}><strong>{nodeById.get(edge.from)?.label || edge.from}</strong><span>{edge.type || '相关'} →</span><strong>{nodeById.get(edge.to)?.label || edge.to}</strong></div>)}</div>}
