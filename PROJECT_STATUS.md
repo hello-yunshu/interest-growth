@@ -6,14 +6,14 @@
 ## Current release dashboard
 
 - **Current product version:** `1.0.20`
-- **Current source:** the commit containing this document; exact SHA, Candidate run IDs, tag SHA and Release run IDs are generated in `V<VERSION>_RELEASE_VERIFICATION.md`
-- **Current Stable Candidate target:** the final `main` commit after the release-closure changes in this document are pushed
-- **Current Candidate Actions run:** not yet verified for that final SHA
-- **Current release status:** `PENDING_STABLE_CANDIDATE`; no Stable tag is created before successful Candidate Promotion
-- **Latest published Stable:** none
+- **Current source:** post-release `main` implementation audit; exact audit SHA and current-SHA Actions runs are recorded in `docs/audits/INTEREST_GROWTH_CURRENT_FULL_IMPLEMENTATION_AUDIT.md`
+- **Current Stable Candidate target:** historical release-closure target only; `v1.0.20` is already immutable
+- **Current Candidate Actions run:** historical release evidence is recorded in the versioned release-verification artifact; this audit separately verifies the current `main` SHA
+- **Current release status:** `STABLE_RELEASED`; current `main` audit changes are not a new release until versioned and promoted
+- **Latest published Stable:** `v1.0.20`
 - **Latest published prerelease:** `v1.0.0-rc.3` (historical evidence only)
-- **Current release-evidence blocker:** the exact-SHA Stable Candidate full matrix is not yet PASS.
-- **Remaining release verification:** exact-SHA Stable Candidate full matrix → Promotion → immutable `v1.0.20` → exact-tag Release full matrix → post-release checksum verification
+- **Current release-evidence blocker:** none for the already-published `v1.0.20`; current-source implementation and CI findings remain tracked in the current audit.
+- **Remaining release verification:** if these post-release changes are shipped, run a new versioned Candidate → Promotion → immutable tag → exact-tag Release matrix.
 
 The current source closure adds a structured product-version bump tool with
 dependency drift checking, the shared Stable Candidate entry point, and a
@@ -25,7 +25,7 @@ document.
 
 ## Current pre-release compatibility policy
 
-Interest Growth v1.0.20 is not released yet and supports only the current
+Interest Growth v1.0.20 is released and supports only the current
 product surface: fresh current-schema databases, current plugin IDs, current
 web routes, and the current desktop/Android build matrix. Historical client
 upgrade flows, database migrations, legacy plugin aliases, old RAG fallback
