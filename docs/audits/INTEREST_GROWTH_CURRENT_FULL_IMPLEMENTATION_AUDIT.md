@@ -1,7 +1,8 @@
 # Interest Growth 当前全仓库实现审计
 
 审计日期：2026-09-04
-审计 SHA：`1b02417c2cf7b23ad2e7acfa6f88d12ea8b86fdf`
+审计实现 SHA：`1b02417c2cf7b23ad2e7acfa6f88d12ea8b86fdf`
+审计文档闭环 SHA：`ab609876bfff86a6f3c2176c48f495b991a1be20`
 分支：`main`，与 `origin/main` 一致
 产品版本：`1.0.20`
 
@@ -56,7 +57,7 @@
 | Source manifest | PASS | `python3 scripts/generate_source_manifest.py --check` |
 | Self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
 | Rust source | PASS locally | `cargo check --locked`；仅既有 dead-code warnings |
-| Current-SHA GitHub Actions | CI/Web E2E PASS；Build Artifacts IN PROGRESS | CI `33806311238` `success`、Web E2E `33806311156` `success`；Build Artifacts `33806311152`：macOS/Android `success`，Windows 仍 `in_progress`，全部绑定本 SHA |
+| Current-SHA GitHub Actions | PASS | CI `33807240181`、Web E2E `33807240178`、Build Artifacts `33807240174` 均绑定审计文档闭环 SHA；CI/Web E2E/三平台制品全部 `success` |
 
 ## 发布、设备与环境边界
 
@@ -67,11 +68,11 @@
 
 ## 当前剩余限制与后续建议
 
-1. 等待并记录 Build Artifacts `33806311152` 的 Windows completed 结果；如失败，只修复该 SHA 暴露的真实问题并重新验证。
+1. 当前审计 SHA 的 CI、Web E2E 和三平台制品矩阵已完成；后续代码变更必须重新绑定新的 exact SHA 验证。
 2. 若要发布本轮代码，先生成新版本，再执行 exact-SHA Candidate → Promotion → immutable tag → exact-tag Release matrix。
 3. 继续补齐缺少真实硬件/公网环境的设备、签名、TLS、跨设备和长期 soak 证据；不得用 waiver 冒充 PASS。
 4. 后续 UI 迭代应优先把已存在的后端 archive/restore/delete 能力逐页补到 Learning/Research/Knowledge 等列表操作，并为这些生命周期动作增加浏览器级覆盖。
 
 ## 最终判定
 
-当前判定：`SOURCE / LOCAL TESTS PASS; CI + WEB E2E PASS; ARTIFACTS PARTIAL; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。Windows 制品 job 完成前不宣称当前 SHA 的制品矩阵完整通过，也不把本轮提交宣称为新的 Stable release。
+当前判定：`SOURCE / LOCAL TESTS PASS; CURRENT-SHA CI + WEB E2E + ARTIFACTS PASS; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。本轮提交仍不是新的 Stable release；物理设备、公开 TLS 与长期 soak 仍保持明确边界。
