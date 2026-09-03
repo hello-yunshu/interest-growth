@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +16,7 @@ from ..db import (
     PracticeItemModel,
     TutorPersonaModel,
     LearningActivityModel,
+    EntityAreaBindingModel,
     PersonaScopeModel,
     TopicModel,
     get_session_factory,
@@ -29,7 +31,7 @@ from ..learning_assets import (
 from ..plugins import require_plugin_access
 from ..serializers import model_dict
 from ..domains import (bind_persona_to_current_area, filter_rows_to_current_area, get_domain_context, persona_ids_for_current_area, require_entity_in_current_area, resolve_area)
-from ..schemas import LearningActivityCreate
+from ..schemas import LearningActivityCreate, MasteryEvidenceInvalidationRequest
 from ..native_execution import get_native_bundle, resolve_native_context
 
 router = APIRouter(tags=['learning-assets'])
@@ -44,6 +46,7 @@ class PracticeCreate(BaseModel):
     reference_answer: str = ''
     explanation: str = ''
     difficulty: str = ''
+    status: str = Field(default='active', pattern='^(active|archived)$')
 
 
 class AttemptCreate(BaseModel):
@@ -77,7 +80,7 @@ class NoteUpdate(BaseModel):
     title: str | None = None
     body_markdown: str | None = None
     note_type: str | None = None
-    status: str | None = None
+    status: str | None = Field(default=None, pattern='^(active|archived)$')
 
 
 class PersonaCreate(BaseModel):
@@ -93,10 +96,11 @@ def _require(flag: str, plugin: str, *, read=(), write=(), risks=()) -> None:
 
 
 @router.get('/practice')
-def list_practice(concept_id: str | None = None, topic_id: str | None = None):
+def list_practice(concept_id: str | None = None, topic_id: str | None = None, include_archived: bool = False):
     _require('FEATURE_PRACTICE', 'capability.practice', read=('practice_item','practice_attempt'))
     with get_session_factory()() as db:
         stmt = select(PracticeItemModel).order_by(PracticeItemModel.created_at.desc())
+        if not include_archived: stmt = stmt.where(PracticeItemModel.status == 'active')
         if concept_id: stmt = stmt.where(PracticeItemModel.concept_id == concept_id)
         if topic_id: stmt = stmt.where(PracticeItemModel.topic_id == topic_id)
         items = filter_rows_to_current_area(db, db.scalars(stmt).all(), "practice_item")
@@ -115,6 +119,58 @@ def add_practice(body: PracticeCreate):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return model_dict(row)
+
+
+@router.put('/practice/{item_id}')
+def update_practice(item_id: str, body: PracticeCreate):
+    _require('FEATURE_PRACTICE', 'capability.practice', read=('practice_item',), write=('practice_item',))
+    with get_session_factory()() as db:
+        row = db.get(PracticeItemModel, item_id)
+        if not row: raise HTTPException(404, 'practice item not found')
+        try: require_entity_in_current_area(db, 'practice_item', item_id)
+        except ValueError as exc: raise HTTPException(404, 'practice item not found in current area') from exc
+        for key, value in body.model_dump(exclude_unset=True).items(): setattr(row, key, value)
+        db.commit(); db.refresh(row); return model_dict(row)
+
+
+@router.post('/practice/{item_id}/archive')
+def archive_practice(item_id: str):
+    _require('FEATURE_PRACTICE', 'capability.practice', read=('practice_item',), write=('practice_item',))
+    with get_session_factory()() as db:
+        row = db.get(PracticeItemModel, item_id)
+        if not row: raise HTTPException(404, 'practice item not found')
+        try: require_entity_in_current_area(db, 'practice_item', item_id)
+        except ValueError as exc: raise HTTPException(404, 'practice item not found in current area') from exc
+        row.status = 'archived'; db.commit(); db.refresh(row); return model_dict(row)
+
+
+@router.post('/practice/{item_id}/restore')
+def restore_practice(item_id: str):
+    _require('FEATURE_PRACTICE', 'capability.practice', read=('practice_item',), write=('practice_item',))
+    with get_session_factory()() as db:
+        row = db.get(PracticeItemModel, item_id)
+        if not row: raise HTTPException(404, 'practice item not found')
+        try: require_entity_in_current_area(db, 'practice_item', item_id)
+        except ValueError as exc: raise HTTPException(404, 'practice item not found in current area') from exc
+        row.status = 'active'; db.commit(); db.refresh(row); return model_dict(row)
+
+
+@router.delete('/practice/{item_id}')
+def delete_practice(item_id: str):
+    _require('FEATURE_PRACTICE', 'capability.practice', read=('practice_item', 'practice_attempt'), write=('practice_item', 'practice_attempt'))
+    with get_session_factory()() as db:
+        row = db.get(PracticeItemModel, item_id)
+        if not row: raise HTTPException(404, 'practice item not found')
+        try: require_entity_in_current_area(db, 'practice_item', item_id)
+        except ValueError as exc: raise HTTPException(404, 'practice item not found in current area') from exc
+        attempts = db.scalars(select(PracticeAttemptModel).where(PracticeAttemptModel.practice_item_id == item_id)).all()
+        promoted = [x.id for x in attempts if x.evidence_promoted]
+        if promoted:
+            raise HTTPException(409, {'code': 'practice_has_promoted_attempts', 'attempt_ids': promoted, 'detail': 'Withdraw promoted evidence before deleting this practice item.'})
+        for attempt in attempts: db.delete(attempt)
+        db.query(EntityAreaBindingModel).filter(EntityAreaBindingModel.entity_type == 'practice_item', EntityAreaBindingModel.entity_id == item_id).delete(synchronize_session=False)
+        db.delete(row); db.commit()
+    return {'id': item_id, 'deleted': True, 'attempts_deleted': len(attempts)}
 
 
 @router.post('/practice/propose')
@@ -170,20 +226,34 @@ def promote_attempt(attempt_id: str, body: EvidencePromote):
 
 
 @router.get('/mastery-evidence')
-def list_mastery_evidence(concept_id: str | None = None):
+def list_mastery_evidence(concept_id: str | None = None, include_invalidated: bool = False):
     _require('FEATURE_PRACTICE', 'capability.practice', read=('mastery_evidence',))
     with get_session_factory()() as db:
         stmt = select(MasteryEvidenceModel).order_by(MasteryEvidenceModel.created_at.desc())
+        if not include_invalidated: stmt = stmt.where(MasteryEvidenceModel.status == 'active')
         if concept_id: stmt = stmt.where(MasteryEvidenceModel.concept_id == concept_id)
         rows = filter_rows_to_current_area(db, db.scalars(stmt).all(), 'mastery_evidence')
         return {'evidence': [model_dict(x) for x in rows]}
 
 
+@router.post('/mastery-evidence/{evidence_id}/invalidate')
+def invalidate_mastery_evidence(evidence_id: str, body: MasteryEvidenceInvalidationRequest):
+    _require('FEATURE_PRACTICE', 'capability.practice', read=('mastery_evidence',), write=('mastery_evidence',))
+    with get_session_factory()() as db:
+        row = db.get(MasteryEvidenceModel, evidence_id)
+        if not row: raise HTTPException(404, 'mastery evidence not found')
+        try: require_entity_in_current_area(db, 'mastery_evidence', evidence_id)
+        except ValueError as exc: raise HTTPException(404, 'mastery evidence not found in current area') from exc
+        row.status = 'invalidated'; row.verified_by_user = False; row.invalidated_at = datetime.now(UTC); row.invalidation_reason = body.reason.strip()
+        db.commit(); db.refresh(row); return model_dict(row)
+
+
 @router.get('/notes')
-def list_notes(topic_id: str | None = None, concept_id: str | None = None):
+def list_notes(topic_id: str | None = None, concept_id: str | None = None, include_archived: bool = False):
     _require('FEATURE_LEARNING_NOTEBOOK', 'capability.learning-notebook', read=('learning_note',))
     with get_session_factory()() as db:
         stmt = select(LearningNoteModel).order_by(LearningNoteModel.updated_at.desc())
+        if not include_archived: stmt = stmt.where(LearningNoteModel.status == 'active')
         if topic_id: stmt = stmt.where(LearningNoteModel.topic_id == topic_id)
         if concept_id: stmt = stmt.where(LearningNoteModel.concept_id == concept_id)
         rows = filter_rows_to_current_area(db, db.scalars(stmt).all(), 'learning_note')
@@ -212,6 +282,29 @@ def update_note(note_id: str, body: NoteUpdate):
         for key, value in body.model_dump(exclude_none=True).items(): setattr(row, key, value)
         if row.sync_status == 'projected': row.sync_status = 'local_changed'
         db.commit(); db.refresh(row); return model_dict(row)
+
+
+@router.post('/notes/{note_id}/archive')
+def archive_note(note_id: str):
+    return update_note(note_id, NoteUpdate(status='archived'))
+
+
+@router.post('/notes/{note_id}/restore')
+def restore_note(note_id: str):
+    return update_note(note_id, NoteUpdate(status='active'))
+
+
+@router.delete('/notes/{note_id}')
+def delete_note(note_id: str):
+    _require('FEATURE_LEARNING_NOTEBOOK', 'capability.learning-notebook', read=('learning_note',), write=('learning_note',))
+    with get_session_factory()() as db:
+        row = db.get(LearningNoteModel, note_id)
+        if not row: raise HTTPException(404, 'learning note not found')
+        try: require_entity_in_current_area(db, 'learning_note', note_id)
+        except ValueError as exc: raise HTTPException(404, 'learning note not found in current area') from exc
+        db.query(EntityAreaBindingModel).filter(EntityAreaBindingModel.entity_type == 'learning_note', EntityAreaBindingModel.entity_id == note_id).delete(synchronize_session=False)
+        db.delete(row); db.commit()
+    return {'id': note_id, 'deleted': True}
 
 
 @router.get('/activities')
@@ -256,7 +349,5 @@ def list_personas():
 def add_persona(body: PersonaCreate):
     _require('FEATURE_TUTOR_PERSONA', 'capability.tutor-persona', read=('tutor_persona',), write=('tutor_persona',))
     with get_session_factory()() as db:
-        if db.scalar(select(TutorPersonaModel).where(TutorPersonaModel.name == body.name)):
-            raise HTTPException(409, 'persona already exists')
         row = TutorPersonaModel(**body.model_dump(), builtin=False)
         db.add(row); db.flush(); bind_persona_to_current_area(db, row.id); db.commit(); db.refresh(row); return model_dict(row)

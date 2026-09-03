@@ -259,6 +259,7 @@ class ConceptModel(Base):
     confused_with: Mapped[list[str]] = mapped_column(JSON, default=list)
     related_claims: Mapped[list[str]] = mapped_column(JSON, default=list)
     related_sources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
@@ -316,6 +317,7 @@ class ReflectionModel(Base):
     continue_topic: Mapped[str] = mapped_column(Text, default="")
     next_energy_mode: Mapped[str] = mapped_column(String(16), default="normal")
     notes: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
@@ -328,6 +330,7 @@ class ArtifactModel(Base):
     title: Mapped[str] = mapped_column(Text, default="")
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     human_review_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
@@ -347,6 +350,7 @@ class PracticeItemModel(Base):
     upstream_session_id: Mapped[str] = mapped_column(String(160), default="")
     upstream_turn_id: Mapped[str] = mapped_column(String(160), default="")
     upstream_question_id: Mapped[str] = mapped_column(String(160), default="")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
@@ -370,6 +374,9 @@ class MasteryEvidenceModel(Base):
     reference_id: Mapped[str] = mapped_column(String(80), default="", index=True)
     note: Mapped[str] = mapped_column(Text, default="")
     verified_by_user: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invalidation_reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
@@ -392,7 +399,7 @@ class LearningNoteModel(Base):
 class TutorPersonaModel(Base):
     __tablename__ = "tutor_personas"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(80), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     content: Mapped[str] = mapped_column(Text, default="")
     version: Mapped[int] = mapped_column(Integer, default=1)
@@ -518,10 +525,10 @@ class CapabilityRunModel(Base):
 class KnowledgeBaseModel(Base):
     __tablename__ = "knowledge_bases"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     rag_provider: Mapped[str] = mapped_column(String(48), default="native-lexical")
-    upstream_name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    upstream_name: Mapped[str] = mapped_column(String(160), index=True)
     status: Mapped[str] = mapped_column(String(32), default="local_only", index=True)
     settings_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

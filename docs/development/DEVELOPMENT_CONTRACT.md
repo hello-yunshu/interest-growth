@@ -1,6 +1,6 @@
 # Interest Growth Development Contract
 
-**Status:** current, tool-neutral engineering contract
+**Status:** current 1X, tool-neutral engineering contract
 
 This document is the repository's authoritative development entry point. It
 describes product and release invariants without depending on a particular
@@ -35,6 +35,10 @@ editor, coding assistant or agent.
   Review before export/publication.
 - Provider failures must remain visible and must not silently execute the same
   work twice. `wait_for_input` resumes the same turn.
+- Research executes the exact user-approved plan snapshot after the planning
+  gate; provider fallback may change the executor, never the approved work.
+- Curiosity questions use explicit transition endpoints. Generic PATCH cannot
+  mutate lifecycle state, active state or return counters.
 
 ## Psychology and provider boundaries
 
@@ -64,7 +68,7 @@ editor, coding assistant or agent.
 
 ## Migration and security
 
-- The current pre-release contract supports only a fresh current schema. There
+- The current 1X contract supports only a fresh current schema. There
   is no automatic migration or compatibility promise for older databases. An
   incompatible schema must fail closed before product routes start. Supported
   backup/restore accepts only the same current schema and retains the prior

@@ -6,7 +6,7 @@ const TYPE_META = {
   activity: { label: '学习活动', icon: 'activity', href: '/learning', color: '#8b7bb5' },
   mastery: { label: '掌握证据', icon: 'check', href: '/learning', color: '#397a63' },
   research: { label: '研究结论', icon: 'search', href: '/research', color: '#5d83a6' },
-  artifact: { label: '表达作品', icon: 'spark', href: '/content', color: '#a56b72' },
+  artifact: { label: '表达作品', icon: 'spark', href: '/artifacts', color: '#a56b72' },
   writing: { label: '写作草稿', icon: 'file', href: '/writing', color: '#8c7357' },
   book: { label: '书稿', icon: 'book', href: '/book', color: '#6b759b' },
 };

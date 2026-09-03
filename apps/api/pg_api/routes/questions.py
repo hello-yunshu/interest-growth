@@ -12,6 +12,7 @@ from ..events import emit
 from ..plugins import require_plugin_access
 from ..schemas import QuestionCreate, QuestionUpdate, QuickExploreRequest, TopicCreate
 from ..serializers import model_dict
+from ..question_transitions import InvalidQuestionTransition, QuestionTransitionService
 
 router = APIRouter(tags=["curiosity"])
 
@@ -72,6 +73,11 @@ def update_question(question_id: str, body: QuestionUpdate):
             require_entity_in_current_area(db, "question", question_id)
         except ValueError as exc:
             raise HTTPException(404, "question not found in current area") from exc
+        if body.state is not None:
+            raise HTTPException(409, {
+                "code": "question_state_transition_required",
+                "detail": "Use the explicit lifecycle endpoint; generic PATCH cannot change state.",
+            })
         for field, value in body.model_dump(exclude_unset=True).items():
             if hasattr(value, "value"):
                 value = value.value
@@ -92,8 +98,10 @@ async def quick_explore(question_id: str, body: QuickExploreRequest):
             require_entity_in_current_area(db, "question", question_id)
         except ValueError as exc:
             raise HTTPException(404, "question not found in current area") from exc
-        row.state = QuestionState.EXPLORING.value
-        row.active = True
+        try:
+            QuestionTransitionService.transition(row, QuestionState.EXPLORING.value)
+        except InvalidQuestionTransition as exc:
+            raise HTTPException(409, str(exc)) from exc
         db.commit()
         question = row.question
     result = await quick_explore_question(question, body.focus, get_domain_context())
@@ -112,8 +120,10 @@ def close_question(question_id: str):
             require_entity_in_current_area(db, "question", question_id)
         except ValueError as exc:
             raise HTTPException(404, "question not found in current area") from exc
-        row.state = QuestionState.CLOSED.value
-        row.active = False
+        try:
+            QuestionTransitionService.transition(row, QuestionState.CLOSED.value)
+        except InvalidQuestionTransition as exc:
+            raise HTTPException(409, str(exc)) from exc
         db.commit()
         db.refresh(row)
     emit("question.closed", {"question_id": question_id})
@@ -131,8 +141,10 @@ def pause_question(question_id: str):
             require_entity_in_current_area(db, "question", question_id)
         except ValueError as exc:
             raise HTTPException(404, "question not found in current area") from exc
-        row.state = QuestionState.PAUSED.value
-        row.active = False
+        try:
+            QuestionTransitionService.transition(row, QuestionState.PAUSED.value)
+        except InvalidQuestionTransition as exc:
+            raise HTTPException(409, str(exc)) from exc
         db.commit()
         db.refresh(row)
     emit("topic.paused", {"question_id": question_id})
@@ -150,9 +162,10 @@ def return_question(question_id: str):
             require_entity_in_current_area(db, "question", question_id)
         except ValueError as exc:
             raise HTTPException(404, "question not found in current area") from exc
-        row.state = QuestionState.RETURNED.value
-        row.active = True
-        row.returned_count += 1
+        try:
+            QuestionTransitionService.transition(row, QuestionState.RETURNED.value)
+        except InvalidQuestionTransition as exc:
+            raise HTTPException(409, str(exc)) from exc
         db.commit()
         db.refresh(row)
     emit("question.returned", {"question_id": row.id, "returned_count": row.returned_count})
@@ -174,8 +187,10 @@ def promote_to_topic(question_id: str):
         if existing:
             return model_dict(existing)
         topic = TopicModel(question_id=q.id, title=q.question[:300], description=q.notes)
-        q.state = QuestionState.ACTIVE_TOPIC.value
-        q.active = True
+        try:
+            QuestionTransitionService.transition(q, QuestionState.ACTIVE_TOPIC.value)
+        except InvalidQuestionTransition as exc:
+            raise HTTPException(409, str(exc)) from exc
         db.add(topic)
         db.commit()
         db.refresh(topic)

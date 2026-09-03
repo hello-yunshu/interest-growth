@@ -25,7 +25,7 @@ def list_experiments():
     _require_career(read=("career_experiment",))
     with get_session_factory()() as db:
         rows = filter_rows_to_current_area(db, db.scalars(
-            select(CareerExperimentModel).order_by(CareerExperimentModel.created_at.desc())
+            select(CareerExperimentModel).where(CareerExperimentModel.status != "archived").order_by(CareerExperimentModel.created_at.desc())
         ).all(), "career_experiment")
         return {"experiments": [model_dict(x) for x in rows]}
 
@@ -59,6 +59,28 @@ def update_experiment(experiment_id: str, body: CareerExperimentUpdate):
         db.refresh(row)
     emit("career.experiment_updated", {"experiment_id": row.id, "status": row.status})
     return model_dict(row)
+
+
+@router.post("/career/experiments/{experiment_id}/archive")
+def archive_experiment(experiment_id: str):
+    return update_experiment(experiment_id, CareerExperimentUpdate(status="archived"))
+
+
+@router.post("/career/experiments/{experiment_id}/restore")
+def restore_experiment(experiment_id: str):
+    return update_experiment(experiment_id, CareerExperimentUpdate(status="planned"))
+
+
+@router.delete("/career/experiments/{experiment_id}")
+def delete_experiment(experiment_id: str):
+    _require_career(read=("career_experiment",), write=("career_experiment",))
+    with get_session_factory()() as db:
+        row = db.get(CareerExperimentModel, experiment_id)
+        if not row: raise HTTPException(404, "career experiment not found")
+        try: require_entity_in_current_area(db, "career_experiment", experiment_id)
+        except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+        db.delete(row); db.commit()
+    return {"id": experiment_id, "deleted": True}
 
 
 @router.get("/career/summary")

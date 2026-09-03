@@ -6,7 +6,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import func, select
 
-from pg_domain import CapabilityStatus
+from pg_domain import CapabilityStatus, ResearchPlan
 from interest_growth_native.research import ResearchSubtopic
 from interest_growth_native.errors import ProviderExecutionError, ProviderUnavailable
 
@@ -14,8 +14,16 @@ from ..db import (
     CapabilityRunModel,
     ClaimModel,
     ClaimVersionModel,
+    EntityAreaBindingModel,
     EvidenceModel,
     KnowledgeBaseModel,
+    KnowledgeIngestionRunModel,
+    KnowledgeSourceIndexModel,
+    RetrievalCandidateModel,
+    ArtifactModel,
+    GroundingRefModel,
+    LivingBookModel,
+    LivingBookChapterModel,
     SourceModel,
     TopicModel,
     get_session_factory,
@@ -35,6 +43,7 @@ from ..schemas import (
     SourceCreate,
     SourceInvalidationRequest,
 )
+from ..knowledge import source_file_path
 from ..serializers import model_dict
 
 router = APIRouter(tags=["research-evidence"])
@@ -87,6 +96,35 @@ def _approved_outline(plan: dict, question: str, depth: str):
     return refined, tuple(topics[:8]), snapshot
 
 
+def _manual_plan_from_approved(snapshot: dict, refined: str, topics: tuple[ResearchSubtopic, ...], depth: str,
+                               kb_ids: list[str], skills: list[str]) -> ResearchPlan:
+    """Materialize the already-approved snapshot without asking another planner."""
+    plan = ResearchPlan(
+        question=refined,
+        brief=str(snapshot.get("brief") or refined),
+        subquestions=[topic.title for topic in topics],
+        desired_sources=[str(x) for x in snapshot.get("desired_sources") or []],
+        depth=depth,
+        knowledge_bases=list(kb_ids),
+        skills=list(skills),
+    )
+    if not plan.desired_sources:
+        plan.desired_sources = ["local knowledge", "primary/original material", "counter-evidence"]
+    return plan
+
+
+def _mark_run_failed(run_id: str, exc: Exception) -> None:
+    with get_session_factory()() as db:
+        row = db.get(CapabilityRunModel, run_id)
+        if row is None or row.status != CapabilityStatus.RUNNING.value:
+            return
+        row.status = CapabilityStatus.FAILED.value
+        row.error = f"{type(exc).__name__}: {exc}"[:2000]
+        row.limitations = ["研究执行未完成；请检查 Provider 或输入后重试。"]
+        row.completed_at = datetime.now(UTC)
+        db.commit()
+
+
 
 @router.post("/research/plan")
 async def create_research_plan(body: ResearchRequest, request: Request):
@@ -137,6 +175,8 @@ async def create_research_plan(body: ResearchRequest, request: Request):
 @router.post("/research/run")
 async def run_research(body: ResearchRequest, request: Request):
     require_feature("FEATURE_DEEP_RESEARCH")
+    # Resolve every product gate before a RUNNING ledger row is created.
+    context = resolve_native_context(request, "research.run")
     if body.topic_id:
         with get_session_factory()() as db:
             if not db.get(TopicModel, body.topic_id):
@@ -152,6 +192,14 @@ async def run_research(body: ResearchRequest, request: Request):
     kb_ids, kb_warnings = _resolve_knowledge_base_ids(body.knowledge_base_ids)
     skills, skill_warnings = _resolve_domain_skills(body.use_domain_skills)
 
+    approved_topics: tuple[ResearchSubtopic, ...] = ()
+    approved_snapshot: dict | None = None
+    refined_question = body.question
+    if body.approved_plan:
+        refined_question, approved_topics, approved_snapshot = _approved_outline(
+            body.approved_plan, body.question, body.depth
+        )
+
     engine_status = {"engine": "native.interest-growth", "degraded": False}
     run = CapabilityRunModel(
         topic_id=body.topic_id,
@@ -166,11 +214,9 @@ async def run_research(body: ResearchRequest, request: Request):
         db.refresh(run)
 
     try:
-        context = resolve_native_context(request, "research.run")
-        if body.approved_plan:
-            refined, approved_topics, approved_snapshot = _approved_outline(body.approved_plan, body.question, body.depth)
+        if approved_snapshot:
             preview = type("ApprovedPreview", (), {
-                "refined_topic": refined,
+                "refined_topic": refined_question,
                 "subtopics": approved_topics,
                 "status": "approved_by_user",
             })()
@@ -187,7 +233,7 @@ async def run_research(body: ResearchRequest, request: Request):
             max_queue=8 if body.depth == "deep" else 4,
             outline_status=preview.status,
         )
-        plan = {
+        plan = dict(approved_snapshot) if approved_snapshot else {
             "question": preview.refined_topic,
             "brief": preview.refined_topic,
             "subquestions": [x.title for x in preview.subtopics],
@@ -197,7 +243,8 @@ async def run_research(body: ResearchRequest, request: Request):
             "depth": body.depth,
         }
         if approved_snapshot:
-            plan = {**approved_snapshot, **plan, "subquestions": [x.title for x in approved_topics]}
+            plan.setdefault("knowledge_bases", kb_ids)
+            plan.setdefault("skills", skills)
         limitations = list(result.limitations) + kb_warnings + skill_warnings
         candidates = list(result.candidates)
         report = result.answer
@@ -206,17 +253,31 @@ async def run_research(body: ResearchRequest, request: Request):
     except (ProviderUnavailable, ProviderExecutionError) as exc:
         # An unavailable optional LLM transport keeps the product-owned manual workspace usable.
         manual = ManualResearchEngine({"domain_name": get_domain_context().domain_name, "research": get_domain_context().research})
-        manual_plan = await manual.create_plan(body.question, body.depth)
-        manual_plan.knowledge_bases = kb_ids
-        manual_plan.skills = skills
+        if approved_snapshot:
+            manual_plan = _manual_plan_from_approved(
+                approved_snapshot, refined_question, approved_topics, body.depth, kb_ids, skills
+            )
+        else:
+            manual_plan = await manual.create_plan(body.question, body.depth)
+            manual_plan.knowledge_bases = kb_ids
+            manual_plan.skills = skills
         fallback = await manual.run(manual_plan)
-        plan = asdict(manual_plan)
+        plan = dict(approved_snapshot) if approved_snapshot else asdict(manual_plan)
+        if approved_snapshot:
+            plan.setdefault("knowledge_bases", kb_ids)
+            plan.setdefault("skills", skills)
         limitations = list(fallback.limitations) + kb_warnings + skill_warnings + [f"Native execution unavailable: {type(exc).__name__}"]
         candidates = []
         report = fallback.report
         provider = "manual-workspace"
         result_status = CapabilityStatus.DEGRADED.value
         engine_status = {"engine": "manual-workspace", "degraded": True, "reason": type(exc).__name__}
+    except Exception as exc:
+        _mark_run_failed(run.id, exc)
+        raise HTTPException(503, detail={
+            "code": "research_execution_failed",
+            "message": "Research execution failed and was recorded as a terminal failure.",
+        }) from exc
 
     source_ids: list[str] = []
     if body.persist_sources and candidates:
@@ -394,6 +455,67 @@ def invalidate_source(source_id: str, body: SourceInvalidationRequest):
         "affected_evidence_ids": affected_evidence,
         "affected_claim_ids": affected_claims,
     }
+
+
+@router.delete("/sources/{source_id}")
+def delete_source(source_id: str):
+    """Delete the Host source and all source-owned derivatives, preserving audit semantics."""
+    require_plugin_access("capability.research-evidence", read=("source", "evidence", "claim", "claim_version", "knowledge_mapping", "retrieval_candidate", "artifact", "living_book"), write=("source", "evidence", "claim", "knowledge_mapping", "retrieval_candidate", "artifact", "living_book"))
+    affected_claims: list[str] = []
+    affected_artifacts: list[str] = []
+    file_removed = False
+    with get_session_factory()() as db:
+        source = db.get(SourceModel, source_id)
+        if not source: raise HTTPException(404, "source not found")
+        try: require_entity_in_current_area(db, "source", source_id)
+        except ValueError as exc: raise HTTPException(404, "source not found in current area") from exc
+        evidence = db.scalars(select(EvidenceModel).where(EvidenceModel.source_id == source_id)).all()
+        evidence_ids = {row.id for row in evidence}
+        for claim in db.scalars(select(ClaimModel)).all():
+            versions = db.scalars(select(ClaimVersionModel).where(ClaimVersionModel.claim_id == claim.id)).all()
+            if any(evidence_ids.intersection(set(v.supporting_evidence or []) | set(v.contradicting_evidence or [])) for v in versions):
+                claim.status = "draft"
+                claim.verification_state = "unverified"
+                affected_claims.append(claim.id)
+        mappings = db.scalars(select(KnowledgeSourceIndexModel).where(KnowledgeSourceIndexModel.source_id == source_id)).all()
+        candidates = db.scalars(select(RetrievalCandidateModel).where(RetrievalCandidateModel.source_id == source_id)).all()
+        ingestion_runs = db.scalars(select(KnowledgeIngestionRunModel)).all()
+        for run in ingestion_runs:
+            if source_id in (run.source_ids or []):
+                run.state = "failed"
+                run.error = "source deleted"
+                run.completed_at = datetime.now(UTC)
+        for artifact in db.scalars(select(ArtifactModel)).all():
+            metadata = dict(artifact.metadata_json or {})
+            refs = json.dumps(metadata, ensure_ascii=False)
+            if source_id in refs:
+                metadata["review_needed"] = True
+                metadata["review_reason"] = "linked Source was deleted"
+                artifact.metadata_json = metadata
+                artifact.approved_at = None
+                artifact.human_review_required = True
+                affected_artifacts.append(artifact.id)
+        for book in db.scalars(select(LivingBookModel)).all():
+            if source_id in json.dumps(book.knowledge_base_ids or [], ensure_ascii=False):
+                book.status = "stale"
+        for chapter in db.scalars(select(LivingBookChapterModel)).all():
+            if source_id in json.dumps(chapter.source_refs or {}, ensure_ascii=False):
+                chapter.status = "stale"
+                chapter.stale_reason = "linked Source was deleted"
+        for row in [*mappings, *candidates, *evidence]: db.delete(row)
+        db.query(GroundingRefModel).filter(GroundingRefModel.ref_type == "source", GroundingRefModel.ref_id == source_id).delete(synchronize_session=False)
+        db.query(EntityAreaBindingModel).filter(EntityAreaBindingModel.entity_type == "source", EntityAreaBindingModel.entity_id == source_id).delete(synchronize_session=False)
+        local_key = source.local_file
+        local_path = source_file_path(source) if local_key else None
+        db.delete(source)
+        db.commit()
+    if local_key:
+        path = local_path
+        if path.exists() and path.is_file():
+            path.unlink()
+            file_removed = True
+    emit("source.deleted", {"source_id": source_id, "affected_claim_ids": affected_claims, "file_removed": file_removed})
+    return {"id": source_id, "deleted": True, "file_removed": file_removed, "affected_claim_ids": affected_claims, "affected_artifact_ids": affected_artifacts, "mappings_deleted": len(mappings), "evidence_deleted": len(evidence)}
 
 
 @router.post("/evidence")

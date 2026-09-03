@@ -14,13 +14,14 @@ export default function Home() {
   const runtimeCopy = useRuntimeCopy();
   const { data, loading, error, reload } = useWorkspaceData();
   const [question, setQuestion] = useState('');
+  const [energy, setEnergy] = useState('normal');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   async function submit() {
     if (!question.trim() || busy) return;
     setBusy(true); setMessage('');
     try {
-      await api('/questions', { method: 'POST', body: JSON.stringify({ question: question.trim(), energy_mode: 'normal' }) });
+      await api('/questions', { method: 'POST', body: JSON.stringify({ question: question.trim(), energy_mode: energy }) });
       setQuestion(''); router.push('/curiosity');
     } catch (err) { setMessage(toUserMessage(err)); }
     finally { setBusy(false); }
@@ -30,6 +31,7 @@ export default function Home() {
       <h1>今天想把哪个兴趣往前推一点？</h1>
       <p>把想知道的记下来。你可以探索、练习、整理，也可以先停在这里。</p>
       <div className="outputPromise"><Icon name="lightbulb"/><span>探索、练习和整理的结果会沉淀为学习成果</span></div>
+      <div className="row energyPicker" aria-label="选择投入强度"><span className="muted">这次想怎么推进？</span><select aria-label="这次想怎么推进" value={energy} onChange={event => setEnergy(event.target.value)} disabled={busy}><option value="light">轻量看看</option><option value="normal">正常推进</option><option value="deep">深入投入</option></select></div>
       <PromptBar className="capturePrompt questionComposer" value={question} onChange={setQuestion} onSubmit={submit} placeholder="记下一个问题" ariaLabel="记下一个问题" disabled={busy} leadingIcon="pencil" shortcutHint commands={false} sendLabel="提交问题"/>
       {message && <p className="inlineError"><Icon name="warning"/>{message}</p>}
     </section>

@@ -20,7 +20,11 @@ from ..db import (
     ClaimVersionModel,
     ConceptModel,
     EvidenceModel,
+    EntityAreaBindingModel,
     MasteryRecordModel,
+    MasteryEvidenceModel,
+    PracticeAttemptModel,
+    PracticeItemModel,
     SourceModel,
     TopicModel,
     get_session_factory,
@@ -120,10 +124,12 @@ def create_concept(body: ConceptCreate):
 
 
 @router.get("/concepts")
-def list_concepts(topic_id: str | None = None):
+def list_concepts(topic_id: str | None = None, include_archived: bool = False):
     require_plugin_access("capability.mastery", read=("concept", "mastery"))
     with get_session_factory()() as db:
         stmt = select(ConceptModel).order_by(ConceptModel.updated_at.desc()).limit(200)
+        if not include_archived:
+            stmt = stmt.where(ConceptModel.status == "active")
         if topic_id:
             stmt = stmt.where(ConceptModel.topic_id == topic_id)
         output = []
@@ -157,7 +163,8 @@ def update_mastery(concept_id: str, body: MasteryUpdate):
         else:
             old_state = mastery.state
             mastery.state = body.state
-        mastery.evidence_note = body.evidence_note
+        if body.evidence_note is not None:
+            mastery.evidence_note = body.evidence_note
         db.commit()
         db.refresh(mastery)
     old_index = states.index(old_state) if old_state in states else -1
@@ -171,7 +178,7 @@ def update_mastery(concept_id: str, body: MasteryUpdate):
             "to": body.state,
             "increased": new_index > old_index,
             "profile": profile.id,
-            "evidence_note": body.evidence_note,
+            "evidence_note": mastery.evidence_note,
         },
     )
     return model_dict(mastery)
@@ -290,6 +297,79 @@ def update_concept(concept_id: str, body: ConceptUpdate):
         db.commit()
         db.refresh(concept)
         return model_dict(concept)
+
+
+@router.post("/concepts/{concept_id}/archive")
+def archive_concept(concept_id: str):
+    require_plugin_access("capability.mastery", read=("concept",), write=("concept",))
+    with get_session_factory()() as db:
+        concept = db.get(ConceptModel, concept_id)
+        if not concept:
+            raise HTTPException(404, "concept not found")
+        try:
+            require_entity_in_current_area(db, "concept", concept_id)
+        except ValueError as exc:
+            raise HTTPException(404, "concept not found in current area") from exc
+        concept.status = "archived"
+        db.commit(); db.refresh(concept)
+        return model_dict(concept)
+
+
+@router.post("/concepts/{concept_id}/restore")
+def restore_concept(concept_id: str):
+    require_plugin_access("capability.mastery", read=("concept",), write=("concept",))
+    with get_session_factory()() as db:
+        concept = db.get(ConceptModel, concept_id)
+        if not concept:
+            raise HTTPException(404, "concept not found")
+        try:
+            require_entity_in_current_area(db, "concept", concept_id)
+        except ValueError as exc:
+            raise HTTPException(404, "concept not found in current area") from exc
+        concept.status = "active"
+        db.commit(); db.refresh(concept)
+        return model_dict(concept)
+
+
+@router.delete("/concepts/{concept_id}")
+def delete_concept(concept_id: str, force: bool = False):
+    require_plugin_access("capability.mastery", read=("concept", "mastery", "practice_item", "mastery_evidence"), write=("concept", "mastery", "practice_item", "mastery_evidence"))
+    with get_session_factory()() as db:
+        concept = db.get(ConceptModel, concept_id)
+        if not concept:
+            raise HTTPException(404, "concept not found")
+        try:
+            require_entity_in_current_area(db, "concept", concept_id)
+        except ValueError as exc:
+            raise HTTPException(404, "concept not found in current area") from exc
+        mastery = db.scalar(select(MasteryRecordModel).where(MasteryRecordModel.concept_id == concept_id))
+        practice = db.scalars(select(PracticeItemModel).where(PracticeItemModel.concept_id == concept_id)).all()
+        evidence = db.scalars(select(MasteryEvidenceModel).where(MasteryEvidenceModel.concept_id == concept_id)).all()
+        dependencies = {
+            "mastery": bool(mastery),
+            "practice_items": len(practice),
+            "mastery_evidence": len(evidence),
+            "related_claims": len(concept.related_claims or []),
+            "related_sources": len(concept.related_sources or []),
+        }
+        if any(dependencies.values()) and not force:
+            raise HTTPException(409, {"code": "concept_has_dependencies", "dependencies": dependencies, "detail": "Archive the concept or explicitly confirm cascade deletion."})
+        if force:
+            for item in practice:
+                for attempt in db.scalars(select(PracticeAttemptModel).where(PracticeAttemptModel.practice_item_id == item.id)).all():
+                    db.delete(attempt)
+                db.delete(item)
+            if mastery:
+                db.delete(mastery)
+            for row in evidence:
+                db.delete(row)
+        db.query(EntityAreaBindingModel).filter(
+            EntityAreaBindingModel.entity_type == "concept",
+            EntityAreaBindingModel.entity_id == concept_id,
+        ).delete(synchronize_session=False)
+        db.delete(concept)
+        db.commit()
+    return {"id": concept_id, "deleted": True, "dependencies": dependencies}
 
 
 @router.post("/concepts/{concept_id}/visualize")

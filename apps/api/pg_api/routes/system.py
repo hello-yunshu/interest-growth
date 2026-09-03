@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from pg_shared import get_settings
@@ -12,7 +12,7 @@ from ..domains import area_capability_enabled, get_domain_context
 from ..plugins import get_plugin_runtime
 from ..memory_graph import native_auxiliary_graph, local_growth_graph
 from ..schemas import FeatureFlagUpdate
-from ..native_execution import resolve_native_context
+from ..native_execution import get_native_bundle, resolve_native_context
 from ..remote_auth import API_VERSION, MIN_CLIENT_VERSION, PRODUCT_NAME, SERVER_VERSION, owner_configured
 
 router = APIRouter(tags=["system"])
@@ -34,7 +34,9 @@ def system_capabilities():
         "min_client_version": MIN_CLIENT_VERSION,
         "server_instance_id": identity["server_instance_id"],
         "server_display_name": identity["server_display_name"],
-        "runtime_modes": ["desktop-local", "desktop-remote", "android-remote", "browser-remote"],
+        "runtime_modes": ["desktop-local", "desktop-remote", "android-remote"],
+        "supported_runtime_modes": ["desktop-local", "desktop-remote", "android-remote"],
+        "experimental_runtime_modes": ["browser-remote"],
         "auth": {
             "mode": "single_owner_devices" if settings.remote_auth_enabled else "none",
             "enabled": settings.remote_auth_enabled,
@@ -192,3 +194,10 @@ async def memory_graph(request: Request):
         "local_growth_memory": local,
         "native_auxiliary": auxiliary,
     }
+
+
+@router.delete("/memory/auxiliary")
+async def clear_auxiliary_memory(request: Request):
+    context = resolve_native_context(request, "memory.clear")
+    deleted = get_native_bundle().memory.clear(context)
+    return {"deleted": deleted, "authoritative_growth_memory_untouched": True}

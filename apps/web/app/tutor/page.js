@@ -4,9 +4,11 @@ import { api } from '../../lib/api';
 import { ActivityTrace, ApprovalCard, ChatPanel, PixelLoader, PromptBar, StatusChip, StreamingText, ToolChips } from '../../components/BeautifulUI';
 import { WorkspaceBoard, useWorkspaceData } from '../../components/WorkspaceWidgets';
 import { capabilityLabel, domainDisplayName, statusLabel, toUserMessage } from '../../lib/presentation.js';
+import { useCapabilityAvailability } from '../../lib/capabilities.js';
 
 export default function TutorPage(){
   const workspace=useWorkspaceData();
+  const availability=useCapabilityAvailability();
   const [topics,setTopics]=useState([]), [concepts,setConcepts]=useState([]), [bases,setBases]=useState([]), [personas,setPersonas]=useState([]), [sessions,setSessions]=useState([]);
   const [domain,setDomain]=useState(null), [sessionId,setSessionId]=useState(''), [turns,setTurns]=useState([]), [events,setEvents]=useState([]), [pending,setPending]=useState(null), [msg,setMsg]=useState('');
   const [form,setForm]=useState({title:'兴趣学习会话',topic_id:'',concept_id:'',persona_name:'',knowledge_base_ids:[],skill_names:[]});
@@ -51,6 +53,13 @@ export default function TutorPage(){
   const messages=useMemo(()=>turns.slice(-8).flatMap(t=>[{id:`${t.id}-q`,role:'user',content:t.prompt_text||t.input_text||t.user_text||`${capabilityLabel(t.capability)}内容`,meta:statusLabel(t.status)},{id:`${t.id}-a`,role:'assistant',content:t.answer_text||'—',meta:capabilityLabel(t.capability)}]),[turns]);
   const availableSkills=domain?.domain?.skills||[];
   const areaName=domain?.area?.name||'当前兴趣';
+  const modeAvailability={
+    chat: availability.available('FEATURE_TUTOR_RUNTIME','capability.tutor-runtime'),
+    deep_question: availability.available('FEATURE_FLEXIBLE_MASTERY','capability.mastery'),
+    mastery_path: availability.available('FEATURE_FLEXIBLE_MASTERY','capability.mastery'),
+    deep_research: availability.available('FEATURE_DEEP_RESEARCH','capability.research-evidence'),
+    visualize: availability.available('FEATURE_VISUALIZE','capability.concept-graph'),
+  };
   return <div className="stack">
     <section className="pageLead"><div><div className="eyebrow">导师 · {areaName}</div><h1>带着一个具体问题，继续上次的思路。</h1><p className="muted">导师会结合当前兴趣的学习方式和你选中的资料。界面只呈现可检查的活动、工具与来源。</p></div><div className="pageLeadStatus"><StatusChip tone={connected?'success':'neutral'} pulse={running}>{connected?'已经连接':'尚未连接'}</StatusChip></div></section>
     {msg&&<p className="notice">{msg}</p>}
@@ -64,7 +73,7 @@ export default function TutorPage(){
       <section className="card"><div className="cardHeader"><div><div className="eyebrow">继续会话</div><h2>已有学习会话</h2></div></div><select aria-label="选择学习会话" value={sessionId} onChange={e=>{setSessionId(e.target.value);setConnected(false);setActiveTurnId('')}} disabled={Boolean(busyAction)}><option value="">选择学习会话</option>{sessions.map(s=><option key={s.id} value={s.id}>{s.title||s.id} · {statusLabel(s.status)}</option>)}</select><div className="row sectionTop"><button onClick={connect} disabled={!sessionId||Boolean(busyAction)}>{busyAction==='connect'?'正在连接…':'连接本地执行服务'}</button><button className="ghost" onClick={cancel} disabled={!activeTurnId||running}>{running?'正在取消…':'取消当前对话'}</button></div><ChatPanel messages={messages} empty="这个学习会话还没有历史对话。"/></section>
     </div>
 
-    <section className="card aiWorkSurface"><div className="cardHeader"><div><div className="eyebrow">互动学习</div><h2>和当前兴趣上下文一起学习</h2></div></div>
+    <section className="card aiWorkSurface"><div className="cardHeader"><div><div className="eyebrow">互动学习</div><h2>和当前兴趣上下文一起学习</h2></div><label className="fieldGroup"><span>导师模式</span><select aria-label="导师模式" value={capability} onChange={e=>setCapability(e.target.value)} disabled={availability.status!=='available'||running}>{[['chat','自由对话'],['deep_question','深入提问'],['mastery_path','学习路径'],['deep_research','深入研究'],['visualize','可视化理解']].map(([value,label])=><option key={value} value={value} disabled={!modeAvailability[value]}>{label}{modeAvailability[value]?'':'（当前不可用）'}</option>)}</select></label></div>
       <PromptBar value={content} onChange={setContent} onSubmit={sendTurn} disabled={!connected||running} placeholder={`例如：不要直接给结论，先检查我对「${areaName}」当前理解或练习计划中的漏洞。`} model={{chat:'对话',deep_question:'深入提问',mastery_path:'学习路径',deep_research:'深入研究',visualize:'可视化'}[capability]||capability} context={[...form.skill_names,...form.knowledge_base_ids.map(id=>bases.find(b=>b.id===id)?.name).filter(Boolean)]}/>
       {running&&<PixelLoader label="导师正在整理回答" detail={capabilityLabel(capability)}/>}<ToolChips events={events}/>
       <div className="stack sectionTop"><StreamingText title="导师回答" text={answerText} sources={sourceEvents} streaming={false}/><ActivityTrace events={events} title="活动记录"/></div>

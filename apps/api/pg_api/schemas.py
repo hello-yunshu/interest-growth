@@ -109,7 +109,11 @@ class ConceptUpdate(BaseModel):
 
 class MasteryUpdate(BaseModel):
     state: str = Field(min_length=1, max_length=40)
-    evidence_note: str = ""
+    evidence_note: str | None = None
+
+
+class MasteryEvidenceInvalidationRequest(BaseModel):
+    reason: str = Field(min_length=2, max_length=1000)
 
 
 class ReflectionCreate(BaseModel):
@@ -200,7 +204,7 @@ class CareerExperimentUpdate(BaseModel):
     evidence: str | None = None
     interest_after: int | None = Field(default=None, ge=1, le=5)
     competence_boundary: str | None = None
-    status: str | None = Field(default=None, pattern="^(planned|active|paused|completed|abandoned)$")
+    status: str | None = Field(default=None, pattern="^(planned|active|paused|completed|abandoned|archived)$")
     reflection: str | None = None
 
 

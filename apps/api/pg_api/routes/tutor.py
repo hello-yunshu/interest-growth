@@ -74,9 +74,11 @@ def create_session(body: TutorSessionCreate):
 
 
 @router.get("/tutor/sessions")
-def sessions():
+def sessions(include_archived: bool = False):
     _require_tutor_runtime(read=("tutor_session",))
-    return {"sessions": [model_dict(x) for x in list_tutor_sessions()]}
+    rows = list_tutor_sessions()
+    if not include_archived: rows = [row for row in rows if row.status != "archived"]
+    return {"sessions": [model_dict(x) for x in rows]}
 
 
 @router.get("/tutor/sessions/{session_id}")
@@ -142,6 +144,39 @@ def close_session(session_id: str):
         return model_dict(close_tutor_session(session_id))
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+@router.post("/tutor/sessions/{session_id}/archive")
+def archive_session(session_id: str):
+    _require_tutor_runtime(read=("tutor_session",), write=("tutor_session",))
+    with get_session_factory()() as db:
+        row = db.get(TutorSessionModel, session_id)
+        if not row: raise HTTPException(404, "tutor session not found")
+        try: require_entity_in_current_area(db, "tutor_session", session_id)
+        except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+        row.status = "archived"; db.commit(); db.refresh(row); return model_dict(row)
+
+@router.post("/tutor/sessions/{session_id}/restore")
+def restore_session(session_id: str):
+    _require_tutor_runtime(read=("tutor_session",), write=("tutor_session",))
+    with get_session_factory()() as db:
+        row = db.get(TutorSessionModel, session_id)
+        if not row: raise HTTPException(404, "tutor session not found")
+        try: require_entity_in_current_area(db, "tutor_session", session_id)
+        except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+        row.status = "active"; db.commit(); db.refresh(row); return model_dict(row)
+
+@router.delete("/tutor/sessions/{session_id}")
+def delete_session(session_id: str):
+    _require_tutor_runtime(read=("tutor_session", "tutor_turn"), write=("tutor_session", "tutor_turn"))
+    with get_session_factory()() as db:
+        row = db.get(TutorSessionModel, session_id)
+        if not row: raise HTTPException(404, "tutor session not found")
+        try: require_entity_in_current_area(db, "tutor_session", session_id)
+        except ValueError as exc: raise HTTPException(404, str(exc)) from exc
+        turns = db.scalars(select(TutorTurnModel).where(TutorTurnModel.tutor_session_id == session_id)).all()
+        for turn in turns: db.delete(turn)
+        db.delete(row); db.commit()
+    return {"id": session_id, "deleted": True, "turns_deleted": len(turns)}
 
 
 @router.get("/tutor/sessions/{session_id}/turns")
