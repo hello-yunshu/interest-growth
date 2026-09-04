@@ -218,7 +218,7 @@ def test_restore_retains_previous_state_until_post_checks_then_cleans(seeded_cli
 
 
 def test_restore_rejects_older_bundle_schema_before_staging(seeded_client, tmp_path):
-    """Pre-release restore accepts only a bundle from the current schema."""
+    """Restore accepts only a bundle from the current schema."""
     from pg_api.backup_restore import create_backup, restore_backup
 
     settings = get_settings()
@@ -234,7 +234,7 @@ def test_restore_rejects_older_bundle_schema_before_staging(seeded_client, tmp_p
     manifest["schema_version"] = 14
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="schema is unsupported before release"):
+    with pytest.raises(ValueError, match="schema is unsupported by this release"):
         restore_backup(bundle_dir=str(bundle))
     _assert_live_state_untouched(settings, {"db": db_before, "sources": source_before})
     reset_engine_for_tests()

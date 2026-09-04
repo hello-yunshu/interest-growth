@@ -45,8 +45,12 @@ pythonpath = [
 [tool.ruff]
 line-length = 100
 
-[tool.setuptools]
-packages = []
+[tool.setuptools.packages.find]
+where = ["packages/native-execution-core"]
+include = ["interest_growth_native*"]
+
+[tool.setuptools.package-data]
+interest_growth_native = ["resources/*.sql"]
 
 [dependency-groups]
 dev = [

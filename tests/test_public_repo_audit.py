@@ -44,7 +44,7 @@ def run(payload):
     # Psychology must stay in a Domain Pack.
     return eval(payload), os.system(payload)  # TODO
 """
-    findings = audit_public_repo.content_findings("interest_growth_native/bad.py", runtime)
+    findings = audit_public_repo.content_findings("packages/native-execution-core/interest_growth_native/bad.py", runtime)
     assert "direct DeepTutor runtime import" in findings
     assert "hard-coded Psychology policy in runtime" in findings
     assert "arbitrary code execution call: eval" in findings

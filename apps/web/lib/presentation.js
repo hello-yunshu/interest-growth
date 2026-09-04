@@ -163,6 +163,7 @@ export function toUserMessage(error, context = {}) {
   if (code === 'PLUGIN_DISABLED' || code === 'CAPABILITY_DISABLED_FOR_AREA' || code === 'AREA_CAPABILITY_DISABLED') return '这项能力在当前兴趣中已停用。可在设置中重新启用。';
   if (code === 'PLUGIN_NOT_INSTALLED') return '这项能力尚未安装。请先在设置中安装可信组件。';
   if (code === 'AREA_SCOPE_MISMATCH') return '这项内容不属于当前兴趣范围。';
+  if (code === 'EXTERNAL_DATA_EGRESS_CONFIRMATION_REQUIRED') return '该检索引擎需要把资料发送到第三方服务处理。请先明确确认后再同步。';
   if (code === 'PROVIDER_UNAVAILABLE' || code === 'PROVIDER_ERROR') return '执行服务暂时不可用。没有重复提交，也没有修改已有数据。';
   if (code === 'REMOTE_TOKEN_EXPIRED' || code === 'LOGIN_EXPIRED' || status === 401) return '登录已过期。请重新连接服务器。';
   if (code === 'IDENTITY_CHANGED' || code === 'SERVER_IDENTITY_CHANGED') return '服务器实例已变化。请重新验证后再连接。';

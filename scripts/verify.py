@@ -4,9 +4,12 @@ from importlib import resources
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
+NATIVE_ROOT=ROOT/"packages"/"native-execution-core"
+if str(NATIVE_ROOT) not in sys.path:
+    sys.path.insert(0, str(NATIVE_ROOT))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-PKG=ROOT/"interest_growth_native"
+PKG=NATIVE_ROOT/"interest_growth_native"
 EXPECTED_EVENTS={
     "answer_delta","thinking","activity","sources",
     "wait_for_input","result","done","error",

@@ -31,6 +31,7 @@ from ..db import (
 from ..engines import ManualResearchEngine
 from ..domains import get_domain_context, filter_rows_to_current_area, require_entity_in_current_area
 from ..events import emit
+from ..source_dependencies import invalidate_source_dependencies, remove_source_derivatives
 from ..features import require_feature
 from ..plugins import require_plugin_access
 from ..native_execution import get_native_bundle, resolve_native_context
@@ -391,9 +392,7 @@ def invalidate_source(source_id: str, body: SourceInvalidationRequest):
     This is intentionally conservative: verification is never sticky when its source-level basis is revoked.
     The source and historical ClaimVersions are retained; only verification state is invalidated.
     """
-    require_plugin_access("capability.research-evidence", read=("source", "evidence", "claim", "claim_version"), write=("source", "evidence", "claim"))
-    affected_claims: list[str] = []
-    affected_evidence: list[str] = []
+    require_plugin_access("capability.research-evidence", read=("source", "evidence", "claim", "claim_version", "artifact", "living_book", "living_book_chapter"), write=("source", "evidence", "claim", "artifact", "living_book", "living_book_chapter"))
     with get_session_factory()() as db:
         source = db.get(SourceModel, source_id)
         if not source:
@@ -407,32 +406,12 @@ def invalidate_source(source_id: str, body: SourceInvalidationRequest):
         note = f"Verification revoked: {body.reason.strip()}"
         source.notes = (source.notes.rstrip() + "\n" + note).strip() if source.notes else note
 
-        evidence_rows = db.scalars(select(EvidenceModel).where(EvidenceModel.source_id == source_id)).all()
-        evidence_ids = {row.id for row in evidence_rows}
-        for evidence in evidence_rows:
-            evidence.verified = False
-            evidence.verification_state = "source_identified"
-            affected_evidence.append(evidence.id)
-
-        if evidence_ids:
-            claims = db.scalars(select(ClaimModel)).all()
-            for claim in claims:
-                if not claim.current_version_id:
-                    continue
-                version = db.get(ClaimVersionModel, claim.current_version_id)
-                if not version:
-                    continue
-                refs = set(version.supporting_evidence or []) | set(version.contradicting_evidence or [])
-                if refs.isdisjoint(evidence_ids):
-                    continue
-                claim.verification_state = "unverified"
-                claim.last_verified_at = None
-                affected_claims.append(claim.id)
+        affected = invalidate_source_dependencies(db, source_id, reason=body.reason.strip())
         db.commit()
         db.refresh(source)
         source_payload = model_dict(source)
 
-    for claim_id in affected_claims:
+    for claim_id in affected["claim_ids"]:
         emit(
             "claim.reverification_required",
             {
@@ -446,14 +425,17 @@ def invalidate_source(source_id: str, body: SourceInvalidationRequest):
         {
             "source_id": source_id,
             "reason": body.reason.strip(),
-            "affected_evidence_ids": affected_evidence,
-            "affected_claim_ids": affected_claims,
+            "affected_evidence_ids": affected["evidence_ids"],
+            "affected_claim_ids": affected["claim_ids"],
         },
     )
     return {
         "source": source_payload,
-        "affected_evidence_ids": affected_evidence,
-        "affected_claim_ids": affected_claims,
+        "affected_evidence_ids": affected["evidence_ids"],
+        "affected_claim_ids": affected["claim_ids"],
+        "affected_artifact_ids": affected["artifact_ids"],
+        "affected_book_ids": affected["book_ids"],
+        "affected_chapter_ids": affected["chapter_ids"],
     }
 
 
@@ -461,49 +443,14 @@ def invalidate_source(source_id: str, body: SourceInvalidationRequest):
 def delete_source(source_id: str):
     """Delete the Host source and all source-owned derivatives, preserving audit semantics."""
     require_plugin_access("capability.research-evidence", read=("source", "evidence", "claim", "claim_version", "knowledge_mapping", "retrieval_candidate", "artifact", "living_book"), write=("source", "evidence", "claim", "knowledge_mapping", "retrieval_candidate", "artifact", "living_book"))
-    affected_claims: list[str] = []
-    affected_artifacts: list[str] = []
     file_removed = False
     with get_session_factory()() as db:
         source = db.get(SourceModel, source_id)
         if not source: raise HTTPException(404, "source not found")
         try: require_entity_in_current_area(db, "source", source_id)
         except ValueError as exc: raise HTTPException(404, "source not found in current area") from exc
-        evidence = db.scalars(select(EvidenceModel).where(EvidenceModel.source_id == source_id)).all()
-        evidence_ids = {row.id for row in evidence}
-        for claim in db.scalars(select(ClaimModel)).all():
-            versions = db.scalars(select(ClaimVersionModel).where(ClaimVersionModel.claim_id == claim.id)).all()
-            if any(evidence_ids.intersection(set(v.supporting_evidence or []) | set(v.contradicting_evidence or [])) for v in versions):
-                claim.status = "draft"
-                claim.verification_state = "unverified"
-                affected_claims.append(claim.id)
-        mappings = db.scalars(select(KnowledgeSourceIndexModel).where(KnowledgeSourceIndexModel.source_id == source_id)).all()
-        candidates = db.scalars(select(RetrievalCandidateModel).where(RetrievalCandidateModel.source_id == source_id)).all()
-        ingestion_runs = db.scalars(select(KnowledgeIngestionRunModel)).all()
-        for run in ingestion_runs:
-            if source_id in (run.source_ids or []):
-                run.state = "failed"
-                run.error = "source deleted"
-                run.completed_at = datetime.now(UTC)
-        for artifact in db.scalars(select(ArtifactModel)).all():
-            metadata = dict(artifact.metadata_json or {})
-            refs = json.dumps(metadata, ensure_ascii=False)
-            if source_id in refs:
-                metadata["review_needed"] = True
-                metadata["review_reason"] = "linked Source was deleted"
-                artifact.metadata_json = metadata
-                artifact.approved_at = None
-                artifact.human_review_required = True
-                affected_artifacts.append(artifact.id)
-        for book in db.scalars(select(LivingBookModel)).all():
-            if source_id in json.dumps(book.knowledge_base_ids or [], ensure_ascii=False):
-                book.status = "stale"
-        for chapter in db.scalars(select(LivingBookChapterModel)).all():
-            if source_id in json.dumps(chapter.source_refs or {}, ensure_ascii=False):
-                chapter.status = "stale"
-                chapter.stale_reason = "linked Source was deleted"
-        for row in [*mappings, *candidates, *evidence]: db.delete(row)
-        db.query(GroundingRefModel).filter(GroundingRefModel.ref_type == "source", GroundingRefModel.ref_id == source_id).delete(synchronize_session=False)
+        affected = invalidate_source_dependencies(db, source_id, reason="linked Source was deleted")
+        derivative_counts = remove_source_derivatives(db, source_id)
         db.query(EntityAreaBindingModel).filter(EntityAreaBindingModel.entity_type == "source", EntityAreaBindingModel.entity_id == source_id).delete(synchronize_session=False)
         local_key = source.local_file
         local_path = source_file_path(source) if local_key else None
@@ -514,8 +461,22 @@ def delete_source(source_id: str):
         if path.exists() and path.is_file():
             path.unlink()
             file_removed = True
-    emit("source.deleted", {"source_id": source_id, "affected_claim_ids": affected_claims, "file_removed": file_removed})
-    return {"id": source_id, "deleted": True, "file_removed": file_removed, "affected_claim_ids": affected_claims, "affected_artifact_ids": affected_artifacts, "mappings_deleted": len(mappings), "evidence_deleted": len(evidence)}
+    for knowledge_base_id in derivative_counts["knowledge_base_ids"]:
+        get_native_bundle().retrieval.invalidate(knowledge_base_id)
+    for claim_id in affected["claim_ids"]:
+        emit("claim.reverification_required", {
+            "claim_id": claim_id, "source_id": source_id, "reason": "linked Source was deleted",
+        })
+    for artifact_id in affected["artifact_ids"]:
+        emit("artifact.review_required", {
+            "artifact_id": artifact_id, "source_id": source_id, "reason": "linked Source was deleted",
+        })
+    for book_id in affected["book_ids"]:
+        emit("living_book.stale", {
+            "book_id": book_id, "source_id": source_id, "reason": "linked Source was deleted",
+        })
+    emit("source.deleted", {"source_id": source_id, "affected_claim_ids": affected["claim_ids"], "file_removed": file_removed})
+    return {"id": source_id, "deleted": True, "file_removed": file_removed, "affected_claim_ids": affected["claim_ids"], "affected_artifact_ids": affected["artifact_ids"], "mappings_deleted": derivative_counts["mappings"], "candidates_deleted": derivative_counts["candidates"], "evidence_deleted": derivative_counts["evidence"], "affected_book_ids": affected["book_ids"], "affected_chapter_ids": affected["chapter_ids"]}
 
 
 @router.post("/evidence")

@@ -22,16 +22,28 @@ permissions:
   - question
   - topic
   - knowledge_base
+  - knowledge_mapping
+  - retrieval_candidate
   - source
   - evidence
   - claim
   - claim_version
+  - artifact
+  - living_book
+  - living_book_chapter
+  - grounding_ref
+  - knowledge_ingestion_run
   - capability_run
   write:
   - source
   - evidence
   - claim
   - claim_version
+  - knowledge_mapping
+  - retrieval_candidate
+  - artifact
+  - living_book
+  - living_book_chapter
   - capability_run
 risk:
   network: true

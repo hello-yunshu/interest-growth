@@ -568,9 +568,6 @@ jobs:
       - name: Install Host verification dependencies
         if: needs.release-meta.outputs.is_stable == 'true'
         run: python -m pip install -e ".[dev]"
-      - name: Standalone Native Core sync
-        if: needs.release-meta.outputs.is_stable == 'true'
-        run: python scripts/verify_native_core_sync.py
       - name: Exact RAG upstreams (shared install + verify, §9)
         if: needs.release-meta.outputs.is_stable == 'true'
         run: bash scripts/ci/verify_rag_upstreams.sh

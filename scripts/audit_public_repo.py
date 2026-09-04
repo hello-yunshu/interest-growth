@@ -45,8 +45,8 @@ JKS_MAGIC = b"\xfe\xed\xfe\xed"
 # regardless of extension (BLOCKER-1 / Gate F secret hygiene).
 FORBIDDEN_CREDENTIAL_SUFFIXES = {".jks", ".keystore", ".p12", ".pfx", ".pem", ".key"}
 PROMPT_FILENAME_PATTERN = re.compile(r"(?:^|[_-])prompts?(?:[_-]|\.|$)|提示词", re.IGNORECASE)
-RUNTIME_ROOTS = ("interest_growth_native/",)
-RELEASE_CRITICAL_ROOTS = ("interest_growth_native/", "migrations/")
+RUNTIME_ROOTS = ("packages/native-execution-core/interest_growth_native/",)
+RELEASE_CRITICAL_ROOTS = ("packages/native-execution-core/interest_growth_native/", "migrations/")
 
 
 def tracked_paths(root: Path = ROOT) -> list[str]:

@@ -69,8 +69,6 @@ jobs:
         run: python scripts/audit_public_repo.py
       - name: Verify merged Host
         run: python scripts/verify.py
-      - name: Verify Native Core single-source mirror
-        run: python scripts/verify_native_core_sync.py
       - name: Run architectural self-audit
         run: python scripts/self_audit.py
       - name: Run strict Host cutover audit
