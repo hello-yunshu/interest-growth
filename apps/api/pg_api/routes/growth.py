@@ -15,7 +15,7 @@ from ..db import (
 )
 from fastapi import HTTPException
 from ..events import emit
-from ..domains import filter_rows_to_current_area, get_domain_context, resolve_area
+from ..domains import current_mastery_profile, filter_rows_to_current_area, get_domain_context, resolve_area
 from ..features import require_feature
 from ..plugins import require_plugin_access
 from ..schemas import ReflectionCreate
@@ -166,6 +166,26 @@ def refresh_growth_memory():
     return refresh_growth_memory_records()
 
 
+@router.post("/growth/memory/reset")
+def reset_growth_memory():
+    """Reset derived G1/G2/G3 rows without deleting canonical learning data."""
+    require_plugin_access("capability.growth-feedback", read=("growth_memory",), write=("growth_memory",))
+    require_feature("FEATURE_GROWTH_FEEDBACK")
+    with get_session_factory()() as db:
+        rows = filter_rows_to_current_area(db, db.scalars(select(GrowthMemoryModel)).all(), "growth_memory")
+        for row in rows:
+            db.delete(row)
+        db.commit()
+    return {"reset": True, "deleted_derived_records": len(rows), "canonical_data_preserved": True}
+
+
+@router.post("/growth/memory/rebuild")
+def rebuild_growth_memory():
+    require_plugin_access("capability.growth-feedback", read=("growth_event", "mastery", "claim_version", "question", "reflection", "concept", "growth_memory"), write=("growth_memory",))
+    require_feature("FEATURE_GROWTH_FEEDBACK")
+    return refresh_growth_memory_records()
+
+
 @router.get("/growth/memory")
 def list_growth_memory(layer: str | None = None):
     require_plugin_access("capability.growth-feedback", read=("growth_memory",))
@@ -199,13 +219,20 @@ def growth_narrative():
         parts.append(f"你有 {returns} 次主动回到曾中断问题的记录，这说明兴趣能够被重新唤起，而不是只能依赖连续打卡。")
     if revisions:
         parts.append(f"你已经留下 {len(revisions)} 次 Claim 修订记录，观点开始具有版本历史，而不是被新结论覆盖。")
+    context = get_domain_context()
     if mastery_changes:
-        parts.append(f"系统记录到 {mastery_changes} 次概念掌握证据变化；这些变化关注‘能解释/能区分/能判断证据’而不是刷题次数。")
+        if context.domain_pack_id == "psychology":
+            mastery_language = "能解释/能区分/能判断证据"
+        else:
+            profile = current_mastery_profile()
+            mastery_language = "、".join(
+                state for state in (profile.states or []) if state not in {"unfamiliar", "familiar"}
+            ) or "理解、练习与应用"
+        parts.append(f"系统记录到 {mastery_changes} 次概念掌握变化；当前关注 {mastery_language}，而不是刷题次数。")
     if research:
         parts.append(f"完成了 {research} 次研究闭环；是否进一步转成内容并不影响它作为学习成果成立。")
     if not parts:
         parts.append("目前还没有足够的成长事件生成长期叙事。先记录一个真实问题即可，不需要为了‘有数据’强行完成任务。")
-    context = get_domain_context()
     return {"area": {"id": context.area_id, "name": context.area_name, "domain_pack_id": context.domain_pack_id}, "narrative": "\n\n".join(parts), "signals": {
         "returns": returns,
         "claim_revisions": len(revisions),

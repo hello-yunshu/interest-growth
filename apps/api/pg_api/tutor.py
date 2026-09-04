@@ -99,7 +99,10 @@ def create_tutor_session(
         # Resolve now so invalid local KB ids never get persisted as sticky context.
         resolve_upstream_kb_names(list(knowledge_base_ids or []))
         if persona_name:
-            persona = db.scalar(select(TutorPersonaModel).where(TutorPersonaModel.name == persona_name.strip()))
+            persona = db.scalar(select(TutorPersonaModel).where(
+                TutorPersonaModel.name == persona_name.strip(),
+                TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
+            ))
             if persona is None or persona.id not in persona_ids_for_current_area(db):
                 raise ValueError("persona not found in current Interest Area persona library")
         row = TutorSessionModel(

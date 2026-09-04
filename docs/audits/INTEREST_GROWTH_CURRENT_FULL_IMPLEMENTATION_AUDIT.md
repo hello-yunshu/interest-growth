@@ -1,14 +1,14 @@
 # Interest Growth 当前全仓库实现审计
 
 审计日期：2026-09-04
-审计实现 SHA：`1b02417c2cf7b23ad2e7acfa6f88d12ea8b86fdf`
-审计文档闭环 SHA：`ab609876bfff86a6f3c2176c48f495b991a1be20`
-分支：`main`，与 `origin/main` 一致
+审计基线 SHA：`6422b6bd3fbc339373bb90c5d38dca5547df7ef4`
+本轮收口提交：以本文件所在提交为准（提交前不宣称远端一致）
+分支：`main`
 产品版本：`1.0.20`
 
 ## 结论
 
-本轮针对最新 `main` 完成了全仓库代码审计、当前可复现缺陷修复、锁文件/安全说明收口，并已推送。P0 的 HTTP 错误契约、批准计划快照、CapabilityRun 状态、独立能力门禁、掌握证据保留和 Curiosity 状态机在源码与测试中保持闭环；本轮另外修复了真实关系图占位、Curiosity 状态动作显示、UI 中文文案断言和可选 RAG 安全扫描阻断。
+本轮针对基线 `main` 完成了全仓库代码审计与 P0–P4 修复，覆盖 Source 依赖失效传播、Tutor 活跃回合保护、Area/Topic 生命周期、Growth Memory 清除、Energy Mode、Living Book/Visual Artifact 展示、外部 RAG 出网确认，以及 Native Core 单一源码树。远端一致性、当前 SHA Actions 与发布证据只在实际取得证据后记录。
 
 这不是一次新的产品发布：远端 `v1.0.20` 已于 2026-08-30 发布，注释 tag 最终指向 `d6290b44616cb66c288bf3468904e86bf43365d9`。本 SHA 是其后的 `main` 源码审计提交；若要把本轮修改作为新版本发布，仍需重新走版本化 Candidate/Promotion/Tag/Release 流程。
 
@@ -42,37 +42,37 @@
 - 修复 activity trace 的真实用户文案断言：`工具已经完成`。
 - 将可选 GraphRAG 的 NLTK 下限和 `uv.lock` 统一到 `3.10.3`；CI 的 `PYSEC-2026-3740` 例外仅限可选 RAG scanner metadata mismatch，并在 `SECURITY.md` 留下 review 条件，不放宽旧版本。
 - 更新 `CHANGELOG.md` / `PROJECT_STATUS.md`，把已发布的 `v1.0.20` 与当前 post-release main audit 分离。
-- 保持 Native Core 镜像目录：`verify_native_core_sync.py` 通过，镜像漂移由脚本和 CI 约束；没有证据证明可安全删除任一发布镜像。
+- Native Core 已收口为唯一源码树：`packages/native-execution-core/interest_growth_native`；Host、standalone wheel、Docker 和 desktop sidecar 均从该包导入，不再维护根目录镜像或同步脚本。
 
 ## 验证记录
 
 | Gate | 结果 | 证据 |
 | --- | --- | --- |
-| Python full test | PASS | `./.venv/bin/pytest -q -p no:cacheprovider`：全量通过 |
+| Python full test | PASS (local non-network) | `./.venv/bin/python -m pytest -q -k 'not mock_server and not end_to_end_https and not connection_refused'` |
 | UI adoption tests | PASS | `tests/test_beautiful_ui_adoption.py`：13 passed |
 | Web unit | PASS | `npm run test:web-unit`：103 passed |
 | Web lint | PASS | `npm run lint` |
 | Web production build | PASS | `npm run build` |
-| Native Core sync | PASS | `python3 scripts/verify_native_core_sync.py` |
+| Native Core single source | PASS | `packages/native-execution-core/interest_growth_native` 唯一运行时源码树；根目录镜像与同步门禁已移除 |
 | Source manifest | PASS | `python3 scripts/generate_source_manifest.py --check` |
 | Self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
 | Rust source | PASS locally | `cargo check --locked`；仅既有 dead-code warnings |
-| Current-SHA GitHub Actions | PASS | CI `33807240181`、Web E2E `33807240178`、Build Artifacts `33807240174` 均绑定审计文档闭环 SHA；CI/Web E2E/三平台制品全部 `success` |
+| Current-SHA GitHub Actions | NOT RUN | 本轮尚未取得新的远端 SHA 绑定证据；不得沿用历史 run ID |
 
 ## 发布、设备与环境边界
 
 - 已发布稳定版本：`v1.0.20`；GitHub release assets 包含 Android arm64 APK、macOS arm64 app、Windows x64 installer、server bundle、SBOM、checksum 和 release verification 文档。
-- 本轮不是新 Stable 发布，也没有把当前 SHA 的 CI/Artifacts 运行中状态写成 release PASS。
+- 本轮不是新 Stable 发布，也没有把本地测试或运行中的 CI/Artifacts 状态写成 release PASS。
 - Android emulator、Android physical device、Windows/macOS packaged runtime、代码签名、公开 TLS、自托管跨设备和 72h/7d soak 未在本机重新取得本轮完整证据；它们应写作 `NOT RUN` 或 `SKIPPED (user-approved)`，不能由本地测试推断通过。
 - Browser remote 仍是 experimental；正式 runtime claim 仅覆盖已声明的 desktop-local、desktop-remote、android-remote 路径。
 
 ## 当前剩余限制与后续建议
 
-1. 当前审计 SHA 的 CI、Web E2E 和三平台制品矩阵已完成；后续代码变更必须重新绑定新的 exact SHA 验证。
+1. 当前审计 SHA 的 CI、Web E2E 和三平台制品矩阵尚未取得；推送后必须重新绑定新的 exact SHA 验证。
 2. 若要发布本轮代码，先生成新版本，再执行 exact-SHA Candidate → Promotion → immutable tag → exact-tag Release matrix。
 3. 继续补齐缺少真实硬件/公网环境的设备、签名、TLS、跨设备和长期 soak 证据；不得用 waiver 冒充 PASS。
 4. 后续 UI 迭代应优先把已存在的后端 archive/restore/delete 能力逐页补到 Learning/Research/Knowledge 等列表操作，并为这些生命周期动作增加浏览器级覆盖。
 
 ## 最终判定
 
-当前判定：`SOURCE / LOCAL TESTS PASS; CURRENT-SHA CI + WEB E2E + ARTIFACTS PASS; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。本轮提交仍不是新的 Stable release；物理设备、公开 TLS 与长期 soak 仍保持明确边界。
+当前判定：`SOURCE / LOCAL TESTS PASS; CURRENT-SHA CI + WEB E2E + ARTIFACTS NOT RUN; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。本轮提交仍不是新的 Stable release；物理设备、公开 TLS 与长期 soak 仍保持明确边界。

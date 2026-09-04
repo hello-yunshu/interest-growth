@@ -89,7 +89,7 @@ def main() -> int:
     # --- server / API ---------------------------------------------------- #
     remote_text = REMOTE_AUTH.read_text(encoding="utf-8")
     require_equal("remote_auth.SERVER_VERSION", _match(r'SERVER_VERSION\s*=\s*"([^"]+)"', remote_text))
-    # Pre-release deployments accept only the current client version. Keeping
+    # Released deployments accept only the current client version. Keeping
     # this exact prevents accidental reintroduction of an old-client window.
     min_client = _match(r'MIN_CLIENT_VERSION\s*=\s*"([^"]+)"', remote_text)
     if min_client is None and re.search(r"MIN_CLIENT_VERSION\s*=\s*SERVER_VERSION", remote_text):

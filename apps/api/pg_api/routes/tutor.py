@@ -125,7 +125,10 @@ def update_session_context(session_id: str, body: TutorSessionContextUpdate):
         if body.persona_name is not None:
             persona_name = body.persona_name.strip()
             if persona_name:
-                persona = db.scalar(select(TutorPersonaModel).where(TutorPersonaModel.name == persona_name))
+                persona = db.scalar(select(TutorPersonaModel).where(
+                    TutorPersonaModel.name == persona_name,
+                    TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
+                ))
                 if persona is None or persona.id not in persona_ids_for_current_area(db):
                     raise HTTPException(400, 'persona not found in current Interest Area persona library')
             row.persona_name = persona_name
@@ -174,6 +177,13 @@ def delete_session(session_id: str):
         try: require_entity_in_current_area(db, "tutor_session", session_id)
         except ValueError as exc: raise HTTPException(404, str(exc)) from exc
         turns = db.scalars(select(TutorTurnModel).where(TutorTurnModel.tutor_session_id == session_id)).all()
+        active_turns = [turn for turn in turns if turn.upstream_turn_id and turn.status in {"running", "awaiting_input"}]
+        if active_turns:
+            raise HTTPException(409, {
+                "code": "active_turn_exists",
+                "detail": "Cancel every active Native Tutor turn before deleting this session.",
+                "turn_ids": [turn.id for turn in active_turns],
+            })
         for turn in turns: db.delete(turn)
         db.delete(row); db.commit()
     return {"id": session_id, "deleted": True, "turns_deleted": len(turns)}
@@ -228,7 +238,8 @@ def _native_turn_context(request: Request, session: TutorSessionModel, turn: Tut
     base = resolve_native_context(request, "tutor.write")
     with get_session_factory()() as db:
         persona = db.scalar(select(TutorPersonaModel).where(
-            TutorPersonaModel.name == session.persona_name
+            TutorPersonaModel.name == session.persona_name,
+            TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
         )) if session.persona_name else None
         prior = db.scalars(select(TutorTurnModel).where(
             TutorTurnModel.tutor_session_id == session.id,

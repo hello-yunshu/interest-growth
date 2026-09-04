@@ -10,7 +10,7 @@ from ..engines import quick_explore_question
 from ..domains import filter_rows_to_current_area, get_domain_context, require_entity_in_current_area
 from ..events import emit
 from ..plugins import require_plugin_access
-from ..schemas import QuestionCreate, QuestionUpdate, QuickExploreRequest, TopicCreate
+from ..schemas import QuestionCreate, QuestionUpdate, QuickExploreRequest, TopicCreate, TopicUpdate
 from ..serializers import model_dict
 from ..question_transitions import InvalidQuestionTransition, QuestionTransitionService
 
@@ -217,11 +217,63 @@ def create_topic(body: TopicCreate):
     return model_dict(row)
 
 
+@router.patch("/topics/{topic_id}")
+def update_topic(topic_id: str, body: TopicUpdate):
+    require_plugin_access("capability.curiosity", read=("topic",), write=("topic",))
+    with get_session_factory()() as db:
+        row = db.get(TopicModel, topic_id)
+        if not row:
+            raise HTTPException(404, "topic not found")
+        try:
+            require_entity_in_current_area(db, "topic", topic_id)
+        except ValueError as exc:
+            raise HTTPException(404, "topic not found in current area") from exc
+        for key, value in body.model_dump(exclude_unset=True).items():
+            setattr(row, key, value.strip() if isinstance(value, str) else value)
+        db.commit(); db.refresh(row)
+        return model_dict(row)
+
+
+@router.post("/topics/{topic_id}/archive")
+def archive_topic(topic_id: str):
+    require_plugin_access("capability.curiosity", read=("topic",), write=("topic",))
+    with get_session_factory()() as db:
+        row = db.get(TopicModel, topic_id)
+        if not row:
+            raise HTTPException(404, "topic not found")
+        try:
+            require_entity_in_current_area(db, "topic", topic_id)
+        except ValueError as exc:
+            raise HTTPException(404, "topic not found in current area") from exc
+        row.status = "archived"
+        db.commit(); db.refresh(row)
+        return model_dict(row)
+
+
+@router.post("/topics/{topic_id}/restore")
+def restore_topic(topic_id: str):
+    require_plugin_access("capability.curiosity", read=("topic",), write=("topic",))
+    with get_session_factory()() as db:
+        row = db.get(TopicModel, topic_id)
+        if not row:
+            raise HTTPException(404, "topic not found")
+        try:
+            require_entity_in_current_area(db, "topic", topic_id)
+        except ValueError as exc:
+            raise HTTPException(404, "topic not found in current area") from exc
+        row.status = "active"
+        db.commit(); db.refresh(row)
+        return model_dict(row)
+
+
 @router.get("/topics")
-def list_topics(limit: int = 50):
+def list_topics(limit: int = 50, include_archived: bool = False):
     require_plugin_access("capability.curiosity", read=("topic",))
     with get_session_factory()() as db:
-        rows = db.scalars(select(TopicModel).order_by(TopicModel.updated_at.desc()).limit(min(limit, 200))).all()
+        stmt = select(TopicModel).order_by(TopicModel.updated_at.desc()).limit(min(limit, 200))
+        if not include_archived:
+            stmt = stmt.where(TopicModel.status != "archived")
+        rows = db.scalars(stmt).all()
         rows = filter_rows_to_current_area(db, rows, "topic")
         return {"topics": [model_dict(x) for x in rows]}
 

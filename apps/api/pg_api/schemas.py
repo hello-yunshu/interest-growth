@@ -35,6 +35,11 @@ class TopicCreate(BaseModel):
     question_id: str | None = None
 
 
+class TopicUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=300)
+    description: str | None = None
+
+
 class SourceCreate(BaseModel):
     topic_id: str | None = None
     source_type: str = "web"
@@ -172,6 +177,7 @@ class KnowledgeBaseCreate(BaseModel):
         default="native-lexical",
         pattern="^(native-lexical|native-lightgraph|native-concept-graph|native-heading|llamaindex|pageindex|graphrag|lightrag)$",
     )
+    external_data_egress_confirmed: bool = False
 
 
 class KnowledgeBaseUpdate(BaseModel):
@@ -180,6 +186,7 @@ class KnowledgeBaseUpdate(BaseModel):
         default=None,
         pattern="^(native-lexical|native-lightgraph|native-concept-graph|native-heading|llamaindex|pageindex|graphrag|lightrag)$",
     )
+    external_data_egress_confirmed: bool | None = None
 
 
 class KnowledgeRetrieveRequest(BaseModel):

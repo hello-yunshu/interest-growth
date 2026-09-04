@@ -21,13 +21,12 @@ router = APIRouter(tags=["interest-areas"])
 
 
 @router.get("/areas")
-def list_areas():
+def list_areas(include_archived: bool = False):
     with get_session_factory()() as db:
-        rows = db.scalars(
-            select(InterestAreaModel).where(InterestAreaModel.archived.is_(False)).order_by(
-                InterestAreaModel.position, InterestAreaModel.created_at
-            )
-        ).all()
+        stmt = select(InterestAreaModel).order_by(InterestAreaModel.position, InterestAreaModel.created_at)
+        if not include_archived:
+            stmt = stmt.where(InterestAreaModel.archived.is_(False))
+        rows = db.scalars(stmt).all()
         return {"areas": [area_summary(row) for row in rows]}
 
 
@@ -78,6 +77,18 @@ def update_area(area_id: str, body: InterestAreaUpdate):
             raise HTTPException(409, "default interest area cannot be archived")
         for key, value in body.model_dump(exclude_none=True).items():
             setattr(row, key, value)
+        db.commit(); db.refresh(row)
+        return area_summary(row)
+
+
+@router.post("/areas/{area_id}/restore")
+def restore_area(area_id: str):
+    with get_session_factory()() as db:
+        db.info["skip_area_scope"] = True
+        row = db.get(InterestAreaModel, area_id)
+        if row is None:
+            raise HTTPException(404, "interest area not found")
+        row.archived = False
         db.commit(); db.refresh(row)
         return area_summary(row)
 

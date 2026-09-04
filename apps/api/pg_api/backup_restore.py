@@ -207,11 +207,11 @@ def verify_bundle(bundle_dir: str) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise ValueError(f"backup bundle missing manifest: {bundle_dir}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    # Pre-release restore accepts only the current bundle format and product.
+        # Restore accepts only the current bundle format and product.
     bundle_format = manifest.get("format_version")
     if bundle_format != BACKUP_FORMAT_VERSION:
         raise ValueError(
-            f"backup bundle format_version {bundle_format!r} is unsupported before release; "
+                f"backup bundle format_version {bundle_format!r} is unsupported by this release; "
             f"expected current format {BACKUP_FORMAT_VERSION}"
         )
     if manifest.get("product") != "interest-growth":
@@ -220,7 +220,7 @@ def verify_bundle(bundle_dir: str) -> dict[str, Any]:
         )
     if manifest.get("schema_version") != CURRENT_SCHEMA_VERSION:
         raise ValueError(
-            "backup bundle schema is unsupported before release; "
+            "backup bundle schema is unsupported by this release; "
             f"expected current schema {CURRENT_SCHEMA_VERSION}, "
             f"got {manifest.get('schema_version')!r}"
         )

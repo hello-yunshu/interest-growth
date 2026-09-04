@@ -32,7 +32,7 @@ router = APIRouter(prefix="/auth", tags=["remote-auth"])
 
 SERVER_VERSION = "1.0.20"
 API_VERSION = "1"
-# This pre-release server accepts only the current product client version.
+# This released server accepts only the current product client version.
 # Older clients are intentionally unsupported until a versioned compatibility
 # policy is introduced for a published release.
 MIN_CLIENT_VERSION = SERVER_VERSION

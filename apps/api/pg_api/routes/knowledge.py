@@ -65,6 +65,14 @@ def _require_selectable_engine(provider: str) -> None:
     raise HTTPException(422, "unknown knowledge engine")
 
 
+def _require_egress_consent(provider: str, settings: dict | None) -> None:
+    if provider not in NATIVE_ENGINES and not bool((settings or {}).get("external_data_egress_confirmed")):
+        raise HTTPException(409, detail={
+            "code": "external_data_egress_confirmation_required",
+            "message": "该检索引擎需要把资料发送到第三方服务处理。首次同步前请明确确认。",
+        })
+
+
 def _provider_catalog() -> list[dict]:
     providers = list(_NATIVE_PROVIDERS)
     registry = get_native_bundle().retrieval.registry
@@ -76,6 +84,7 @@ def _provider_catalog() -> list[dict]:
             "configured": adapter is not None,
             "ingestion_supported": adapter is not None,
             "native": False,
+            "requires_data_egress_confirmation": True,
             "exact_upstream_equivalent": adapter is not None,
             "status": "exact_adapter_available" if adapter is not None else "requires_review",
             "upstream_distribution": getattr(adapter, "upstream_distribution", ""),
@@ -122,6 +131,7 @@ def list_knowledge_bases():
 def create_knowledge_base(body: KnowledgeBaseCreate):
     _require_knowledge_feature(write=("knowledge_base",))
     _require_selectable_engine(body.rag_provider)
+    _require_egress_consent(body.rag_provider, {"external_data_egress_confirmed": body.external_data_egress_confirmed})
     with get_session_factory()() as db:
         row = KnowledgeBaseModel(
             name=body.name,
@@ -129,6 +139,7 @@ def create_knowledge_base(body: KnowledgeBaseCreate):
             rag_provider=body.rag_provider,
             upstream_name="pending",
             status="local_only",
+            settings_json={"external_data_egress_confirmed": body.external_data_egress_confirmed},
         )
         db.add(row)
         db.flush()
@@ -185,6 +196,10 @@ def update_knowledge_base(kb_id: str, body: KnowledgeBaseUpdate):
                     "RAG provider is bound when indexed; create a new knowledge base or rebuild explicitly.",
                 )
             row.rag_provider = body.rag_provider
+        if body.external_data_egress_confirmed is True:
+            settings = dict(row.settings_json or {})
+            settings["external_data_egress_confirmed"] = True
+            row.settings_json = settings
         db.commit()
         db.refresh(row)
         return model_dict(row)
@@ -318,6 +333,8 @@ async def sync_source(kb_id: str, source_id: str, request: Request):
     with get_session_factory()() as db:
         kb = db.get(KnowledgeBaseModel, kb_id)
         provider = kb.rag_provider if kb else ""
+        settings = dict(kb.settings_json or {}) if kb else {}
+    _require_egress_consent(provider, settings)
     if provider in NATIVE_ENGINES:
         area_id = get_domain_context().area_id
         snapshots = HostKnowledgeResolver().resolve(area_id=area_id, kb_ids=(kb_id,))
@@ -384,6 +401,7 @@ async def retrieve_from_knowledge_base(kb_id: str, body: KnowledgeRetrieveReques
             raise HTTPException(404, str(exc)) from exc
         kb_status = kb.status
         provider = kb.rag_provider
+        settings = dict(kb.settings_json or {})
         topic_ids = [
             source.topic_id
             for source in (
@@ -399,6 +417,7 @@ async def retrieve_from_knowledge_base(kb_id: str, body: KnowledgeRetrieveReques
         topic_id = topic_ids[0] if len(set(topic_ids)) == 1 else None
     if provider in NATIVE_ENGINES or provider in EXACT_RAG_ENGINES:
         _require_selectable_engine(provider)
+        _require_egress_consent(provider, settings)
         context = resolve_native_context(
             request, "knowledge.external" if provider in EXACT_RAG_ENGINES else "knowledge.read"
         )

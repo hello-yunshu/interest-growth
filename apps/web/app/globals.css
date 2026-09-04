@@ -793,6 +793,7 @@ input[type="file"]{min-height:42px;padding:7px 9px;border-radius:var(--control-r
 .homeCaptureTitle strong{font-size:16px;letter-spacing:-.02em;}
 .homeCaptureTitle span{font-size:11px;color:var(--muted);line-height:1.5;}
 .energyPicker{display:grid;grid-template-columns:auto minmax(170px,200px);align-items:center;gap:10px;flex:0 0 auto;}
+.energyModePicker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:12px 0}.energyModePicker button{min-height:40px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--muted);font-size:12px}.energyModePicker button.active{border-color:var(--accent);background:var(--accent-soft);color:var(--text);font-weight:650}
 .energyPicker>span{font-size:11px;color:var(--muted);white-space:nowrap;}
 .energyPicker select{width:100%;min-height:40px;padding-block:8px;font-size:12px;}
 .homeCapture .questionComposer{margin-top:15px;}

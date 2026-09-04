@@ -841,12 +841,12 @@ def init_db(database_url: str | None = None) -> None:
     tables = set(inspect(engine).get_table_names())
     if "schema_migrations" not in tables and tables:
         raise RuntimeError(
-            "existing database format is unsupported before release; "
+            "existing database format is unsupported by this release; "
             "create a fresh current database"
         )
     fresh = not tables
     if fresh:
-        # This product is pre-release: only a fresh current schema is supported.
+        # This release is current-schema-only: unsupported database formats fail closed.
         Base.metadata.create_all(engine)
         _create_native_execution_tables(engine)
         with get_session_factory(database_url)() as db:
@@ -862,7 +862,7 @@ def init_db(database_url: str | None = None) -> None:
         versions = {int(v) for v in db.scalars(select(SchemaMigration.version)).all()}
     if versions != {CURRENT_SCHEMA_VERSION}:
         raise RuntimeError(
-            "existing database format is unsupported before release; "
+            "existing database format is unsupported by this release; "
             "create a fresh current database"
         )
 

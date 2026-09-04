@@ -1,25 +1,12 @@
-import subprocess
-import sys
-
-from pathlib import Path
-
-
-def test_root_and_standalone_native_core_are_byte_identical(project_root):
-    proc = subprocess.run(
-        [sys.executable, str(project_root / "scripts" / "verify_native_core_sync.py")],
-        capture_output=True, text=True, cwd=project_root,
-    )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+def test_native_core_has_one_runtime_source_tree(project_root):
+    assert not (project_root / "interest_growth_native/__init__.py").exists()
+    assert (project_root / "packages/native-execution-core/interest_growth_native").is_dir()
 
 
-def test_sync_script_detects_drift_in_standalone_mirror(tmp_path, project_root):
-    from scripts.verify_native_core_sync import main as verify_main
+def test_native_core_package_is_importable_from_its_owner_tree(project_root):
+    import sys
 
-    pkg_mirror = project_root / "packages" / "native-execution-core" / "interest_growth_native"
-    victim = pkg_mirror / "version.py"
-    original = victim.read_bytes()
-    try:
-        victim.write_bytes(original + b"# injected drift")
-        assert verify_main() != 0
-    finally:
-        victim.write_bytes(original)
+    sys.path.insert(0, str(project_root / "packages/native-execution-core"))
+    import interest_growth_native
+
+    assert interest_growth_native.__version__ == "0.6.0rc2"
