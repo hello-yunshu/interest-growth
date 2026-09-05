@@ -33,7 +33,7 @@ backup-<utc-timestamp>/
 {
   "product": "interest-growth",
   "server_version": "0.7.0",
-  "schema_version": 15,
+  "schema_version": 16,
   "server_instance_id": "<uuid>",
   "created_at": "…",
   "database": {"file": "psychology_growth.db", "sha256": "…"},

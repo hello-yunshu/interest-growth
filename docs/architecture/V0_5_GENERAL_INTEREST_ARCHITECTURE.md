@@ -112,16 +112,12 @@ v0.4 desktop guarantees remain:
 
 The OS-facing identifier, keyring service, database filename and sidecar binary filename deliberately retain v0.4 compatibility identifiers in v0.5. They are technical migration anchors, not product branding. Renaming them requires a dedicated App Data/credential/update migration.
 
-## Migration contract
+## Schema contract
 
-v0.5 changes the schema migration contract from ledger-only additive assumptions to executed migrations after the v0.4.1 baseline:
-
-- 1–7: legacy baseline;
-- 8: create general-interest schema;
-- 9: seed Domain Packs/default Psychology Area and backfill legacy entity bindings;
-- 10: migrate persisted legacy `psychology.*` plugin states to neutral capability IDs while preserving old rows as compatibility history.
-
-Fresh installs create the current schema and record 1–10. Existing databases must contain the complete 1–7 legacy ledger before migration proceeds.
+The current 1X contract is fresh-current-schema-only. Fresh installs create
+the current schema and record `CURRENT_SCHEMA_VERSION`; older or malformed
+databases fail closed before product routes start. Historical migration notes
+remain architecture history and are not an in-place upgrade promise.
 
 ## Known compatibility constraint
 

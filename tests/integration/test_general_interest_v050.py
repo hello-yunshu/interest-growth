@@ -29,8 +29,8 @@ def test_fresh_install_has_domain_packs_area_and_real_migration(client):
         assert areas[0].slug == 'psychology'
         assert areas[0].domain_pack_id == 'psychology'
         assert areas[0].is_default is True
-        from pg_api.db import SchemaMigration
-        assert set(db.scalars(select(SchemaMigration.version)).all()) == {15}
+        from pg_api.db import CURRENT_SCHEMA_VERSION, SchemaMigration
+        assert set(db.scalars(select(SchemaMigration.version)).all()) == {CURRENT_SCHEMA_VERSION}
         # 2 general + 4 psychology builtin personas are scoped by pack.
         assert len(db.scalars(select(PersonaScopeModel)).all()) == 6
 
