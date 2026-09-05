@@ -147,8 +147,8 @@ async function resolve() {
   const transport = local
     ? {
         active: 'desktop-local',
-        async request(path, options, headers) {
-          const response = await fetch(`${runtime.apiBase}${path}`, { ...options, headers });
+        async request(path, options = {}) {
+          const response = await fetch(`${runtime.apiBase}${path}`, options);
           return response;
         },
         authHeader: localAuthHeader(runtime),

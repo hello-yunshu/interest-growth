@@ -75,6 +75,12 @@ def update_area(area_id: str, body: InterestAreaUpdate):
             raise HTTPException(404, "interest area not found")
         if row.is_default and body.archived is True:
             raise HTTPException(409, "default interest area cannot be archived")
+        if body.archived is True:
+            try:
+                if resolve_area(db=db).id == row.id:
+                    raise HTTPException(409, "current interest area must be switched before archiving")
+            except ValueError:
+                pass
         for key, value in body.model_dump(exclude_none=True).items():
             setattr(row, key, value)
         db.commit(); db.refresh(row)

@@ -225,12 +225,14 @@ class TutorSessionCreate(BaseModel):
     concept_id: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     skill_names: list[str] = Field(default_factory=list)
+    persona_id: str | None = None
     persona_name: str = Field(default="", max_length=80)
 
 
 class TutorSessionContextUpdate(BaseModel):
     knowledge_base_ids: list[str] | None = None
     skill_names: list[str] | None = None
+    persona_id: str | None = None
     persona_name: str | None = Field(default=None, max_length=80)
     title: str | None = Field(default=None, max_length=300)
 

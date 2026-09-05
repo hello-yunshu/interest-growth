@@ -1,6 +1,7 @@
 'use strict';
 
 const { test, expect } = require('@playwright/test');
+const API_BASE = process.env.E2E_API_URL || 'http://127.0.0.1:8000';
 
 const PAGES = ['/', '/curiosity', '/research', '/knowledge', '/learning', '/tutor', '/outputs', '/writing', '/book', '/content', '/growth', '/career', '/system'];
 const FORBIDDEN_UI = [
@@ -190,6 +191,143 @@ test('System feature write is busy-safe and handles failure in user copy', async
   });
   await toggle.click();
   await expect(page.locator('.notice')).toContainText('本地服务');
+});
+
+test('Energy Mode is selected, persisted and visible after reload', async ({ page }) => {
+  let requestBody = null;
+  await page.route('**/api/questions', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    requestBody = route.request().postDataJSON();
+    return route.continue();
+  });
+  await ready(page, '/curiosity');
+  await page.getByRole('button', { name: '轻量看看' }).click();
+  const input = page.locator('textarea[aria-label="记录一个真实问题"]');
+  await input.fill('验证轻量投入 ' + Date.now());
+  const questionResponse = page.waitForResponse(response => response.url().includes('/api/questions') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: '记录问题' }).click();
+  await expect.poll(() => requestBody && requestBody.energy_mode).toBe('light');
+  const questionResult = await questionResponse;
+  expect(questionResult.status(), await questionResult.text()).toBe(200);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => Boolean(document.querySelector('main.workspace') && !document.querySelector('.workspaceBoot')));
+  await expect(page.locator('tbody tr').filter({ hasText: '轻量' }).first()).toBeVisible();
+});
+
+test('Living Book proposal and spine reviews persist edited titles', async ({ page }) => {
+  const topic = await (await page.request.post(API_BASE + '/api/topics', { data: { title: '书籍回归主题 ' + Date.now() } })).json();
+  const book = await (await page.request.post(API_BASE + '/api/living-books', { data: { topic_id: topic.id, title: '行为书 ' + Date.now(), intent: '行为级回归' } })).json();
+  const proposal = { title: '行为书', purpose: '确认提案', chapters: [{ title: '第一章', purpose: '基础' }, { title: '第二章', purpose: '进阶' }] };
+  let spine = { title: '行为书', purpose: '确认结构', chapters: [{ title: '第一章', purpose: '基础' }, { title: '第二章', purpose: '进阶' }] };
+  let projectionStatus = 'proposal_pending_review';
+  let confirmedProposal = null;
+  let confirmedSpine = null;
+  await page.route('**/api/living-books/' + book.id, route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ book: { ...book, projection_status: projectionStatus, proposal_json: proposal, spine_json: spine }, chapters: [] }) }));
+  await page.route('**/api/living-books/' + book.id + '/project', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) }));
+  await page.route('**/api/living-books/' + book.id + '/confirm-proposal', async route => { confirmedProposal = route.request().postDataJSON(); spine = { ...confirmedProposal.proposal, chapters: confirmedProposal.proposal.chapters }; projectionStatus = 'spine_pending_review'; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) }); });
+  await page.route('**/api/living-books/' + book.id + '/confirm-spine', async route => { confirmedSpine = route.request().postDataJSON(); projectionStatus = 'confirmed'; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) }); });
+  await ready(page, '/book');
+  await page.getByLabel('选择学习书').selectOption(book.id);
+  await page.getByRole('button', { name: '生成章节提案' }).click();
+  await page.getByRole('button', { name: '审阅书籍提案' }).click();
+  await page.getByLabel('第 1 章标题').fill('已编辑第一章');
+  await page.getByRole('button', { name: '增加章节' }).click();
+  await page.getByRole('button', { name: '下移' }).first().click();
+  await page.getByRole('button', { name: '确认并生成章节结构' }).click();
+  await expect.poll(() => confirmedProposal && confirmedProposal.proposal && confirmedProposal.proposal.chapters.some(chapter => chapter.title === '已编辑第一章')).toBe(true);
+  await page.getByRole('button', { name: '审阅章节结构' }).click();
+  await page.getByLabel('编辑第 1 章标题').fill('已确认第一章');
+  await page.getByRole('button', { name: '确认章节结构' }).click();
+  await expect.poll(() => confirmedSpine && confirmedSpine.spine && confirmedSpine.spine.chapters[0].title).toBe('已确认第一章');
+});
+
+test('Visual Artifact can be reopened and renders its persisted explanation', async ({ page }) => {
+  const topic = await (await page.request.post(API_BASE + '/api/topics', { data: { title: '可视化回归主题 ' + Date.now() } })).json();
+  const createdConcept = await (await page.request.post(API_BASE + '/api/concepts', { data: { topic_id: topic.id, name: '可视化回归概念 ' + Date.now(), definition: '一个可重新打开的概念' } })).json();
+  const concept = createdConcept.concept;
+  const artifactId = 'e2e-visual-' + Date.now();
+  const artifact = { id: artifactId, topic_id: topic.id, kind: 'visual_explanation', title: '可重新打开的可视化', status: 'active', approved_at: null, metadata_json: { provider: 'native.interest-growth', capability: 'visualize' } };
+  const manifest = { title: '可重新打开的可视化', nodes: [{ id: 'n1', label: '概念节点', type: 'concept' }], edges: [], annotations: ['重新打开后仍保留结构。'] };
+  await page.route('**/api/concepts/' + concept.id + '/visualize', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ artifact, result: manifest }) }));
+  await page.route('**/api/visual-artifacts/' + artifactId + '/preview', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ artifact, manifest }) }));
+  await page.route('**/api/artifacts/' + artifactId, route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ artifact, content: null, grounding_refs: [] }) }));
+  await ready(page, '/learning');
+  await page.locator('.buiInlineEditor').filter({ hasText: concept.name }).first().getByRole('button', { name: '画图理解' }).click();
+  await expect(page.getByRole('region', { name: '可视化解释' })).toBeVisible();
+  await page.goto('/artifacts/detail?id=' + artifactId);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('region', { name: '可视化解释' })).toBeVisible();
+  await expect(page.getByText('重新打开后仍保留结构。')).toBeVisible();
+});
+
+test('External RAG creation stays blocked until egress consent is checked', async ({ page }) => {
+  let writes = 0;
+  await page.route('**/api/knowledge/providers', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ providers: [{ id: 'pageindex', name: 'PageIndex', native: false, ingestion_supported: true, configured: true }] }) }));
+  await page.route('**/api/knowledge/bases', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    writes += 1;
+    const body = route.request().postDataJSON();
+    if (!body.external_data_egress_confirmed) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: { code: 'external_data_egress_confirmation_required', message: '需要确认资料外发。' } }) });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'e2e-kb-' + Date.now(), name: body.name, status: 'local_only' }) });
+  });
+  await ready(page, '/knowledge');
+  await page.getByLabel('资料库名称').fill('外发同意回归 ' + Date.now());
+  await page.getByLabel('检索引擎（RAG）').selectOption('pageindex');
+  await page.getByRole('button', { name: '创建资料库' }).click();
+  await expect(page.locator('.notice')).toContainText('该检索引擎需要把资料发送到第三方服务处理');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '创建资料库' }).click();
+  await expect.poll(() => writes).toBe(2);
+});
+
+test('Topic lifecycle is operable from the curiosity page', async ({ page }) => {
+  const title = '主题生命周期 ' + Date.now();
+  await ready(page, '/curiosity');
+  const management = page.getByRole('region', { name: '主题管理' });
+  await management.getByLabel('主题标题').fill(title);
+  const topicResponse = page.waitForResponse(response => response.url().includes('/api/topics') && response.request().method() === 'POST');
+  await management.getByRole('button', { name: '创建主题' }).click();
+  const topicResult = await topicResponse;
+  expect(topicResult.status(), await topicResult.text()).toBe(200);
+  const row = management.locator('.cleanRow').filter({ hasText: title });
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: '编辑' }).click();
+  await management.getByLabel('主题标题').fill(title + ' 已编辑');
+  await management.getByRole('button', { name: '保存主题修改' }).click();
+  const edited = management.locator('.cleanRow').filter({ hasText: title + ' 已编辑' });
+  await edited.getByRole('button', { name: '归档' }).click();
+  await page.getByRole('button', { name: '确认归档主题' }).click();
+  await management.getByRole('tab', { name: /已归档/ }).click();
+  await expect(management.locator('.cleanRow').filter({ hasText: title + ' 已编辑' })).toBeVisible();
+  await management.locator('.cleanRow').filter({ hasText: title + ' 已编辑' }).getByRole('button', { name: '恢复' }).click();
+  await management.getByRole('tab', { name: /当前主题/ }).click();
+  await expect(management.locator('.cleanRow').filter({ hasText: title + ' 已编辑' })).toBeVisible();
+});
+
+test('Interest Area lifecycle is operable and default archive stays disabled', async ({ page }) => {
+  const name = '生命周期兴趣 ' + Date.now();
+  await ready(page, '/system');
+  await page.getByRole('tab', { name: /兴趣管理/ }).click();
+  const management = page.locator('section.card').filter({ hasText: '兴趣生命周期' }).first();
+  await expect(management.getByRole('button', { name: '请先切换' })).toBeDisabled();
+  await management.getByLabel('兴趣名称').fill(name);
+  const areaResponse = page.waitForResponse(response => response.url().includes('/api/areas') && response.request().method() === 'POST');
+  await management.getByRole('button', { name: '创建兴趣' }).click();
+  const areaResult = await areaResponse;
+  expect(areaResult.status(), await areaResult.text()).toBe(200);
+  const row = management.locator('.cleanRow').filter({ hasText: name });
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: '编辑' }).click();
+  await management.getByLabel('兴趣名称').fill(name + ' 已编辑');
+  await management.getByRole('button', { name: '保存兴趣修改' }).click();
+  const edited = management.locator('.cleanRow').filter({ hasText: name + ' 已编辑' });
+  await edited.getByRole('button', { name: '归档' }).click();
+  await page.getByRole('button', { name: '确认归档兴趣' }).click();
+  await management.getByRole('tab', { name: /已归档/ }).click();
+  await expect(management.locator('.cleanRow').filter({ hasText: name + ' 已编辑' })).toBeVisible();
+  await management.locator('.cleanRow').filter({ hasText: name + ' 已编辑' }).getByRole('button', { name: '恢复' }).click();
+  await management.getByRole('tab', { name: /当前兴趣/ }).click();
+  await expect(management.locator('.cleanRow').filter({ hasText: name + ' 已编辑' })).toBeVisible();
 });
 
 test('Workspace replace picker preserves unique widget identity', async ({ page }) => {

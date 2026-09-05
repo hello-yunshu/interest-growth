@@ -484,6 +484,7 @@ class TutorSessionModel(Base):
     upstream_session_id: Mapped[str] = mapped_column(String(160), default="", index=True)
     knowledge_base_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     skill_names: Mapped[list[str]] = mapped_column(JSON, default=list)
+    persona_id: Mapped[str | None] = mapped_column(ForeignKey("tutor_personas.id"), nullable=True, index=True)
     persona_name: Mapped[str] = mapped_column(String(80), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     last_active_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)

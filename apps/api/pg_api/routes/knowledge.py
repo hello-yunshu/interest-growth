@@ -21,7 +21,7 @@ from ..db import (
     get_session_factory,
 )
 from ..events import emit
-from ..domains import filter_rows_to_current_area, require_entity_in_current_area, get_domain_context
+from ..domains import filter_rows_to_current_area, require_entity_in_current_area, get_domain_context, resolve_area
 from ..features import feature_enabled
 from ..knowledge import (
     safe_filename,
@@ -102,6 +102,10 @@ def _require_knowledge_feature(*, read=(), write=(), risks=()) -> None:
         raise HTTPException(503, "knowledge/RAG feature disabled")
 
 
+def _normalized_name(value: str) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
 @router.get("/knowledge/providers")
 async def knowledge_providers():
     _require_knowledge_feature()
@@ -133,8 +137,20 @@ def create_knowledge_base(body: KnowledgeBaseCreate):
     _require_selectable_engine(body.rag_provider)
     _require_egress_consent(body.rag_provider, {"external_data_egress_confirmed": body.external_data_egress_confirmed})
     with get_session_factory()() as db:
+        area = resolve_area(db=db)
+        existing = filter_rows_to_current_area(
+            db,
+            db.scalars(select(KnowledgeBaseModel)).all(),
+            "knowledge_base",
+        )
+        if any(_normalized_name(row.name) == _normalized_name(body.name) for row in existing):
+            raise HTTPException(409, detail={
+                "code": "knowledge_base_name_conflict",
+                "message": "当前兴趣中已经有同名资料库。",
+                "area_id": area.id,
+            })
         row = KnowledgeBaseModel(
-            name=body.name,
+            name=" ".join(body.name.split()),
             description=body.description,
             rag_provider=body.rag_provider,
             upstream_name="pending",

@@ -122,16 +122,28 @@ def update_session_context(session_id: str, body: TutorSessionContextUpdate):
                 row.skill_names = normalize_tutor_skills(body.skill_names, domain_pack_id=get_domain_context().domain_pack_id)
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
-        if body.persona_name is not None:
-            persona_name = body.persona_name.strip()
-            if persona_name:
-                persona = db.scalar(select(TutorPersonaModel).where(
-                    TutorPersonaModel.name == persona_name,
-                    TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
-                ))
-                if persona is None or persona.id not in persona_ids_for_current_area(db):
+        if body.persona_id is not None or body.persona_name is not None:
+            allowed = persona_ids_for_current_area(db)
+            persona = None
+            persona_name = (body.persona_name or '').strip()
+            if body.persona_id:
+                persona = db.scalar(select(TutorPersonaModel).where(TutorPersonaModel.id == body.persona_id))
+                if persona is None or persona.id not in allowed:
                     raise HTTPException(400, 'persona not found in current Interest Area persona library')
-            row.persona_name = persona_name
+                if persona_name and persona.name != persona_name:
+                    raise HTTPException(409, 'persona_id and persona_name refer to different personas')
+            elif persona_name:
+                matches = db.scalars(select(TutorPersonaModel).where(
+                    TutorPersonaModel.name == persona_name,
+                    TutorPersonaModel.id.in_(allowed),
+                )).all()
+                if not matches:
+                    raise HTTPException(400, 'persona not found in current Interest Area persona library')
+                if len(matches) > 1:
+                    raise HTTPException(409, 'persona name is ambiguous; select a persona by id')
+                persona = matches[0]
+            row.persona_id = persona.id if persona else None
+            row.persona_name = persona.name if persona else ''
         if body.title is not None:
             row.title = body.title.strip()
         row.last_active_at = datetime.now(UTC)
@@ -237,10 +249,23 @@ def _persist_native_events(local_turn_id: str, events) -> None:
 def _native_turn_context(request: Request, session: TutorSessionModel, turn: TutorTurnModel, *, content: str = ""):
     base = resolve_native_context(request, "tutor.write")
     with get_session_factory()() as db:
-        persona = db.scalar(select(TutorPersonaModel).where(
-            TutorPersonaModel.name == session.persona_name,
-            TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
-        )) if session.persona_name else None
+        persona = None
+        if session.persona_id:
+            persona = db.scalar(select(TutorPersonaModel).where(
+                TutorPersonaModel.id == session.persona_id,
+                TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
+            ))
+            if persona is None:
+                raise ValueError("tutor session persona is no longer available in the current Interest Area")
+        elif session.persona_name:
+            # Compatibility for sessions created before persona_id became canonical.
+            matches = db.scalars(select(TutorPersonaModel).where(
+                TutorPersonaModel.name == session.persona_name,
+                TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
+            )).all()
+            if len(matches) > 1:
+                raise ValueError("legacy tutor session persona name is ambiguous; update the session")
+            persona = matches[0] if matches else None
         prior = db.scalars(select(TutorTurnModel).where(
             TutorTurnModel.tutor_session_id == session.id,
             TutorTurnModel.id != turn.id,
@@ -286,6 +311,7 @@ def native_turn_start(session_id: str, body: NativeTutorTurnRequest, request: Re
         "content": body.content.strip(),
         "knowledge_base_ids": session_data.get("knowledge_base_ids") or [],
         "persona_name": session_data.get("persona_name") or "",
+        "persona_id": session_data.get("persona_id"),
         "skill_names": session_data.get("skill_names") or [],
         "provider": "native.interest-growth",
     })

@@ -214,7 +214,14 @@ jobs:
         working-directory: apps/web
         run: |
           npm ci
-          npm audit --omit=dev --audit-level=high
+          # The audit endpoint is an external service and has returned transient
+          # 5xx responses before. Retry the same fail-closed audit a few times;
+          # an advisory still exits non-zero and cannot be waived here.
+          npm audit --omit=dev --audit-level=high \
+            --fetch-retries=5 \
+            --fetch-retry-factor=2 \
+            --fetch-retry-mintimeout=1000 \
+            --fetch-retry-maxtimeout=30000
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable # v1
         with:
