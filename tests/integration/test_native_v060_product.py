@@ -6,14 +6,14 @@ from sqlalchemy import inspect, select
 
 
 def test_native_migration_health_and_provider_catalog(client):
-    from pg_api.db import SchemaMigration, get_engine, get_session_factory
+    from pg_api.db import CURRENT_SCHEMA_VERSION, SchemaMigration, get_engine, get_session_factory
 
     tables = set(inspect(get_engine()).get_table_names())
     assert {
         "native_tutor_checkpoint", "native_run_event", "native_aux_memory",
     } <= tables
     with get_session_factory()() as db:
-        assert set(db.scalars(select(SchemaMigration.version)).all()) == {15}
+        assert set(db.scalars(select(SchemaMigration.version)).all()) == {CURRENT_SCHEMA_VERSION}
 
     health = client.get("/api/native-execution/health")
     assert health.status_code == 200, health.text

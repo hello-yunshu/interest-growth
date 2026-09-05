@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from pg_api.db import SchemaMigration, get_engine, get_session_factory, reset_engine_for_tests
+from pg_api.db import CURRENT_SCHEMA_VERSION, SchemaMigration, get_engine, get_session_factory, reset_engine_for_tests
 from pg_api.knowledge import source_storage
 from pg_shared import get_settings
 
@@ -61,7 +61,7 @@ def test_backup_creates_complete_consistent_bundle(seeded_client, tmp_path):
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["product"] == "interest-growth"
     assert manifest["format_version"] == 1
-    assert manifest["schema_version"] == 15
+    assert manifest["schema_version"] == CURRENT_SCHEMA_VERSION
     assert manifest["server_instance_id"]
     assert manifest["database"]["sha256"]
     assert manifest["file_count"]["sources"] >= 1
@@ -92,11 +92,11 @@ def test_restore_round_trip_into_clean_live_paths(seeded_client, tmp_path):
     assert result["restored"] is True
     assert result["integrity"] == "ok"
     assert result["foreign_key_violations"] == 0
-    assert result["schema_version"] == 15
+    assert result["schema_version"] == CURRENT_SCHEMA_VERSION
     assert result["missing_source_files"] == []
     assert result["missing_artifact_files"] == []
     with get_session_factory()() as db:
-        assert db.scalar(select(func.max(SchemaMigration.version))) == 15
+        assert db.scalar(select(func.max(SchemaMigration.version))) == CURRENT_SCHEMA_VERSION
     reset_engine_for_tests()
 
 
@@ -213,7 +213,7 @@ def test_restore_retains_previous_state_until_post_checks_then_cleans(seeded_cli
     ]
     assert leftovers == [], f"pre-restore state must be cleaned up after success: {leftovers}"
     with get_session_factory()() as db:
-        assert db.scalar(select(func.max(SchemaMigration.version))) == 15
+        assert db.scalar(select(func.max(SchemaMigration.version))) == CURRENT_SCHEMA_VERSION
     reset_engine_for_tests()
 
 

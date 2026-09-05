@@ -1,8 +1,9 @@
 # Interest Growth 当前全仓库实现审计
 
-审计日期：2026-09-05
+审计日期：2026-09-06
 审计基线 SHA：`e224d1611fa2a9fb59507721a9bda824e62572bb`
-本轮收口代码提交：`0c9fa49f3fffaee7fc1cc1e3df2315f4c5f796f8`
+上一轮收口代码提交：`0c9fa49f3fffaee7fc1cc1e3df2315f4c5f796f8`
+本轮收口起始 main：`3eda12c7074a7b625d1449b8f70a054a2a849d83`
 分支：`main`
 产品版本：`1.0.20`
 
@@ -27,6 +28,7 @@
 | Source / Evidence / Claim | 来源核验、失效传播、主张版本和再核验队列保留；候选检索结果不能直接成为 Evidence。✅ |
 | Knowledge Base / RAG | Native provider 与 reviewed exact adapter 分开；无 adapter 时返回 requires_review，禁止静默 fallback；unlink/delete 保留原始 Source 文件并清理投影。✅ |
 | Tutor Persona / Knowledge Base identity | Tutor 会话按 `persona_id` 绑定当前 Area 的规范 Persona；旧名称仅在 Area 内唯一时接受。Knowledge Base 名称只要求同一 Area 内唯一，不跨 Area 阻塞。✅ |
+| Database schema truth | `CURRENT_SCHEMA_VERSION = 16`；`tutor_sessions.persona_id` 是当前 shape 的关键列；旧版本与同版本畸形数据库均 fail-closed。✅ |
 | Topic / Area lifecycle | Curiosity 提供 Topic create/edit/archive/restore；System 提供 Area create/edit/archive/restore，当前 Area 需先切换、默认 Area 不可归档。✅ |
 | Learning / Practice / Note | 概念、练习、作答、笔记与 mastery evidence 均有持久化路径和依赖检查。✅ |
 | Graph / Visualize | GraphView 已为真实 SVG 关系查看器：类型筛选、搜索、缩放、平移、节点选择、邻居聚焦；Visualize 复用同一 viewer，不再是卡片/列表占位。✅ |
@@ -65,7 +67,8 @@
 | Source manifest | PASS | `python3 scripts/generate_source_manifest.py --check` |
 | Self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
 | Rust source | PASS locally | `cargo check --locked`；仅既有 dead-code warnings |
-| Current-SHA GitHub Actions | PASS | `0c9fa49f3fffaee7fc1cc1e3df2315f4c5f796f8`：CI run `33952838250`、Web E2E run `33952838246`、Build Artifacts run `33952838265` 均 success |
+| Previous closure-code SHA GitHub Actions | PASS | `0c9fa49f3fffaee7fc1cc1e3df2315f4c5f796f8`：CI run `33952838250`、Web E2E run `33952838246`、Build Artifacts run `33952838265` 均 success；不是本轮 current-SHA 证据 |
+| Current schema-closure SHA GitHub Actions | PENDING | 本轮 push 后只接受最终 exact SHA 的 CI、Web E2E、Build Artifacts 结果 |
 
 ## 发布、设备与环境边界
 
