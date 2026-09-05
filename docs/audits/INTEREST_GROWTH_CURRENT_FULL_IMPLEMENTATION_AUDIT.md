@@ -68,12 +68,13 @@
 | Self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
 | Rust source | PASS locally | `cargo check --locked`；仅既有 dead-code warnings |
 | Previous closure-code SHA GitHub Actions | PASS | `0c9fa49f3fffaee7fc1cc1e3df2315f4c5f796f8`：CI run `33952838250`、Web E2E run `33952838246`、Build Artifacts run `33952838265` 均 success；不是本轮 current-SHA 证据 |
-| Current schema-closure SHA GitHub Actions | PENDING | 本轮 push 后只接受最终 exact SHA 的 CI、Web E2E、Build Artifacts 结果 |
+| Current schema-closure SHA GitHub Actions | PASS | Code-under-audit SHA `ec30e4c4e64516b46baa5b2324b15c012d415eeb`：CI run `33985511536`、Web E2E run `33985511514`、Build Artifacts run `33985511531` 均 success；CI 内 PR Required Gate 也 success |
 
 ## 发布、设备与环境边界
 
 - 已发布稳定版本：`v1.0.20`；GitHub release assets 包含 Android arm64 APK、macOS arm64 app、Windows x64 installer、server bundle、SBOM、checksum 和 release verification 文档。
 - 本轮不是新 Stable 发布，也没有把本地测试或运行中的 CI/Artifacts 状态写成 release PASS。
+- 本轮 code-under-audit SHA 是 `ec30e4c4e64516b46baa5b2324b15c012d415eeb`；随后仅有文档/manifest evidence 收口提交，不改变产品代码与上述 exact-SHA 证据。
 - Android emulator、Android physical device、Windows/macOS packaged runtime、代码签名、公开 TLS、自托管跨设备和 72h/7d soak 未在本机重新取得本轮完整证据；它们应写作 `NOT RUN` 或 `SKIPPED (user-approved)`，不能由本地测试推断通过。
 - Browser remote 仍是 experimental；正式 runtime claim 仅覆盖已声明的 desktop-local、desktop-remote、android-remote 路径。
 
