@@ -33,7 +33,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.3.0 # v4.3.0
       - name: Build Android toolchain image
-        uses: docker/build-push-action@v6 # v6
+        uses: docker/build-push-action@v7 # v6
         with:
           context: .
           file: docker/android/Dockerfile
