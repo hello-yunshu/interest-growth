@@ -242,7 +242,7 @@ jobs:
           printf '%s\n' "${assets[@]}"
 
       - name: Attest Android arm64 provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/release/interest-growth-android-arm64.apk
 
