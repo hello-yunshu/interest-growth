@@ -2,7 +2,7 @@
 
 审计日期：2026-09-05
 审计基线 SHA：`e224d1611fa2a9fb59507721a9bda824e62572bb`
-本轮收口提交：以本文件所在提交为准（提交前不宣称远端一致）
+本轮收口代码提交：`0c9fa49f3fffaee7fc1cc1e3df2315f4c5f796f8`
 分支：`main`
 产品版本：`1.0.20`
 
@@ -65,7 +65,7 @@
 | Source manifest | PASS | `python3 scripts/generate_source_manifest.py --check` |
 | Self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
 | Rust source | PASS locally | `cargo check --locked`；仅既有 dead-code warnings |
-| Current-SHA GitHub Actions | PENDING PUSH | 本地提交前不虚构远端 run；推送后必须以新提交 SHA 重新取得 CI、Web E2E、Build Artifacts 三项证据 |
+| Current-SHA GitHub Actions | PASS | `0c9fa49f3fffaee7fc1cc1e3df2315f4c5f796f8`：CI run `33952838250`、Web E2E run `33952838246`、Build Artifacts run `33952838265` 均 success |
 
 ## 发布、设备与环境边界
 
@@ -76,11 +76,10 @@
 
 ## 当前剩余限制与后续建议
 
-1. 当前审计提交的 CI、Web E2E 和 Build Artifacts 尚未取得；推送后必须重新绑定新的 exact SHA 验证。
-2. 若要发布本轮代码，先生成新版本，再执行 exact-SHA Candidate → Promotion → immutable tag → exact-tag Release matrix。
-3. 继续补齐缺少真实硬件/公网环境的设备、签名、TLS、跨设备和长期 soak 证据；不得用 waiver 冒充 PASS。
-4. 后续 UI 迭代应优先把已存在的后端 archive/restore/delete 能力逐页补到 Learning/Research/Knowledge 等列表操作，并为这些生命周期动作增加浏览器级覆盖。
+1. 若要发布本轮代码，先生成新版本，再执行 exact-SHA Candidate → Promotion → immutable tag → exact-tag Release matrix。
+2. 继续补齐缺少真实硬件/公网环境的设备、签名、TLS、跨设备和长期 soak 证据；不得用 waiver 冒充 PASS。
+3. 后续 UI 迭代应优先把已存在的后端 archive/restore/delete 能力逐页补到 Learning/Research/Knowledge 等列表操作，并为这些生命周期动作增加浏览器级覆盖。
 
 ## 最终判定
 
-当前判定：`SOURCE / LOCAL TESTS PASS; CURRENT-SHA CI + WEB E2E + ARTIFACTS PENDING PUSH; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。本轮提交仍不是新的 Stable release；物理设备、公开 TLS 与长期 soak 仍保持明确边界。
+当前判定：`SOURCE / LOCAL TESTS PASS; CURRENT-SHA CI + WEB E2E + ARTIFACTS PASS; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。本轮提交仍不是新的 Stable release；物理设备、公开 TLS 与长期 soak 仍保持明确边界。
