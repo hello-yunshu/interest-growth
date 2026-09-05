@@ -79,6 +79,7 @@ def create_tutor_session(
     concept_id: str | None = None,
     knowledge_base_ids: list[str] | None = None,
     skill_names: list[str] | None = None,
+    persona_id: str | None = None,
     persona_name: str = "",
 ) -> TutorSessionModel:
     domain_pack_id = get_domain_context().domain_pack_id
@@ -98,20 +99,30 @@ def create_tutor_session(
                 topic_id = concept.topic_id
         # Resolve now so invalid local KB ids never get persisted as sticky context.
         resolve_upstream_kb_names(list(knowledge_base_ids or []))
-        if persona_name:
-            persona = db.scalar(select(TutorPersonaModel).where(
-                TutorPersonaModel.name == persona_name.strip(),
-                TutorPersonaModel.id.in_(persona_ids_for_current_area(db)),
-            ))
-            if persona is None or persona.id not in persona_ids_for_current_area(db):
+        allowed_personas = persona_ids_for_current_area(db)
+        persona = None
+        if persona_id:
+            persona = db.scalar(select(TutorPersonaModel).where(TutorPersonaModel.id == persona_id))
+            if persona is None or persona.id not in allowed_personas:
                 raise ValueError("persona not found in current Interest Area persona library")
+            if persona_name.strip() and persona.name != persona_name.strip():
+                raise ValueError("persona_id and persona_name refer to different personas")
+        elif persona_name.strip():
+            matches = db.scalars(select(TutorPersonaModel).where(
+                TutorPersonaModel.name == persona_name.strip(),
+                TutorPersonaModel.id.in_(allowed_personas),
+            )).all()
+            if len(matches) != 1:
+                raise ValueError("persona name is ambiguous; select a persona by id")
+            persona = matches[0]
         row = TutorSessionModel(
             title=title.strip(),
             topic_id=topic_id,
             concept_id=concept_id,
             knowledge_base_ids=list(dict.fromkeys(knowledge_base_ids or [])),
             skill_names=normalize_tutor_skills(skill_names, domain_pack_id=domain_pack_id),
-            persona_name=persona_name.strip(),
+            persona_id=persona.id if persona else None,
+            persona_name=persona.name if persona else "",
             status="active",
         )
         db.add(row)

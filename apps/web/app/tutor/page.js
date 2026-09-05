@@ -11,7 +11,7 @@ export default function TutorPage(){
   const availability=useCapabilityAvailability();
   const [topics,setTopics]=useState([]), [concepts,setConcepts]=useState([]), [bases,setBases]=useState([]), [personas,setPersonas]=useState([]), [sessions,setSessions]=useState([]);
   const [domain,setDomain]=useState(null), [sessionId,setSessionId]=useState(''), [turns,setTurns]=useState([]), [events,setEvents]=useState([]), [pending,setPending]=useState(null), [msg,setMsg]=useState('');
-  const [form,setForm]=useState({title:'兴趣学习会话',topic_id:'',concept_id:'',persona_name:'',knowledge_base_ids:[],skill_names:[]});
+  const [form,setForm]=useState({title:'兴趣学习会话',topic_id:'',concept_id:'',persona_id:'',persona_name:'',knowledge_base_ids:[],skill_names:[]});
   const [content,setContent]=useState(''), [capability,setCapability]=useState('chat'), [reply,setReply]=useState('');
   const [connected,setConnected]=useState(false), [running,setRunning]=useState(false), [activeTurnId,setActiveTurnId]=useState(''), [busyAction,setBusyAction]=useState('');
 
@@ -22,7 +22,8 @@ export default function TutorPage(){
     setForm(old=>({
       ...old,
       title: old.title || '兴趣学习会话',
-      persona_name: nextPersonas.some(x=>x.name===old.persona_name) ? old.persona_name : (nextPersonas[0]?.name||''),
+      persona_id: nextPersonas.some(x=>x.id===old.persona_id) ? old.persona_id : (nextPersonas[0]?.id||''),
+      persona_name: nextPersonas.find(x=>x.id===old.persona_id)?.name || (nextPersonas[0]?.name||''),
       skill_names: (old.skill_names||[]).filter(name=>skills.includes(name)),
     }));
   }
@@ -66,7 +67,7 @@ export default function TutorPage(){
     <WorkspaceBoard pageId="tutor" data={workspace.data} loading={workspace.loading} compact title="导师工作台"/>
 
     <div className="grid two">
-      <section className="card"><div className="cardHeader"><div><div className="eyebrow">会话设置 · {domainDisplayName(domain?.area)}</div><h2>创建学习会话</h2></div><StatusChip>{sessions.length} 个已保存会话</StatusChip></div><form className="stack" onSubmit={createSession}><input aria-label="学习会话标题" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/><select aria-label="学习主题" value={form.topic_id} onChange={e=>setForm({...form,topic_id:e.target.value})}><option value="">不限主题</option>{topics.map(x=><option key={x.id} value={x.id}>{x.title}</option>)}</select><select aria-label="学习概念" value={form.concept_id} onChange={e=>setForm({...form,concept_id:e.target.value})}><option value="">不限概念</option>{concepts.filter(x=>!form.topic_id||x.concept.topic_id===form.topic_id).map(x=><option key={x.concept.id} value={x.concept.id}>{x.concept.name}</option>)}</select><select aria-label="导师风格" value={form.persona_name} onChange={e=>setForm({...form,persona_name:e.target.value})}><option value="">不使用特定导师风格</option>{personas.map(x=><option key={x.id} value={x.name}>{x.name}</option>)}</select>
+      <section className="card"><div className="cardHeader"><div><div className="eyebrow">会话设置 · {domainDisplayName(domain?.area)}</div><h2>创建学习会话</h2></div><StatusChip>{sessions.length} 个已保存会话</StatusChip></div><form className="stack" onSubmit={createSession}><input aria-label="学习会话标题" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/><select aria-label="学习主题" value={form.topic_id} onChange={e=>setForm({...form,topic_id:e.target.value})}><option value="">不限主题</option>{topics.map(x=><option key={x.id} value={x.id}>{x.title}</option>)}</select><select aria-label="学习概念" value={form.concept_id} onChange={e=>setForm({...form,concept_id:e.target.value})}><option value="">不限概念</option>{concepts.filter(x=>!form.topic_id||x.concept.topic_id===form.topic_id).map(x=><option key={x.concept.id} value={x.concept.id}>{x.concept.name}</option>)}</select><select aria-label="导师风格" value={form.persona_id} onChange={e=>{const persona=personas.find(x=>x.id===e.target.value);setForm({...form,persona_id:e.target.value,persona_name:persona?.name||''})}}><option value="">不使用特定导师风格</option>{personas.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
         {availableSkills.length>0&&<div><div className="fieldLabel">领域能力（可选）</div><div className="checkGrid">{availableSkills.map(name=><label className="check" key={name}><input type="checkbox" checked={form.skill_names.includes(name)} onChange={()=>toggleSkill(name)}/><span>{name}</span></label>)}</div></div>}
         {bases.length>0&&<div><div className="fieldLabel">参考资料库（可选）</div><div className="checkGrid">{bases.map(k=><label className="check" key={k.id}><input type="checkbox" checked={form.knowledge_base_ids.includes(k.id)} onChange={()=>toggleKb(k.id)}/><span>{k.name} · {statusLabel(k.status)}</span></label>)}</div></div>}
         <div className="row" style={{justifyContent:'flex-end',marginTop:4}}><button className="buiButton--secondary" disabled={Boolean(busyAction)}>{busyAction==='create'?'正在保存…':'保存本地学习会话'}</button></div></form></section>

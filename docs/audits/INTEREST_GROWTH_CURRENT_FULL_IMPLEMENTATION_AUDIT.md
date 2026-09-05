@@ -1,14 +1,14 @@
 # Interest Growth 当前全仓库实现审计
 
-审计日期：2026-09-04
-审计基线 SHA：`6422b6bd3fbc339373bb90c5d38dca5547df7ef4`
+审计日期：2026-09-05
+审计基线 SHA：`e224d1611fa2a9fb59507721a9bda824e62572bb`
 本轮收口提交：以本文件所在提交为准（提交前不宣称远端一致）
 分支：`main`
 产品版本：`1.0.20`
 
 ## 结论
 
-本轮针对基线 `main` 完成了全仓库代码审计与 P0–P4 修复，覆盖 Source 依赖失效传播、Tutor 活跃回合保护、Area/Topic 生命周期、Growth Memory 清除、Energy Mode、Living Book/Visual Artifact 展示、外部 RAG 出网确认，以及 Native Core 单一源码树。远端一致性、当前 SHA Actions 与发布证据只在实际取得证据后记录。
+本轮针对基线 `main` 完成了全仓库代码审计与 P0–P4 修复，覆盖 Source 依赖失效传播、Tutor Persona 规范身份、Knowledge Base 分 Area 唯一性、Area/Topic 生命周期、Growth Memory 清除、Energy Mode、Living Book/Visual Artifact 展示、外部 RAG 出网确认，以及 Native Core 单一源码树。远端一致性、当前 SHA Actions 与发布证据只在实际取得证据后记录。
 
 这不是一次新的产品发布：远端 `v1.0.20` 已于 2026-08-30 发布，注释 tag 最终指向 `d6290b44616cb66c288bf3468904e86bf43365d9`。本 SHA 是其后的 `main` 源码审计提交；若要把本轮修改作为新版本发布，仍需重新走版本化 Candidate/Promotion/Tag/Release 流程。
 
@@ -26,6 +26,8 @@
 | Energy mode | Question/Reflection 持久化 `light/normal/deep`，前端不再硬编码 normal。✅ |
 | Source / Evidence / Claim | 来源核验、失效传播、主张版本和再核验队列保留；候选检索结果不能直接成为 Evidence。✅ |
 | Knowledge Base / RAG | Native provider 与 reviewed exact adapter 分开；无 adapter 时返回 requires_review，禁止静默 fallback；unlink/delete 保留原始 Source 文件并清理投影。✅ |
+| Tutor Persona / Knowledge Base identity | Tutor 会话按 `persona_id` 绑定当前 Area 的规范 Persona；旧名称仅在 Area 内唯一时接受。Knowledge Base 名称只要求同一 Area 内唯一，不跨 Area 阻塞。✅ |
+| Topic / Area lifecycle | Curiosity 提供 Topic create/edit/archive/restore；System 提供 Area create/edit/archive/restore，当前 Area 需先切换、默认 Area 不可归档。✅ |
 | Learning / Practice / Note | 概念、练习、作答、笔记与 mastery evidence 均有持久化路径和依赖检查。✅ |
 | Graph / Visualize | GraphView 已为真实 SVG 关系查看器：类型筛选、搜索、缩放、平移、节点选择、邻居聚焦；Visualize 复用同一 viewer，不再是卡片/列表占位。✅ |
 | Tutor | Session/Turn/replay/resume/cancel/archive/restore/delete 由 Host 持有；能力、权限和恢复失败均显式反馈。✅ |
@@ -39,6 +41,10 @@
 
 - 将 `VisualExplanation` 与 `GraphView` 接入真实可交互关系图，并加入键盘可达性、节点搜索、缩放、平移和邻居聚焦。
 - Curiosity 页面按服务端状态只显示合法动作，避免状态与动作错配。
+- 补齐 Topic 与 Area 的真实 Web 生命周期操作；当前/默认 Area 的归档规则在 API 与 UI 双重 fail-closed。
+- Tutor Persona 改为以 `persona_id` 为规范身份；Knowledge Base 名称唯一性收敛到当前 Area。
+- 修复 Web Runtime 请求选项被覆盖导致真实写操作退回 `text/plain` 的问题，恢复浏览器端 JSON 写入链路。
+- 将 Topic/Area 归档确认改为产品内 ApprovalCard，避免浏览器原生确认框破坏可测试性与无障碍语义。
 - 修复 activity trace 的真实用户文案断言：`工具已经完成`。
 - 将可选 GraphRAG 的 NLTK 下限和 `uv.lock` 统一到 `3.10.3`；CI 的 `PYSEC-2026-3740` 例外仅限可选 RAG scanner metadata mismatch，并在 `SECURITY.md` 留下 review 条件，不放宽旧版本。
 - 更新 `CHANGELOG.md` / `PROJECT_STATUS.md`，把已发布的 `v1.0.20` 与当前 post-release main audit 分离。
@@ -48,16 +54,18 @@
 
 | Gate | 结果 | 证据 |
 | --- | --- | --- |
-| Python full test | PASS (local non-network) | `./.venv/bin/python -m pytest -q -k 'not mock_server and not end_to_end_https and not connection_refused'` |
+| Python full test | PASS | `scripts/verify.py`：完整 pytest 与版本一致性验证通过 |
 | UI adoption tests | PASS | `tests/test_beautiful_ui_adoption.py`：13 passed |
 | Web unit | PASS | `npm run test:web-unit`：103 passed |
 | Web lint | PASS | `npm run lint` |
 | Web production build | PASS | `npm run build` |
+| Web behavior E2E | PASS | `e2e/web-localization-motion.spec.js`：12 passed；覆盖 Energy、Living Book、Visual Artifact reopen、External RAG consent、Topic、Area |
+| npm audit | PASS | `npm audit --omit=dev --audit-level=high`：0 vulnerabilities；CI 保持 fail-closed 并增加同一审计的重试 |
 | Native Core single source | PASS | `packages/native-execution-core/interest_growth_native` 唯一运行时源码树；根目录镜像与同步门禁已移除 |
 | Source manifest | PASS | `python3 scripts/generate_source_manifest.py --check` |
 | Self audit | PASS | `PYTHONPYCACHEPREFIX=/private/tmp/interest-growth-pycache python3 scripts/self_audit.py` |
 | Rust source | PASS locally | `cargo check --locked`；仅既有 dead-code warnings |
-| Current-SHA GitHub Actions | NOT RUN | 本轮尚未取得新的远端 SHA 绑定证据；不得沿用历史 run ID |
+| Current-SHA GitHub Actions | PENDING PUSH | 本地提交前不虚构远端 run；推送后必须以新提交 SHA 重新取得 CI、Web E2E、Build Artifacts 三项证据 |
 
 ## 发布、设备与环境边界
 
@@ -68,11 +76,11 @@
 
 ## 当前剩余限制与后续建议
 
-1. 当前审计 SHA 的 CI、Web E2E 和三平台制品矩阵尚未取得；推送后必须重新绑定新的 exact SHA 验证。
+1. 当前审计提交的 CI、Web E2E 和 Build Artifacts 尚未取得；推送后必须重新绑定新的 exact SHA 验证。
 2. 若要发布本轮代码，先生成新版本，再执行 exact-SHA Candidate → Promotion → immutable tag → exact-tag Release matrix。
 3. 继续补齐缺少真实硬件/公网环境的设备、签名、TLS、跨设备和长期 soak 证据；不得用 waiver 冒充 PASS。
 4. 后续 UI 迭代应优先把已存在的后端 archive/restore/delete 能力逐页补到 Learning/Research/Knowledge 等列表操作，并为这些生命周期动作增加浏览器级覆盖。
 
 ## 最终判定
 
-当前判定：`SOURCE / LOCAL TESTS PASS; CURRENT-SHA CI + WEB E2E + ARTIFACTS NOT RUN; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。本轮提交仍不是新的 Stable release；物理设备、公开 TLS 与长期 soak 仍保持明确边界。
+当前判定：`SOURCE / LOCAL TESTS PASS; CURRENT-SHA CI + WEB E2E + ARTIFACTS PENDING PUSH; RELEASE/DEVICE EVIDENCE NOT CLAIMED`。本轮提交仍不是新的 Stable release；物理设备、公开 TLS 与长期 soak 仍保持明确边界。

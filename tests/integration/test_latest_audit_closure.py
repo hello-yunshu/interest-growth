@@ -64,6 +64,8 @@ def test_topic_archive_restore_and_area_archive_restore(client):
     assert client.post(f"/api/topics/{topic['id']}/restore").status_code == 200
 
     area = client.post("/api/areas", json={"name": "可恢复领域", "slug": "restorable-area"}).json()
+    # The active area cannot disappear from the selector while it is in use.
+    assert client.patch(f"/api/areas/{area['id']}", headers={"X-PG-Interest-Area": area["id"]}, json={"archived": True}).status_code == 409
     assert client.patch(f"/api/areas/{area['id']}", json={"archived": True}).status_code == 200
     assert area["id"] not in {row["id"] for row in client.get("/api/areas").json()["areas"]}
     assert area["id"] in {row["id"] for row in client.get("/api/areas?include_archived=true").json()["areas"]}
@@ -88,6 +90,21 @@ def test_knowledge_base_names_are_area_scoped(client):
     assert first_kb.status_code == 200, first_kb.text
     assert second_kb.status_code == 200, second_kb.text
     assert first_kb.json()["id"] != second_kb.json()["id"]
+    duplicate = client.post("/api/knowledge/bases", headers={"X-PG-Interest-Area": first["id"]}, json={"name": "  我的资料库  "})
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["code"] == "knowledge_base_name_conflict"
+
+
+def test_tutor_session_uses_persona_id_as_canonical_identity(client):
+    personas = client.get("/api/personas").json()["personas"]
+    persona = personas[0]
+    created = client.post("/api/tutor/sessions", json={"title": "按身份保存", "persona_id": persona["id"]})
+    assert created.status_code == 200, created.text
+    assert created.json()["persona_id"] == persona["id"]
+    assert created.json()["persona_name"] == persona["name"]
+    changed = client.patch(f"/api/tutor/sessions/{created.json()['id']}", json={"persona_id": None, "persona_name": ""})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["persona_id"] is None
 
 
 def test_tutor_delete_blocks_active_native_turn(client):
