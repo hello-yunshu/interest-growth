@@ -227,7 +227,7 @@ jobs:
         with:
           toolchain: stable
       - name: Install cargo-audit
-        uses: taiki-e/install-action@main
+        uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-audit
       - name: Audit Rust dependencies (high-confidence advisories)
