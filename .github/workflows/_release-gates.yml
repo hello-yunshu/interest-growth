@@ -51,6 +51,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-release-gates
+  cancel-in-progress: false
+
 jobs:
   release-meta:
     name: Resolve release metadata (tag / stable / prerelease)
@@ -521,7 +525,7 @@ jobs:
         with:
           toolchain: stable
       - name: Install cargo-audit
-        uses: taiki-e/install-action@main
+        uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-audit
       - name: Audit Rust dependencies (high-confidence advisories)
