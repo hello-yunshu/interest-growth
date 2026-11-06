@@ -1192,7 +1192,7 @@ jobs:
           test -s dist/release/interest-growth-android-arm64.apk
           cp dist/release/interest-growth-android-arm64.apk dist/sbom-input/
       - name: Generate candidate SBOM
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@v0.24.3
         with:
           path: dist/sbom-input
           format: spdx-json
