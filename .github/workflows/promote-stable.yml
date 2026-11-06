@@ -20,6 +20,10 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   promote:
     name: Verify Candidate and create immutable tag
