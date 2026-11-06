@@ -5,6 +5,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # graphrag >= 3.2 is outside the reviewed 3.1 adapter line asserted by
+    # scripts/verify_exact_rag_upstreams.py. pageindex >= 0.3 requires
+    # litellm>=1.105.1 and cannot coexist with graphrag-llm's exact
+    # litellm pin. Remove an ignore only after a reviewed dependency upgrade.
+    ignore:
+      - dependency-name: "graphrag"
+        versions: [">=3.2.0"]
+      - dependency-name: "pageindex"
+        versions: [">=0.3.0"]
 
   - package-ecosystem: github-actions
     directory: /
