@@ -1,0 +1,70 @@
+name: Refresh SOURCE_MANIFEST for Dependabot
+
+# Dependabot 只能改 workflow 里 pin 的 action 版本，无法重生成
+# SOURCE_MANIFEST.sha256，导致 Repository integrity gate 结构性变红。
+# 这个工作流在 Dependabot PR 上自动重生成 manifest 并提交回 PR 分支。
+#
+# 说明（触发后续 CI）：
+#   * 若配置了 secret `MANIFEST_REFRESH_TOKEN`（fine-grained PAT，contents: write），
+#     push 会以用户身份触发 pull_request synchronize，检查会自动重跑。
+#   * 未配置时回退到 GITHUB_TOKEN；GitHub 规定其 push 不触发新 workflow，
+#     需要在推送后手动重跑一次：`gh pr checks <n> --watch` 或
+#     `gh run rerun <run-id>`。manifest 本身已被修正，不会再次变红。
+#
+# 安全边界：只在 Dependabot 的、同仓库分支的 PR 上运行；不检出/执行 PR 中的
+# 任意脚本，只调用仓库自带的确定性生成器。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/**"
+      - "SOURCE_MANIFEST.sha256"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: manifest-refresh-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7.0.1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.MANIFEST_REFRESH_TOKEN || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Regenerate SOURCE_MANIFEST
+        run: python3 scripts/generate_source_manifest.py
+
+      - name: Commit and push when the manifest changed
+        run: |
+          set -eu
+          if git diff --quiet -- SOURCE_MANIFEST.sha256; then
+            echo "SOURCE_MANIFEST.sha256 already current; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SOURCE_MANIFEST.sha256
+          git commit -m "chore(ci): regenerate SOURCE_MANIFEST for dependabot workflow pin"
+          git push
+          {
+            echo "### SOURCE_MANIFEST 已重生成并推送"
+            echo ""
+            echo "若本次 push 未触发新的检查（使用 GITHUB_TOKEN 时 GitHub 不会触发），请手动重跑："
+            echo ""
+            echo '```'
+            echo "gh pr checks ${{ github.event.pull_request.number }} --watch"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
