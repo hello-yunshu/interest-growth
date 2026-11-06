@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select, text
 
 from pg_api.db import (
+    CURRENT_SCHEMA_VERSION,
     SchemaMigration,
     get_engine,
     get_session_factory,
@@ -234,16 +235,16 @@ def test_backup_restore_repeats_stay_consistent_and_identity_stable(client, tmp_
     for cycle in range(3):
         bundle = create_backup(destination_dir=str(tmp_path / f"backups-{cycle}"))
         manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["schema_version"] == 15
+        assert manifest["schema_version"] == CURRENT_SCHEMA_VERSION
         assert manifest["server_instance_id"] == original_identity
 
         _wipe_live_state()
         result = restore_backup(bundle_dir=str(bundle))
         assert result["restored"] is True
         assert result["integrity"] == "ok"
-        assert result["schema_version"] == 15
+        assert result["schema_version"] == CURRENT_SCHEMA_VERSION
         with get_session_factory()() as db:
-            assert db.scalar(select(text("MAX(version)")).select_from(SchemaMigration)) == 15
+            assert db.scalar(select(text("MAX(version)")).select_from(SchemaMigration)) == CURRENT_SCHEMA_VERSION
         # Data survived the destroy/restore cycle and server identity is stable.
         assert identity() == original_identity
         assert _question_count(client) >= 1

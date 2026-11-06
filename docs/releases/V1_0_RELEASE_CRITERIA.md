@@ -48,7 +48,7 @@ Before any 1.0 RC:
 - Capability contract: `/api/system/capabilities` shape with `api_version`, `min_client_version`, `server_version`, `runtime_modes`, `server_instance_id`, `auth`.
 - Auth session contract: owner bootstrap (single), device sessions, access/refresh rotation (single-use, atomic), per-device revoke, login expiry / identity-changed / update-required semantics.
 - Backup format version: `1`; manifest carries `format_version`, `product`, `schema_version`, `created_at`, checksums. Restore rejects future format, wrong product, corrupt checksum.
-- Canonical domain schema: versioned by `schema_migrations`; current schema `15`.
+- Canonical domain schema: versioned by `schema_migrations`; current schema `16`.
 - Public Native capability names: frozen `PLATFORM_CAPABILITIES` vocabulary; `DESKTOP_ONLY_CAPABILITIES` asserted false on non-desktop runtimes.
 - Migration semantics: purely additive; upgrade creates a backup; downgrade not supported; old clients must not silently open a new schema.
 - Remote error taxonomy (§15, frozen): `NETWORK_UNAVAILABLE`, `SERVER_UNAVAILABLE`, `RATE_LIMITED`, `LOGIN_EXPIRED`, `IDENTITY_CHANGED`, `UPDATE_REQUIRED`, `UNSUPPORTED_SERVER`, `CREDENTIAL_PERSISTENCE_FAILURE`, `PROTOCOL_ERROR`, `RUNTIME_MODE_DENIED`.

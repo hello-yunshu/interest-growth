@@ -1,19 +1,20 @@
 # 06 · Database Schema
 
-SQLite + SQLAlchemy remain the local default. v0.5 introduces a **real explicit migration runner** for schema generations 8–10 while preserving the v0.4.1 baseline generations 1–7.
+SQLite + SQLAlchemy remain the local default. The current 1X release uses a
+fresh-current-schema-only contract; historical migration notes below are
+architecture history, not an in-place upgrade promise.
 
-## Migration contract
+## Schema contract
 
-- 1–7: v0.4.1 legacy baseline.
-- 8: create General Interest schema objects.
-- 9: seed Domain Packs/default Psychology Area and backfill all legacy scoped entities into it.
-- 10: copy saved legacy `psychology.*` plugin state into neutral plugin IDs while preserving old rows as compatibility history.
+`CURRENT_SCHEMA_VERSION = 16`.
 
-`CURRENT_SCHEMA_VERSION = 10`.
+`Base.metadata.create_all()` creates the current schema for a fresh database.
+Existing databases are accepted only when their marker equals the current
+version and critical current shape checks pass, including
+`tutor_sessions.persona_id`; otherwise startup fails closed. This release does
+not run a historical migration chain.
 
-`Base.metadata.create_all()` remains useful for fresh databases, but existing databases advance through explicit migration implementations. Future non-additive changes still require an explicit migration; adding a ledger number without transformation code is forbidden.
-
-## Current 41 tables
+## Current initialized tables
 
 1. `schema_migrations`
 2. `plugin_states`
@@ -57,7 +58,8 @@ SQLite + SQLAlchemy remain the local default. v0.5 introduces a **real explicit 
 40. `retrieval_candidates`
 41. `career_experiments`
 
-The final release verification script is the source of truth for actual initialized counts.
+The final release verification script is the source of truth for the actual
+initialized table inventory and count.
 
 ## Scope ownership
 

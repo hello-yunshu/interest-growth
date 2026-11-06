@@ -832,7 +832,33 @@ def get_server_identity() -> dict[str, str]:
         }
 
 
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16
+
+
+def assert_current_schema_shape(engine) -> None:
+    """Reject a database whose marker lies about the current table shape."""
+    inspector = inspect(engine)
+    required_columns = {
+        "schema_migrations": {"version"},
+        "tutor_sessions": {"persona_id"},
+    }
+    missing = {}
+    tables = set(inspector.get_table_names())
+    for table, columns in required_columns.items():
+        if table not in tables:
+            missing[table] = sorted(columns)
+            continue
+        actual = {column["name"] for column in inspector.get_columns(table)}
+        absent = columns - actual
+        if absent:
+            missing[table] = sorted(absent)
+    if missing:
+        detail = ", ".join(f"{table}.{', '.join(columns)}" for table, columns in missing.items())
+        raise RuntimeError(
+            "existing database format is unsupported by this release; "
+            f"current schema shape is incomplete (missing: {detail}); "
+            "create a fresh current database"
+        )
 
 
 def init_db(database_url: str | None = None) -> None:
@@ -866,6 +892,7 @@ def init_db(database_url: str | None = None) -> None:
             "existing database format is unsupported by this release; "
             "create a fresh current database"
         )
+    assert_current_schema_shape(engine)
 
 
 def reset_engine_for_tests() -> None:
