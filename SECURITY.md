@@ -78,3 +78,33 @@ from first-party permission enforcement.
   the narrow ignore then; review by 2026-09-30 or before the next RAG packaging
   change.
 - **Owner:** Interest Growth maintainers.
+
+### PYSEC-2026-4066 / CVE-2026-114612 / GHSA-g5ff-637f-6q2m — LiteLLM pinned by the reviewed GraphRAG line
+
+- **Advisories:** `PYSEC-2026-4066` (authenticated SSRF and provider-credential
+  exfiltration), `CVE-2026-114612` (privilege escalation to proxy admin via
+  cross-domain salt-key reuse), `GHSA-g5ff-637f-6q2m` (arbitrary local file
+  read through `vertex_ai_credentials`).
+- **Affected package/version:** `litellm 1.92.0`, installed only through the
+  opt-in `rag-graphrag` extra.
+- **Dependency origin:** the reviewed GraphRAG 3.1 line pins LiteLLM exactly:
+  `graphrag-llm==3.1.1` and `==3.1.2` require `litellm==1.92.0`. The project
+  does not declare LiteLLM directly.
+- **Shipped/default status:** `rag-graphrag` is opt-in and is not installed by
+  the default server, desktop, Android or Stable release artifact paths.
+- **Reachability assessment:** the advisory paths require a LiteLLM proxy or
+  privileged internal-user surfaces that the reviewed GraphRAG adapter does not
+  expose; the adapter calls `build_index` and `local_search` in-process.
+- **Why upgrade is currently blocked:** the only newer GraphRAG lines
+  (`graphrag`/`graphrag-llm` 3.2.0 and 3.3.0) pin `litellm==1.100.1`, which
+  fixes `PYSEC-2026-4066` and `GHSA-g5ff-637f-6q2m` but still leaves
+  `CVE-2026-114612` unfixed because its upstream fix version is `1.100.4`.
+  No GraphRAG release pins a fully fixed LiteLLM, and 3.2+ is outside the
+  reviewed adapter line asserted by `scripts/verify_exact_rag_upstreams.py`.
+- **Current mitigation:** the default runtime audit stays fail-closed; CI
+  ignores these identifiers only in the optional RAG audit, and the optional
+  extra remains opt-in and unreachable from shipped/default paths.
+- **Review condition:** remove the ignore and re-audit as soon as a reviewed
+  GraphRAG line pins LiteLLM >= 1.104.0; review by 2026-12-31 or before the
+  next RAG packaging change.
+- **Owner:** Interest Growth maintainers.

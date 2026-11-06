@@ -18,7 +18,7 @@
     "@tauri-apps/plugin-fs": "^2.0.0",
     "@tauri-apps/plugin-opener": "^2.0.0",
     "debug": "^4.4.3",
-    "next": "^16.0.0",
+    "next": "^16.4.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.10.1"
@@ -28,5 +28,8 @@
     "@playwright/test": "^1.62.1",
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.0.0"
+  },
+  "overrides": {
+    "source-map-js": "1.2.2"
   }
 }
